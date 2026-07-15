@@ -1,6 +1,8 @@
 # rhythr
 
-**rhythr** turns Rhythia (`.rhr`) replays into videos.
+**rhythr** is an **unofficial community tool** that turns Rhythia
+(`.rhr`) replays into videos. It is not affiliated with or endorsed by
+Rhythia or Capo Games.
 
 **[Download the latest Windows installer](https://github.com/KillerOp007/rhythr/releases/latest)** —
 run it, click through SmartScreen ("More info" → "Run anyway"; the
@@ -26,6 +28,8 @@ This tool is a strict **read-only renderer**:
   are re-derived from the raw input frames and compared against the header.
   On mismatch the tool warns loudly and burns a "replay data inconsistent —
   possibly manipulated" notice into the rendered video.
+- This check (and any rendered video) is a heuristic by this tool — it is
+  **not** an official Rhythia score verification.
 
 ## Workspace
 

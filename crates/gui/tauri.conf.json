@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "rhythr",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "identifier": "com.killerop.rhythr",
   "build": {
     "frontendDist": "ui-dist"
@@ -57,7 +57,7 @@
     "publisher": "killerop",
     "copyright": "Copyright (c) 2026 killerop. MIT license. Bundles ffmpeg (GPL, separate process).",
     "shortDescription": "Render Rhythia replays to video",
-    "longDescription": "rhythr renders Rhythia (.rhr) replays into videos that look exactly like the game, using your own skin config. Read-only: replays are never modified.",
+    "longDescription": "rhythr is an unofficial community tool that renders Rhythia (.rhr) replays into videos that look exactly like the game, using your own skin config. Read-only: replays are never modified. Not affiliated with Rhythia or Capo Games.",
     "homepage": "https://github.com/KillerOp007/rhythr"
   }
 }

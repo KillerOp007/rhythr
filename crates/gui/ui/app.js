@@ -54,7 +54,7 @@ function renderReplayCard() {
   let chip = "";
   if (r.verify) {
     chip = r.verify.consistent
-      ? `<span class="chip ok">verified</span>`
+      ? `<span class="chip ok" title="rhythr's own consistency check — not an official Rhythia score verification.">verified</span>`
       : `<span class="chip bad" title="${esc(r.verify.problems.join("\n"))}">inconsistent — possibly modified</span>`;
   }
   const outcome = r.failed

@@ -31,5 +31,10 @@ and integrity checks and are **not** covered by this repository's MIT
 license; all rights remain with their authors. The replays are the
 project owner's own plays.
 
-Rhythia is a game by Capo Games. This project bundles no game assets;
-the optional asset extraction reads the user's own installation locally.
+Rhythia is a game by Capo Games; rhythr is an unofficial community
+tool. This project bundles no game assets; the optional asset
+extraction reads the user's own installation locally at the user's
+request (file-based only — it never attaches to, injects into, or
+otherwise interacts with the running game), and extracted assets stay
+on that user's machine. API usage was agreed with the Rhythia team
+(July 2026).

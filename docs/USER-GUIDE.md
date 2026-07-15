@@ -3,6 +3,9 @@
 Turn your Rhythia replays (`.rhr`) into videos that look exactly like the
 game — with your own skin, your HUD, your colors.
 
+rhythr is an **unofficial community tool**, not affiliated with or
+endorsed by Rhythia or Capo Games.
+
 ## Quick start
 
 1. **Install** — run the setup exe. Windows SmartScreen may warn about an
@@ -62,6 +65,11 @@ game — with your own skin, your HUD, your colors.
 This tool is strictly **read-only**. It cannot create or modify
 replays — there is no code that writes `.rhr` files, and tampered
 replays are flagged loudly. It renders what happened, nothing more.
+
+The "verified" / "inconsistent" badge is rhythr's own consistency
+check — it is **not** an official Rhythia score verification. Music,
+beatmaps and artwork belong to their creators; you are responsible for
+the rights needed to publish rendered videos.
 
 ## Licenses
 

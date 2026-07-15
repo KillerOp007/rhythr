@@ -20,7 +20,16 @@ use rhythia_formats::{map::Map, rhr::Replay};
 use rhythia_render::{scene::SceneParams, SkinConfig};
 use rhythia_sim::integrity;
 
-const USER_AGENT: &str = "rhythr/0.2 (desktop app)";
+const USER_AGENT: &str = concat!(
+    "rhythr/",
+    env!("CARGO_PKG_VERSION"),
+    " (+https://github.com/KillerOp007/rhythr)"
+);
+// Usage of this endpoint was agreed with the Rhythia team (July 2026):
+// one request per uncached map with limit:1 and an empty session, local
+// caching, an identifying User-Agent, no bulk crawling or prefetching,
+// and backing off on 429/5xx. The endpoint is best-effort and may change.
+// If the network scope of this tool ever changes, ask the team again first.
 const API_BEATMAP_PAGE: &str = "https://production.rhythia.com/api/getBeatmapPage";
 /// Refuse to download maps larger than this (malformed/hostile responses).
 const MAX_MAP_BYTES: u64 = 512 * 1024 * 1024;
@@ -628,7 +637,15 @@ async fn download_map(state: tauri::State<'_, App>) -> Result<StatusDto, String>
         let resp: serde_json::Value = ureq::post(API_BEATMAP_PAGE)
             .set("User-Agent", USER_AGENT)
             .send_json(serde_json::json!({"session": "", "id": map_id, "limit": 1}))
-            .map_err(|e| format!("map lookup failed: {e}"))?
+            .map_err(|e| match e {
+                ureq::Error::Status(429, _) => {
+                    "rhythia.com is rate-limiting requests — please wait a moment and press Download".to_string()
+                }
+                ureq::Error::Status(code, _) if code >= 500 => {
+                    format!("rhythia.com is unavailable right now (HTTP {code}) — try again later")
+                }
+                e => format!("map lookup failed: {e}"),
+            })?
             .into_json()
             .map_err(|e| format!("map lookup: bad response: {e}"))?;
         let beatmap = &resp["beatmap"];
