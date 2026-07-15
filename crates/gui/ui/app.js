@@ -17,6 +17,7 @@ let previewBusy = false;
 let previewWanted = false;
 let lastOutPath = null;
 let rendering = false;
+let autoDownloadTried = 0;  // map id of the last automatic download attempt
 
 // ------------------------------------------------------------ formatting
 
@@ -435,6 +436,21 @@ async function applyStatus(st) {
 
   // A page (re)load during an active render must show the rendering state.
   if (st.rendering && !rendering) setRenderingUi(true);
+
+  // A replay without its map: fetch it from rhythia.com right away —
+  // once per map id, so a failure (offline, unpublished map) falls back
+  // to the manual Download/Browse buttons instead of looping.
+  if (st.replay && !st.map && st.replay.map_id > 0 && autoDownloadTried !== st.replay.map_id) {
+    autoDownloadTried = st.replay.map_id;
+    $("map-body").innerHTML = `<p class="hint">Downloading map from rhythia.com…</p>`;
+    invoke("download_map")
+      .then(async (st2) => { await applyStatus(st2); loadNote("Map downloaded."); })
+      .catch((e) => {
+        $("map-body").innerHTML =
+          `<p class="hint">Automatic download failed: ${esc(String(e))} — try Download again or Browse a local file.</p>`;
+        $("btn-map-dl").hidden = false;
+      });
+  }
 
   const hasPair = !!(st.replay && st.map);
   $("scrub-row").hidden = !hasPair;
