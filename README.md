@@ -11,7 +11,8 @@ video looks exactly like watching the replay in-game with your own skin.
 
 **Status: working end-to-end.** Parsers, integrity check, the GPU renderer
 (pixel-calibrated against real footage: notes, skins, HUD, results screen)
-and a desktop app are functional. Windows installer packaging is next.
+and a desktop app are functional, with a Windows installer on the
+releases page.
 
 ## Anti-cheat statement
 
@@ -47,8 +48,7 @@ cargo run -p rhythia-cli -- frame testdata/pass_long_score77.rhr \
 
 # A video clip (frames → ffmpeg + audio; needs ffmpeg on PATH):
 cargo run -p rhythia-cli -- video testdata/pass_long_score77.rhr \
-    --map testdata/pass_long_map_map_json.json \
-    --audio testdata/pass_long_map_audio_mp3.mp3 --start 1:25 --end 1:37 -o clip.mp4
+    --map testdata/pass_long_map_map_json.json --start 1:25 --end 1:37 -o clip.mp4
 ```
 
 The renderer runs headlessly on the GPU (Vulkan) — the same wgpu backend
@@ -81,9 +81,7 @@ The `.rhr` wire format was verified against three independent sources:
 the official `parseRhr` in the rhythia.com web bundle,
 [yo-ru/rhrParse](https://github.com/yo-ru/rhrParse) (MIT) and
 [gerhaarrd/rhr2mp4](https://github.com/gerhaarrd/rhr2mp4) (MIT), plus 311
-local replays. The `.sspre` legacy format documentation derives from
-[Rhythia/sound-space-plus](https://github.com/Rhythia/sound-space-plus)
-(MIT).
+local replays.
 
 ## License
 

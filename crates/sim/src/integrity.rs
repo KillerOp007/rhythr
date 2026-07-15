@@ -6,7 +6,7 @@
 //! renderer) must surface a clear warning, including one burned into the
 //! rendered video.
 //!
-//! Empirically pinned rules (validated against all four kit replays):
+//! Empirically pinned rules (validated against the four reference replays):
 //!  * accuracy == hits / (hits + misses) × 100
 //!  * attempted notes: all notes when passed; notes with
 //!    time ≤ failTime when failed (lastFrame+window overshoots by one).
@@ -154,7 +154,7 @@ pub fn verify(replay: &Replay, map: &Map, outcome: &MatchOutcome) -> IntegrityRe
     // the stream was spliced or reordered. Hit counts can survive such a
     // splice (reordering non-flag frames leaves them intact), so this is a
     // tamper signal the count checks above can miss. Warning-level: the
-    // invariant rests on the four kit replays, not a formal guarantee.
+    // invariant rests on the four reference replays, not a formal guarantee.
     let first_backstep = replay.frames.windows(2).position(|w| w[1].ms < w[0].ms);
     push(
         "frame times non-decreasing",

@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "rhythia-render"
+name = "rhythr-cli"
 path = "src/main.rs"
 
 [dependencies]

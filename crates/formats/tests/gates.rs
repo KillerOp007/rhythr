@@ -1,5 +1,5 @@
 //! Synthetic tests for the .rhr version gates, including the intermediate
-//! version combinations no real kit file covers (extended + float time,
+//! version combinations no reference replay covers (extended + float time,
 //! failTime + float time, int time without beatmap hash).
 //!
 //! The byte builder below exists ONLY to feed the parser in tests. It is

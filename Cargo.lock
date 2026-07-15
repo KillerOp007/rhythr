@@ -3269,7 +3269,7 @@ dependencies = [
 
 [[package]]
 name = "rhythia-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -3283,7 +3283,7 @@ dependencies = [
 
 [[package]]
 name = "rhythia-formats"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -3315,7 +3315,7 @@ dependencies = [
 
 [[package]]
 name = "rhythia-render"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bytemuck",
  "fontdue",
@@ -3334,7 +3334,7 @@ dependencies = [
 
 [[package]]
 name = "rhythia-sim"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "rhythia-formats",
  "serde_json",

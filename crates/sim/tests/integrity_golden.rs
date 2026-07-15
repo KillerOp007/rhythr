@@ -1,4 +1,4 @@
-//! Integrity check against the four real kit replays: every derived value
+//! Integrity check against the four reference replays: every derived value
 //! must reproduce the game's own database numbers exactly — and a tampered
 //! header must be detected.
 

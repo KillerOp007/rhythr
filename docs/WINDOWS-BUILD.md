@@ -1,9 +1,9 @@
 # Windows build — desktop app + NSIS installer
 
-## Preferred: cross-build from Linux (proven working)
+## Preferred: cross-build from Linux
 
-The installer builds directly on the Linux dev machine — first done
-15.07.2026, output the NSIS setup exe (~45 MB, ffmpeg bundled). One-time setup:
+The NSIS installer cross-builds on Linux (~45 MB, ffmpeg bundled) —
+this is the tested path. One-time setup:
 
 ```sh
 sudo apt install nsis clang lld llvm
@@ -54,7 +54,7 @@ To ship it in the installer:
    "release essentials", or BtbN's builds). Only `bin/ffmpeg.exe` is needed;
    NVENC support is included in the standard builds.
 2. Copy `ffmpeg.exe` into `crates/gui/` (next to `tauri.conf.json`).
-3. Add it to the bundle resources in `crates/gui/tauri.conf.json`:
+3. `crates/gui/tauri.conf.json` already lists it under bundle resources:
    ```json
    "bundle": {
      ...
@@ -80,7 +80,7 @@ cargo tauri build
 
 Outputs:
 
-- App exe: `target\release\rhythia-gui.exe`
+- App exe: `target\release\rhythr.exe`
 - NSIS installer: `target\release\bundle\nsis\rhythr_<version>_x64-setup.exe`
 
 The installer registers the `.rhr` file association (double-clicking a replay

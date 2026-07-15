@@ -1,5 +1,5 @@
-//! rhythia-render CLI. Phase 1 scope: parsing, inspection and the
-//! integrity/manifest checks. Rendering commands arrive in Phase 2.
+//! Command-line interface: replay inspection, integrity checks, and
+//! frame/video rendering.
 
 mod manifest;
 
@@ -44,7 +44,7 @@ enum Command {
         /// Folder containing testdata_manifest.json plus the files it lists.
         testdata: PathBuf,
     },
-    /// Render a single still frame of a replay to a PNG (Phase 2 milestone).
+    /// Render a single still frame of a replay to a PNG.
     Frame {
         replay: PathBuf,
         /// Map file: .rhm or the game's cache .json.
@@ -69,7 +69,7 @@ enum Command {
         #[arg(long)]
         game_assets: Option<PathBuf>,
     },
-    /// Render a replay to an MP4 video (Phase 2: frames → ffmpeg + audio).
+    /// Render a replay to an MP4 video (frames → ffmpeg + audio).
     Video {
         replay: PathBuf,
         /// Map file: .rhm or the game's cache .json.

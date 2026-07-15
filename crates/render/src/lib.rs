@@ -1,4 +1,4 @@
-//! GPU renderer for Rhythia replays (Phase 2, work in progress).
+//! GPU renderer for Rhythia replays.
 //!
 //! Read-only: consumes parsed replays/maps and produces pixels. It never
 //! writes replay data.

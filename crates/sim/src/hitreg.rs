@@ -4,7 +4,7 @@
 //! was hit; the count of flagged frames equals the header hit count. Notes
 //! are hit in chronological order, so flagged frames form an
 //! order-preserving subsequence of the notes: the correct alignment is a
-//! monotonic two-pointer walk. Validated against all four kit replays,
+//! monotonic two-pointer walk. Validated against all four reference replays,
 //! this reproduces the header hit/miss counts exactly; observed
 //! |flag − note| deltas reach exactly 80 ms (the game's ~55 ms hit window
 //! plus ~17 ms frame quantization), which pins the default window.
