@@ -21,5 +21,15 @@ byte-level verification possible:
 - yo-ru/rhrParse — https://github.com/yo-ru/rhrParse (MIT)
 - Rhythia/sound-space-plus — https://github.com/Rhythia/sound-space-plus (MIT)
 
+## Test fixtures
+
+The map files under `testdata/` (note data + metadata, no audio or
+cover art) are charts authored by Rhythia community mappers — credited
+in each file's `Mappers` field (mm1678YT, Alia) — and published on
+rhythia.com. They are included solely as test fixtures for the parser
+and integrity checks and are **not** covered by this repository's MIT
+license; all rights remain with their authors. The replays are the
+project owner's own plays.
+
 Rhythia is a game by Capo Games. This project bundles no game assets;
 the optional asset extraction reads the user's own installation locally.
