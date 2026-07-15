@@ -1,0 +1,26 @@
+[package]
+name = "rhythia-render"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+rhythia-formats.workspace = true
+rhythia-sim.workspace = true
+wgpu = "30"
+pollster = "0.4"
+bytemuck = { version = "1", features = ["derive"] }
+glam = { version = "0.30", features = ["bytemuck"] }
+png = "0.17"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "bmp"] }
+thiserror.workspace = true
+serde_json.workspace = true
+zip.workspace = true
+fontdue = { version = "0.9.3", default-features = false, features = ["std", "hashbrown"] }
+
+[dev-dependencies]
+tempfile = "3"
+serde_json.workspace = true
+# Writing synthetic .rhs test packs needs the zip writer (the runtime dep is
+# deflate-decode only).
+zip = { version = "2", default-features = false, features = ["deflate"] }

@@ -1,0 +1,25 @@
+# Third-party notices
+
+## Bundled components
+
+- **ffmpeg** (Windows builds ship `ffmpeg.exe`, invoked as a separate
+  process) — GPL; license text ships next to the app as
+  `ffmpeg-LICENSE.txt`. Sources: https://ffmpeg.org and
+  https://github.com/BtbN/FFmpeg-Builds
+- **DejaVu Sans Bold** (embedded HUD font) — Bitstream Vera license
+  (with DejaVu additions, public domain); text ships next to the app as
+  `FONT-LICENSE.txt` and lives in the repo at
+  `crates/render/assets/hud-font-LICENSE`.
+
+## Format references (no code vendored)
+
+The `.rhr`, `.sspm` and skin formats were implemented from scratch and
+verified against these MIT-licensed projects; their work made the
+byte-level verification possible:
+
+- gerhaarrd/rhr2mp4 — https://github.com/gerhaarrd/rhr2mp4 (MIT)
+- yo-ru/rhrParse — https://github.com/yo-ru/rhrParse (MIT)
+- Rhythia/sound-space-plus — https://github.com/Rhythia/sound-space-plus (MIT)
+
+Rhythia is a game by Capo Games. This project bundles no game assets;
+the optional asset extraction reads the user's own installation locally.

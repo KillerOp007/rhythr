@@ -1,0 +1,19 @@
+[package]
+name = "rhythia-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "rhythia-render"
+path = "src/main.rs"
+
+[dependencies]
+rhythia-formats.workspace = true
+rhythia-sim.workspace = true
+rhythia-render = { path = "../render" }
+anyhow.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tempfile = "3"

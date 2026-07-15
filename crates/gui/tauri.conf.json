@@ -1,0 +1,63 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "rhythr",
+  "version": "0.2.0",
+  "identifier": "com.killerop.rhythr",
+  "build": {
+    "frontendDist": "ui-dist"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "rhythr",
+        "width": 1380,
+        "height": 880,
+        "minWidth": 1120,
+        "minHeight": 720,
+        "dragDropEnabled": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "nsis"
+    ],
+    "resources": [
+      "ffmpeg.exe",
+      "ffmpeg-LICENSE.txt",
+      "README.txt",
+      "FONT-LICENSE.txt"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/256x256.png",
+      "icons/icon.ico"
+    ],
+    "fileAssociations": [
+      {
+        "ext": [
+          "rhr"
+        ],
+        "name": "Rhythia Replay",
+        "description": "Rhythia replay file",
+        "role": "Viewer"
+      }
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    },
+    "publisher": "killerop",
+    "copyright": "Copyright (c) 2026 killerop. MIT license. Bundles ffmpeg (GPL, separate process).",
+    "shortDescription": "Render Rhythia replays to video",
+    "longDescription": "rhythr renders Rhythia (.rhr) replays into videos that look exactly like the game, using your own skin config. Read-only: replays are never modified.",
+    "homepage": "https://github.com/KillerOp007/rhythr"
+  }
+}
