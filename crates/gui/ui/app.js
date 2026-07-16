@@ -363,16 +363,32 @@ function scrubTo(clientX) {
   schedulePreview();
 }
 
-// Meter geometry in preview-image fractions, mirroring hud.rs.
-function meterBox(key, m, imgW, imgH) {
+// Meter geometry in preview-image pixels, mirroring hud.rs. In a ghost
+// split each side is half the image wide and holds its own position.
+function meterSides(imgW) {
+  return status?.ghost
+    ? [{ off: 0, w: imgW / 2, gk: null }, { off: imgW / 2, w: imgW / 2, gk: "ghost" }]
+    : [{ off: 0, w: imgW, gk: null }];
+}
+
+function meterPos(m, side) {
+  const x = side.gk && m.ghost_x != null ? m.ghost_x : m.x;
+  const y = side.gk && m.ghost_y != null ? m.ghost_y : m.y;
+  return { x, y };
+}
+
+function meterBox(key, m, side, imgH) {
   const h = imgH;
+  const p = meterPos(m, side);
+  const cx = side.off + p.x * side.w;
+  const cy = p.y * imgH;
   if (key === "error") {
     const hw = h * 0.16 * (m.scale || 1);
     const th = h * 0.016 * (m.scale || 1) * 1.5;
-    return { x: m.x * imgW - hw, y: m.y * imgH - th * 1.5, w: hw * 2, h: th * 3 };
+    return { x: cx - hw, y: cy - th * 1.5, w: hw * 2, h: th * 3 };
   }
   const half = h * 0.065 * (m.scale || 1);
-  return { x: m.x * imgW - half, y: m.y * imgH - half, w: half * 2, h: half * 2 };
+  return { x: cx - half, y: cy - half, w: half * 2, h: half * 2 };
 }
 
 let meterDrag = null;
@@ -413,9 +429,8 @@ function initMeterDrag() {
       wrapRect: wr,
     };
   };
-  // Meter box in on-screen wrap coordinates for the ghost outline.
-  const screenBox = (key, m, g, nx, ny) => {
-    const b = meterBox(key, { ...m, x: nx, y: ny }, g.iw, g.ih);
+  // Meter box in on-screen wrap coordinates for the drag outline.
+  const screenBox = (b, g) => {
     const sx = g.rect.width / g.iw;
     const sy = g.rect.height / g.ih;
     return {
@@ -425,38 +440,46 @@ function initMeterDrag() {
       h: b.h * sy,
     };
   };
+  // Pointer position → normalised coords within the given side.
+  const sideNorm = (g, side) => ({
+    x: Math.min(1, Math.max(0, (g.x - side.off) / side.w)),
+    y: Math.min(1, Math.max(0, g.y / g.ih)),
+  });
   img.addEventListener("pointerdown", (e) => {
     const g = geom(e);
-    for (const key of ["error", "aim"]) {
-      const m = key === "error" ? status?.settings?.error_meter : status?.settings?.aim_meter;
-      if (!m?.enabled) continue;
-      const b = meterBox(key, m, g.iw, g.ih);
-      if (g.x >= b.x && g.x <= b.x + b.w && g.y >= b.y && g.y <= b.y + b.h) {
-        meterDrag = { key, m };
-        img.setPointerCapture(e.pointerId);
-        e.preventDefault();
-        dragGhostBox(true, screenBox(key, m, g, m.x, m.y));
-        return;
+    for (const side of meterSides(g.iw)) {
+      for (const key of ["error", "aim"]) {
+        const m = key === "error" ? status?.settings?.error_meter : status?.settings?.aim_meter;
+        if (!m?.enabled) continue;
+        const b = meterBox(key, m, side, g.ih);
+        if (g.x >= b.x && g.x <= b.x + b.w && g.y >= b.y && g.y <= b.y + b.h) {
+          meterDrag = { key, m, side };
+          img.setPointerCapture(e.pointerId);
+          e.preventDefault();
+          dragGhostBox(true, screenBox(b, g));
+          return;
+        }
       }
     }
   });
   img.addEventListener("pointermove", (e) => {
     if (!meterDrag) return;
     const g = geom(e);
-    const nx = Math.min(1, Math.max(0, g.x / g.iw));
-    const ny = Math.min(1, Math.max(0, g.y / g.ih));
-    dragGhostBox(true, screenBox(meterDrag.key, meterDrag.m, g, nx, ny));
+    const n = sideNorm(g, meterDrag.side);
+    const patched = meterDrag.side.gk
+      ? { ...meterDrag.m, ghost_x: n.x, ghost_y: n.y }
+      : { ...meterDrag.m, x: n.x, y: n.y };
+    dragGhostBox(true, screenBox(meterBox(meterDrag.key, patched, meterDrag.side, g.ih), g));
   });
   img.addEventListener("pointerup", async (e) => {
     if (!meterDrag) return;
     const g = geom(e);
-    const key = meterDrag.key;
+    const { key, side } = meterDrag;
     meterDrag = null;
     dragGhostBox(false);
-    await call(() => invoke("set_meter", {
-      key,
-      patch: { x: Math.min(1, Math.max(0, g.x / g.iw)), y: Math.min(1, Math.max(0, g.y / g.ih)) },
-    }));
+    const n = sideNorm(g, side);
+    const patch = side.gk ? { ghost_x: n.x, ghost_y: n.y } : { x: n.x, y: n.y };
+    await call(() => invoke("set_meter", { key, patch }));
     schedulePreview();
   });
   img.draggable = false;

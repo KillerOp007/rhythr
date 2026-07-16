@@ -120,6 +120,9 @@ pub struct ErrorMeter {
     pub enabled: bool,
     pub x: f32,
     pub y: f32,
+    /// Position on the ghost side of a split frame; None follows x/y.
+    pub ghost_x: Option<f32>,
+    pub ghost_y: Option<f32>,
     pub scale: f32,
     pub alpha: f32,
 }
@@ -130,6 +133,8 @@ impl ErrorMeter {
             enabled: false,
             x,
             y,
+            ghost_x: None,
+            ghost_y: None,
             scale: 1.0,
             alpha: 0.9,
         }

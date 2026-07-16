@@ -835,6 +835,15 @@ impl Renderer {
                 ghost_cfg.cursor_trail_color = g.color;
                 ghost_cfg.cursor_trail_gradient.clear();
                 ghost_cfg.cursor_trail_inherit = true;
+                // Meters may sit elsewhere on the ghost's side.
+                for m in [&mut ghost_cfg.hud.error_meter, &mut ghost_cfg.hud.aim_meter] {
+                    if let Some(gx) = m.ghost_x {
+                        m.x = gx;
+                    }
+                    if let Some(gy) = m.ghost_y {
+                        m.y = gy;
+                    }
+                }
                 self.submit_side(
                     params,
                     &ghost_cfg,

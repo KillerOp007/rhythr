@@ -348,6 +348,9 @@ struct MeterSettings {
     enabled: bool,
     x: f32,
     y: f32,
+    /// Position on the ghost side of a split frame (None = follow x/y).
+    ghost_x: Option<f32>,
+    ghost_y: Option<f32>,
     scale: f32,
     alpha: f32,
 }
@@ -358,6 +361,8 @@ impl MeterSettings {
             enabled: false,
             x,
             y,
+            ghost_x: None,
+            ghost_y: None,
             scale: 1.0,
             alpha: 0.9,
         }
@@ -367,6 +372,8 @@ impl MeterSettings {
         target.enabled = self.enabled;
         target.x = self.x.clamp(0.0, 1.0);
         target.y = self.y.clamp(0.0, 1.0);
+        target.ghost_x = self.ghost_x.map(|v| v.clamp(0.0, 1.0));
+        target.ghost_y = self.ghost_y.map(|v| v.clamp(0.0, 1.0));
         target.scale = self.scale.clamp(0.4, 2.5);
         target.alpha = self.alpha.clamp(0.05, 1.0);
     }
@@ -981,6 +988,8 @@ struct MeterPatch {
     enabled: Option<bool>,
     x: Option<f32>,
     y: Option<f32>,
+    ghost_x: Option<f32>,
+    ghost_y: Option<f32>,
     scale: Option<f32>,
     alpha: Option<f32>,
 }
@@ -1006,6 +1015,12 @@ fn set_meter(
     }
     if let Some(v) = patch.y {
         m.y = v.clamp(0.0, 1.0);
+    }
+    if let Some(v) = patch.ghost_x {
+        m.ghost_x = Some(v.clamp(0.0, 1.0));
+    }
+    if let Some(v) = patch.ghost_y {
+        m.ghost_y = Some(v.clamp(0.0, 1.0));
     }
     if let Some(v) = patch.scale {
         m.scale = v.clamp(0.4, 2.5);
