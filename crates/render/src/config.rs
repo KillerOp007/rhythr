@@ -163,9 +163,10 @@ impl Default for HudConfig {
             song_info: true,
             miss_effect_opacity: 1.0,
             speed_label: true,
-            // Below the playfield / to its right by default; both off.
-            error_meter: ErrorMeter::at(0.5, 0.93),
-            aim_meter: ErrorMeter::at(0.87, 0.82),
+            // Defaults per user: the timing bar right under the speed/mods
+            // notation, the aim scatter left of the combo ring; both off.
+            error_meter: ErrorMeter::at(0.5, 0.88),
+            aim_meter: ErrorMeter::at(0.15, 0.32),
         }
     }
 }
@@ -199,6 +200,27 @@ pub struct AmbientConfig {
     pub grid_fade_falloff: f32,
     pub grid_speed: f32,
     pub grid_parallax: f32,
+}
+
+/// One `BackgroundImages[]` layer from an exported skin. `placement` 0 is
+/// screen space (centre/scale relative to the frame), 1 is world space (the
+/// `space` rect in grid units around the playfield). Rotation is rare and
+/// currently ignored.
+#[derive(Debug, Clone)]
+pub struct BackgroundLayer {
+    pub bytes: Vec<u8>,
+    pub fit: i64,
+    pub placement: i64,
+    pub center_x: f32,
+    pub center_y: f32,
+    pub scale_x: f32,
+    pub scale_y: f32,
+    pub flip_horizontal: bool,
+    pub space_x: f32,
+    pub space_y: f32,
+    pub space_w: f32,
+    pub space_h: f32,
+    pub tint: [f32; 4],
 }
 
 #[derive(Debug, Clone)]
@@ -243,6 +265,9 @@ pub struct SkinConfig {
     pub border_texture: Option<Vec<u8>>,
     /// PNG bytes of the bundled cursor/trail texture.
     pub cursor_texture: Option<Vec<u8>>,
+    /// Custom background layers from the skin's `BackgroundImages[]`,
+    /// composited bottom-up behind the scene.
+    pub background_images: Vec<BackgroundLayer>,
     /// Real note colours from the bundled `colorSet/*.txt`, in order. Empty
     /// when the pack references a built-in colorset (use the picker / a
     /// named-palette approximation instead).
@@ -318,6 +343,7 @@ impl Default for SkinConfig {
             cursor_trail_shrink: true,
             cursor_trail_gradient: Vec::new(),
             note_texture: None,
+            background_images: Vec::new(),
             border_texture: None,
             cursor_texture: None,
             colorset: Vec::new(),
@@ -454,6 +480,14 @@ impl SkinConfig {
         if let Some(txt) = first_zip_entry_under(&mut zip, "colorSet/")? {
             cfg.colorset = parse_colorset(&String::from_utf8_lossy(&txt));
         }
+        // Background layers ship as numbered folders matching the
+        // BackgroundImages[] order; a layer without its file is dropped.
+        for (i, layer) in cfg.background_images.iter_mut().enumerate() {
+            if let Some(bytes) = first_zip_entry_under(&mut zip, &format!("backgrounds/{i}/"))? {
+                layer.bytes = bytes;
+            }
+        }
+        cfg.background_images.retain(|l| !l.bytes.is_empty());
         Ok(cfg)
     }
 
@@ -541,6 +575,47 @@ impl SkinConfig {
             error_meter: hd.error_meter,
             aim_meter: hd.aim_meter,
         };
+        // BackgroundImages[]: rich per-layer placement; bytes come from the
+        // .rhs archive afterwards (a bare config.json can't carry them).
+        let background_images: Vec<BackgroundLayer> = doc
+            .get("BackgroundImages")
+            .map(|v| v.get("Value").unwrap_or(v))
+            .and_then(|v| v.as_array())
+            .map(|layers| {
+                layers
+                    .iter()
+                    .filter_map(|l| {
+                        let f =
+                            |k: &str, d: f64| l.get(k).and_then(|x| x.as_f64()).unwrap_or(d) as f32;
+                        let i = |k: &str| l.get(k).and_then(|x| x.as_i64()).unwrap_or(0);
+                        Some(BackgroundLayer {
+                            bytes: Vec::new(),
+                            fit: i("Fit"),
+                            placement: i("Placement"),
+                            center_x: f("CenterX", 0.5),
+                            center_y: f("CenterY", 0.5),
+                            scale_x: f("ScaleX", 1.0),
+                            scale_y: f("ScaleY", 1.0),
+                            flip_horizontal: l
+                                .get("FlipHorizontal")
+                                .and_then(|x| x.as_bool())
+                                .unwrap_or(false),
+                            space_x: f("SpaceX", 0.0),
+                            space_y: f("SpaceY", 0.0),
+                            space_w: f("SpaceWidth", 8.0),
+                            space_h: f("SpaceHeight", 8.0),
+                            tint: [
+                                f("TintRed", 255.0) / 255.0,
+                                f("TintGreen", 255.0) / 255.0,
+                                f("TintBlue", 255.0) / 255.0,
+                                f("TintOpacity", 1.0),
+                            ],
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
         let note_skin_name = text("NoteSkin");
         Ok(SkinConfig {
             mod_icons: Vec::new(),
@@ -596,6 +671,7 @@ impl SkinConfig {
             },
             // Assets come from a .rhs bundle, not the JSON; from_rhs fills them.
             note_texture: None,
+            background_images,
             border_texture: None,
             cursor_texture: None,
             colorset: Vec::new(),

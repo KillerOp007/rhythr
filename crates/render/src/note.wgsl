@@ -21,6 +21,7 @@ struct Globals {
 @group(1) @binding(1) var border_tex: texture_2d<f32>;
 @group(1) @binding(2) var cursor_tex: texture_2d<f32>;
 @group(1) @binding(3) var skin_samp: sampler;
+@group(1) @binding(4) var bg_tex: texture_2d<f32>;
 
 struct VsIn {
     @location(0) pos: vec3<f32>,
@@ -43,6 +44,14 @@ struct VsOut {
 fn vs_main(in: VsIn) -> VsOut {
     let model = mat4x4<f32>(in.m0, in.m1, in.m2, in.m3);
     var out: VsOut;
+    if (in.kind > 3.5) {
+        // Background quad: the unit quad IS the screen (NDC), far plane.
+        out.clip = vec4<f32>(in.pos.xy, 0.99995, 1.0);
+        out.color = in.color;
+        out.local = in.pos.xy;
+        out.kind = in.kind;
+        return out;
+    }
     out.clip = globals.view_proj * model * vec4<f32>(in.pos, 1.0);
     out.color = in.color;
     out.local = in.pos.xy;
@@ -63,6 +72,11 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let ay = abs(in.local.y);
     // Quad-local (±1) → texture uv, V flipped (image top = +y).
     let uv = vec2<f32>(in.local.x * 0.5 + 0.5, 0.5 - in.local.y * 0.5);
+
+    if (in.kind > 3.5) {
+        let bg = textureSample(bg_tex, skin_samp, uv);
+        return vec4<f32>(bg.rgb * in.color.rgb, bg.a * in.color.a);
+    }
 
     if in.kind > 2.5 {
         // Solid quad (playfield grid lines etc.).

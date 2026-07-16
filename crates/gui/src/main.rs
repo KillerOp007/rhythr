@@ -94,8 +94,8 @@ impl Default for Settings {
             music_volume: 100,
             hitsound_volume: 50,
             hud_overrides: BTreeMap::new(),
-            error_meter: MeterSettings::at(0.5, 0.93),
-            aim_meter: MeterSettings::at(0.87, 0.82),
+            error_meter: MeterSettings::at(0.5, 0.88),
+            aim_meter: MeterSettings::at(0.15, 0.32),
             recent_replays: Vec::new(),
         }
     }
@@ -361,7 +361,7 @@ impl MeterSettings {
 
 impl Default for MeterSettings {
     fn default() -> Self {
-        MeterSettings::at(0.5, 0.93)
+        MeterSettings::at(0.5, 0.88)
     }
 }
 

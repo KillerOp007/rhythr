@@ -218,6 +218,7 @@ impl Renderer {
                 tex_entry(0),
                 tex_entry(1),
                 tex_entry(2),
+                tex_entry(4),
                 wgpu::BindGroupLayoutEntry {
                     binding: 3,
                     visibility: wgpu::ShaderStages::FRAGMENT,
@@ -627,12 +628,17 @@ impl Renderer {
             .cursor_texture
             .as_deref()
             .and_then(|b| self.upload_png(b));
+        // Custom background layers, composited once on the CPU into a
+        // frame-sized image (static under camera motion — a documented
+        // approximation for parallax/spin).
+        let background = compose_background(config, self.width, self.height)
+            .map(|(rgba, w, h)| self.upload_rgba(&rgba, w, h));
 
         let tex_flags = [
             note.is_some() as u32 as f32,
             border.is_some() as u32 as f32,
             cursor.is_some() as u32 as f32,
-            0.0,
+            background.is_some() as u32 as f32,
         ];
         let view = |t: &Option<wgpu::Texture>| {
             t.as_ref()
@@ -658,6 +664,10 @@ impl Renderer {
                 wgpu::BindGroupEntry {
                     binding: 3,
                     resource: wgpu::BindingResource::Sampler(&self.skin_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(&view(&background)),
                 },
             ],
         });
@@ -768,6 +778,19 @@ impl Renderer {
         // collected with a z sort key and drawn back-to-front so alpha
         // blends correctly (depth testing still resolves note occlusion).
         let mut items: Vec<(f32, Instance)> = Vec::new();
+        // Custom skin background: a fullscreen quad at the far plane, drawn
+        // before everything (kind 4 bypasses the camera in the shader).
+        if skin.tex_flags[3] > 0.5 {
+            items.push((
+                f32::NEG_INFINITY,
+                Instance {
+                    model: Mat4::IDENTITY.to_cols_array_2d(),
+                    color: [1.0, 1.0, 1.0, 1.0],
+                    kind: 4.0,
+                    _pad: [0.0; 3],
+                },
+            ));
+        }
 
         // Playfield border, just outside the ±1 grid, flat at the hit plane.
         let ph = params.playfield_half();
@@ -1635,6 +1658,102 @@ fn gradient_color(stops: &[(f32, [f32; 3])], t: f32) -> [f32; 3] {
 }
 
 /// Decodes PNG bytes to (rgba8, width, height); None on any decode error.
+/// Composites the skin's `BackgroundImages[]` layers into one frame-sized
+/// RGBA image (bottom-up, alpha-over). Screen layers use fit/scale/centre
+/// against the frame; world layers project their grid-space rect through
+/// the default camera. Rotation is ignored (rare). Returns None without
+/// layers.
+fn compose_background(config: &SkinConfig, width: u32, height: u32) -> Option<(Vec<u8>, u32, u32)> {
+    if config.background_images.is_empty() {
+        return None;
+    }
+    let (fw, fh) = (width as f32, height as f32);
+    let mut out = vec![0u8; (width * height * 4) as usize];
+    let params = crate::scene::SceneParams::from(config);
+    let view_proj = params.view_proj(fw / fh, (0.0, 0.0));
+    let project = |x: f32, y: f32| -> (f32, f32) {
+        let p = view_proj * glam::Vec4::new(x, y, 0.0, 1.0);
+        let ndc = p / p.w.max(1e-6);
+        ((ndc.x * 0.5 + 0.5) * fw, (0.5 - ndc.y * 0.5) * fh)
+    };
+
+    for layer in &config.background_images {
+        let Some((src, sw, sh)) = decode_image_rgba(&layer.bytes) else {
+            continue;
+        };
+        let (sw_f, sh_f) = (sw as f32, sh as f32);
+        // Destination rect.
+        let (cx, cy, half_w, half_h) = if layer.placement == 1 {
+            let (x0, y0) = project(layer.space_x - layer.space_w * 0.5, layer.space_y + layer.space_h * 0.5);
+            let (x1, y1) = project(layer.space_x + layer.space_w * 0.5, layer.space_y - layer.space_h * 0.5);
+            (
+                (x0 + x1) * 0.5,
+                (y0 + y1) * 0.5,
+                (x1 - x0).abs() * 0.5 * layer.scale_x,
+                (y1 - y0).abs() * 0.5 * layer.scale_y,
+            )
+        } else {
+            // Fit against the frame: 0 stretch, 1 contain, 2 cover.
+            let (base_w, base_h) = match layer.fit {
+                0 => (fw, fh),
+                1 => {
+                    let k = (fw / sw_f).min(fh / sh_f);
+                    (sw_f * k, sh_f * k)
+                }
+                _ => {
+                    let k = (fw / sw_f).max(fh / sh_f);
+                    (sw_f * k, sh_f * k)
+                }
+            };
+            (
+                layer.center_x * fw,
+                layer.center_y * fh,
+                base_w * 0.5 * layer.scale_x,
+                base_h * 0.5 * layer.scale_y,
+            )
+        };
+        if half_w < 1.0 || half_h < 1.0 {
+            continue;
+        }
+        let (x_min, x_max) = ((cx - half_w).max(0.0) as u32, ((cx + half_w).min(fw)) as u32);
+        let (y_min, y_max) = ((cy - half_h).max(0.0) as u32, ((cy + half_h).min(fh)) as u32);
+        for dy in y_min..y_max.min(height) {
+            for dx in x_min..x_max.min(width) {
+                // Destination pixel → source uv (bilinear).
+                let mut u = (dx as f32 - (cx - half_w)) / (half_w * 2.0);
+                let v = (dy as f32 - (cy - half_h)) / (half_h * 2.0);
+                if layer.flip_horizontal {
+                    u = 1.0 - u;
+                }
+                let sx = (u * (sw_f - 1.0)).clamp(0.0, sw_f - 1.0);
+                let sy = (v * (sh_f - 1.0)).clamp(0.0, sh_f - 1.0);
+                let (x0, y0) = (sx as u32, sy as u32);
+                let (x1, y1) = ((x0 + 1).min(sw - 1), (y0 + 1).min(sh - 1));
+                let (tx, ty) = (sx - x0 as f32, sy - y0 as f32);
+                let px = |x: u32, y: u32, c: usize| src[((y * sw + x) * 4) as usize + c] as f32;
+                let mut rgba = [0f32; 4];
+                for (c, v) in rgba.iter_mut().enumerate() {
+                    let top = px(x0, y0, c) * (1.0 - tx) + px(x1, y0, c) * tx;
+                    let bot = px(x0, y1, c) * (1.0 - tx) + px(x1, y1, c) * tx;
+                    *v = top * (1.0 - ty) + bot * ty;
+                }
+                let a = rgba[3] / 255.0 * layer.tint[3];
+                if a <= 0.003 {
+                    continue;
+                }
+                let di = ((dy * width + dx) * 4) as usize;
+                for c in 0..3 {
+                    let s_v = rgba[c] * layer.tint[c];
+                    let d_v = out[di + c] as f32;
+                    out[di + c] = (s_v * a + d_v * (1.0 - a)).min(255.0) as u8;
+                }
+                out[di + 3] = ((a + out[di + 3] as f32 / 255.0 * (1.0 - a)) * 255.0) as u8;
+            }
+        }
+    }
+    Some((out, width, height))
+}
+
 /// Mod icons matching the replay's active mods (parsed from its JSON list),
 /// in declaration order.
 fn active_mod_icons<'a>(replay: &Replay, config: &'a SkinConfig) -> Vec<&'a (String, Vec<u8>)> {
