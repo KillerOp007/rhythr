@@ -67,6 +67,9 @@ struct Settings {
     hitsound_volume: u32,
     /// HUD element key -> forced on/off. Absent key = follow the config.
     hud_overrides: BTreeMap<String, bool>,
+    /// Optional overlay meters (renderer extras, not game elements).
+    error_meter: MeterSettings,
+    aim_meter: MeterSettings,
     recent_replays: Vec<String>,
 }
 
@@ -91,6 +94,8 @@ impl Default for Settings {
             music_volume: 100,
             hitsound_volume: 50,
             hud_overrides: BTreeMap::new(),
+            error_meter: MeterSettings::at(0.5, 0.93),
+            aim_meter: MeterSettings::at(0.87, 0.82),
             recent_replays: Vec::new(),
         }
     }
@@ -323,10 +328,49 @@ fn err_str(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
 
+/// Placement/looks of an optional overlay meter (normalised position).
+#[derive(Serialize, Deserialize, Clone, Copy)]
+#[serde(default)]
+struct MeterSettings {
+    enabled: bool,
+    x: f32,
+    y: f32,
+    scale: f32,
+    alpha: f32,
+}
+
+impl MeterSettings {
+    fn at(x: f32, y: f32) -> MeterSettings {
+        MeterSettings {
+            enabled: false,
+            x,
+            y,
+            scale: 1.0,
+            alpha: 0.9,
+        }
+    }
+
+    fn apply(self, target: &mut rhythia_render::config::ErrorMeter) {
+        target.enabled = self.enabled;
+        target.x = self.x.clamp(0.0, 1.0);
+        target.y = self.y.clamp(0.0, 1.0);
+        target.scale = self.scale.clamp(0.4, 2.5);
+        target.alpha = self.alpha.clamp(0.05, 1.0);
+    }
+}
+
+impl Default for MeterSettings {
+    fn default() -> Self {
+        MeterSettings::at(0.5, 0.93)
+    }
+}
+
 /// The config as it renders: file config + game assets + HUD overrides.
 fn effective_config(inner: &Inner) -> SkinConfig {
     let mut cfg = inner.base_config.clone();
     apply_overrides(&mut cfg, &inner.settings.hud_overrides);
+    inner.settings.error_meter.apply(&mut cfg.hud.error_meter);
+    inner.settings.aim_meter.apply(&mut cfg.hud.aim_meter);
     cfg
 }
 
@@ -874,6 +918,49 @@ fn set_hud_override(
         None => {
             inner.settings.hud_overrides.remove(&key);
         }
+    }
+    inner.settings.save();
+    invalidate_preview(&mut inner);
+    Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct MeterPatch {
+    enabled: Option<bool>,
+    x: Option<f32>,
+    y: Option<f32>,
+    scale: Option<f32>,
+    alpha: Option<f32>,
+}
+
+#[tauri::command]
+fn set_meter(
+    state: tauri::State<'_, App>,
+    key: String,
+    patch: MeterPatch,
+) -> Result<StatusDto, String> {
+    let app = state.inner();
+    let mut inner = app.lock();
+    let m = match key.as_str() {
+        "error" => &mut inner.settings.error_meter,
+        "aim" => &mut inner.settings.aim_meter,
+        _ => return Err(format!("unknown meter: {key}")),
+    };
+    if let Some(v) = patch.enabled {
+        m.enabled = v;
+    }
+    if let Some(v) = patch.x {
+        m.x = v.clamp(0.0, 1.0);
+    }
+    if let Some(v) = patch.y {
+        m.y = v.clamp(0.0, 1.0);
+    }
+    if let Some(v) = patch.scale {
+        m.scale = v.clamp(0.4, 2.5);
+    }
+    if let Some(v) = patch.alpha {
+        m.alpha = v.clamp(0.05, 1.0);
     }
     inner.settings.save();
     invalidate_preview(&mut inner);
@@ -1434,6 +1521,7 @@ fn main() {
             set_game_assets,
             detect_game,
             set_hud_override,
+            set_meter,
             reset_hud_overrides,
             set_output,
             suggest_file_name,

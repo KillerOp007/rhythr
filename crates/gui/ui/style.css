@@ -260,6 +260,15 @@ details#advanced > div, details#advanced > label { margin-bottom: 10px; }
   pointer-events: none;
 }
 
+.meter-opts {
+  margin: 2px 6px 8px 14px; padding: 8px 10px;
+  border-left: 2px solid var(--accent-soft);
+  display: flex; flex-direction: column; gap: 6px; font-size: 12px;
+  color: var(--muted);
+}
+.meter-opts label { display: flex; align-items: center; gap: 8px; }
+.meter-opts input[type="range"] { flex: 1; }
+
 #update-banner {
   position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%);
   display: flex; align-items: center; gap: 10px; z-index: 40;

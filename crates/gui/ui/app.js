@@ -144,6 +144,21 @@ const HUD_GROUPS = [
   ]},
 ];
 
+function meterRow(key, label, m) {
+  const opts = !m.enabled ? "" : `
+    <div class="meter-opts">
+      <label>Size <input type="range" data-meter="${key}" data-prop="scale" min="40" max="250" step="10" value="${Math.round(m.scale * 100)}"></label>
+      <label>Opacity <input type="range" data-meter="${key}" data-prop="alpha" min="10" max="100" step="5" value="${Math.round(m.alpha * 100)}"></label>
+      <div class="sub">Drag it in the preview to move it.</div>
+    </div>`;
+  return `
+    <div class="hud-row meter-toggle" data-meter-key="${key}" data-on="${m.enabled ? 1 : 0}" role="switch"
+         aria-checked="${m.enabled}" tabindex="0">
+      <span class="name">${label}</span>
+      <span class="switch"></span>
+    </div>${opts}`;
+}
+
 function renderHudTab() {
   const wrap = $("hud-groups");
   const base = status?.config?.base_hud || {};
@@ -162,9 +177,33 @@ function renderHudTab() {
           ${modified ? `<span class="dot mod"></span>` : ""}
           <span class="switch"></span>
         </div>`;
-    }).join("")}`).join("");
+    }).join("")}`).join("")
+    + `<div class="hud-group-title">Extras (not in the game)</div>`
+    + meterRow("error", "Hit error bar (early/late ms)", status?.settings?.error_meter || {})
+    + meterRow("aim", "Aim accuracy (cursor vs. note centre)", status?.settings?.aim_meter || {});
 
-  wrap.querySelectorAll(".hud-row").forEach((row) => {
+  wrap.querySelectorAll(".meter-toggle").forEach((row) => {
+    const key = row.dataset.meterKey;
+    const toggle = async () => {
+      const cur = (key === "error" ? status?.settings?.error_meter : status?.settings?.aim_meter) || {};
+      await call(() => invoke("set_meter", { key, patch: { enabled: !cur.enabled } }));
+      schedulePreview();
+    };
+    row.addEventListener("click", toggle);
+    row.addEventListener("keydown", (e) => {
+      if (e.key === " " || e.key === "Enter") { e.preventDefault(); toggle(); }
+    });
+  });
+  wrap.querySelectorAll(".meter-opts input[type=range]").forEach((sl) => {
+    sl.addEventListener("change", async () => {
+      const patch = {};
+      patch[sl.dataset.prop] = Number(sl.value) / 100;
+      await call(() => invoke("set_meter", { key: sl.dataset.meter, patch }));
+      schedulePreview();
+    });
+  });
+
+  wrap.querySelectorAll(".hud-row:not(.meter-toggle)").forEach((row) => {
     const toggle = async () => {
       const key = row.dataset.key;
       const next = !(eff[key]);
@@ -295,6 +334,71 @@ function scrubTo(clientX) {
   $("scrub-time").textContent = fmtTime(currentMs);
   drawScrubber();
   schedulePreview();
+}
+
+// Meter geometry in preview-image fractions, mirroring hud.rs.
+function meterBox(key, m, imgW, imgH) {
+  const h = imgH;
+  if (key === "error") {
+    const hw = h * 0.16 * (m.scale || 1);
+    const th = h * 0.016 * (m.scale || 1) * 1.5;
+    return { x: m.x * imgW - hw, y: m.y * imgH - th * 1.5, w: hw * 2, h: th * 3 };
+  }
+  const half = h * 0.065 * (m.scale || 1);
+  return { x: m.x * imgW - half, y: m.y * imgH - half, w: half * 2, h: half * 2 };
+}
+
+let meterDrag = null;
+
+function initMeterDrag() {
+  const img = $("preview-img");
+  const toImg = (e) => {
+    const r = img.getBoundingClientRect();
+    return {
+      x: ((e.clientX - r.left) / r.width) * (img.naturalWidth || 1280),
+      y: ((e.clientY - r.top) / r.height) * (img.naturalHeight || 720),
+      iw: img.naturalWidth || 1280,
+      ih: img.naturalHeight || 720,
+    };
+  };
+  img.addEventListener("pointerdown", (e) => {
+    const p = toImg(e);
+    for (const key of ["error", "aim"]) {
+      const m = key === "error" ? status?.settings?.error_meter : status?.settings?.aim_meter;
+      if (!m?.enabled) continue;
+      const b = meterBox(key, m, p.iw, p.ih);
+      if (p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h) {
+        meterDrag = { key, lastSent: 0 };
+        img.setPointerCapture(e.pointerId);
+        e.preventDefault();
+        return;
+      }
+    }
+  });
+  img.addEventListener("pointermove", async (e) => {
+    if (!meterDrag) return;
+    const p = toImg(e);
+    const nx = Math.min(1, Math.max(0, p.x / p.iw));
+    const ny = Math.min(1, Math.max(0, p.y / p.ih));
+    const now = Date.now();
+    if (now - meterDrag.lastSent > 180) {
+      meterDrag.lastSent = now;
+      await call(() => invoke("set_meter", { key: meterDrag.key, patch: { x: nx, y: ny } }));
+      schedulePreview();
+    }
+  });
+  img.addEventListener("pointerup", async (e) => {
+    if (!meterDrag) return;
+    const p = toImg(e);
+    const key = meterDrag.key;
+    meterDrag = null;
+    await call(() => invoke("set_meter", {
+      key,
+      patch: { x: Math.min(1, Math.max(0, p.x / p.iw)), y: Math.min(1, Math.max(0, p.y / p.ih)) },
+    }));
+    schedulePreview();
+  });
+  img.draggable = false;
 }
 
 function initScrubber() {
@@ -717,6 +821,7 @@ async function initUpdater() {
 window.addEventListener("DOMContentLoaded", async () => {
   initControls();
   initScrubber();
+  initMeterDrag();
   initDragDrop();
   initRenderEvents();
   const st = await invoke("get_status");

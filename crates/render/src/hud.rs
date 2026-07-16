@@ -340,13 +340,70 @@ fn note_multiplier(combo: u32) -> f64 {
 /// Per-replay hit resolution, computed once and reused for every frame.
 pub struct HudState {
     outcome: MatchOutcome,
+    /// Per-hit detail for the optional error meters, sorted by hit time.
+    hit_details: Vec<HitDetail>,
+}
+
+/// One registered hit: when, how early/late, and where the cursor sat
+/// relative to the note centre (in grid cells; a note spans ±0.5).
+#[derive(Debug, Clone, Copy)]
+pub struct HitDetail {
+    pub hit_ms: f64,
+    /// Positive = late, negative = early.
+    pub err_ms: f64,
+    pub off_x: f32,
+    pub off_y: f32,
 }
 
 impl HudState {
     pub fn new(map: &Map, replay: &Replay) -> HudState {
-        HudState {
-            outcome: match_hits(&map.notes, &replay.frames, DEFAULT_WINDOW_MS),
+        let outcome = match_hits(&map.notes, &replay.frames, DEFAULT_WINDOW_MS);
+        // Cursor position at each hit: frames are time-sorted, so a single
+        // merged walk resolves every hit's surrounding frame pair.
+        let mut hit_details: Vec<HitDetail> = Vec::new();
+        let mut hits: Vec<(f64, usize)> = outcome
+            .results
+            .iter()
+            .filter_map(|r| r.hit_ms.filter(|_| r.hit).map(|t| (t, r.note_index)))
+            .collect();
+        hits.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let frames = &replay.frames;
+        let mut fi = 0usize;
+        for (t, note_index) in hits {
+            while fi + 1 < frames.len() && frames[fi + 1].ms <= t {
+                fi += 1;
+            }
+            let (cx, cy) = if fi + 1 < frames.len() && frames[fi + 1].ms > frames[fi].ms {
+                let a = &frames[fi];
+                let b = &frames[fi + 1];
+                let k = (((t - a.ms) / (b.ms - a.ms)).clamp(0.0, 1.0)) as f32;
+                (a.x + (b.x - a.x) * k, a.y + (b.y - a.y) * k)
+            } else {
+                frames.get(fi).map(|f| (f.x, f.y)).unwrap_or((0.0, 0.0))
+            };
+            let note = &map.notes[note_index];
+            // Cursor frames live in world space (±1.37 around the origin,
+            // +y up); notes are grid coordinates — convert before diffing.
+            let (nx, ny) = crate::scene::grid_to_world(note.x, note.y);
+            hit_details.push(HitDetail {
+                hit_ms: t,
+                err_ms: t - note.time_ms as f64,
+                off_x: cx - nx,
+                off_y: cy - ny,
+            });
         }
+        HudState {
+            outcome,
+            hit_details,
+        }
+    }
+
+    /// Hits registered up to `song_time_ms`, most recent last.
+    pub fn hits_until(&self, song_time_ms: f64) -> &[HitDetail] {
+        let end = self
+            .hit_details
+            .partition_point(|d| d.hit_ms <= song_time_ms);
+        &self.hit_details[..end]
     }
 
     /// Running stats at `song_time_ms` — hits/combo/misses derived from the
@@ -511,6 +568,7 @@ pub struct Playfield {
 pub fn build_hud(
     atlas: &FontAtlas,
     cfg: &crate::config::SkinConfig,
+    state: &HudState,
     stats: &HudStats,
     replay: &Replay,
     map: &Map,
@@ -790,6 +848,9 @@ pub fn build_hud(
             v.extend_from_slice(&quad);
         }
     }
+
+    // --- Optional renderer extras (not game elements) --------------------
+    draw_error_meters(&mut b, cfg, state, song_time_ms, w, _h);
 
     b.verts
 }
@@ -1314,6 +1375,117 @@ pub fn build_results(
     }
 
     b.verts
+}
+
+/// How long a hit stays visible in the meters.
+const METER_FADE_MS: f64 = 3000.0;
+
+/// Colour ramp for an error fraction 0..1: green → yellow → red (sRGB in,
+/// linear out via the usual HUD conversion).
+fn meter_color(frac: f32, alpha: f32) -> [f32; 4] {
+    let f = frac.clamp(0.0, 1.0);
+    let (r, g, b) = if f < 0.5 {
+        let k = f / 0.5;
+        (80.0 + (240.0 - 80.0) * k, 230.0 - 20.0 * k, 120.0 - 40.0 * k)
+    } else {
+        let k = (f - 0.5) / 0.5;
+        (240.0, 210.0 - 130.0 * k, 80.0)
+    };
+    srgb8_to_linear([r as u8, g as u8, b as u8], alpha)
+}
+
+/// The optional danser-style meters: a timing bar (early ← → late over the
+/// ±80 ms hit window) and an aim scatter (cursor offset from the note
+/// centre, a note spanning ±0.5 grid cells). Both fade each hit over
+/// [`METER_FADE_MS`] and follow user-set position/scale/alpha.
+fn draw_error_meters(
+    b: &mut HudBuilder,
+    cfg: &crate::config::SkinConfig,
+    state: &HudState,
+    t: f64,
+    w: f32,
+    h: f32,
+) {
+    let em = cfg.hud.error_meter;
+    let am = cfg.hud.aim_meter;
+    if !em.enabled && !am.enabled {
+        return;
+    }
+    let hits = state.hits_until(t);
+    let recent = || {
+        hits.iter()
+            .rev()
+            .take_while(move |d| t - d.hit_ms < METER_FADE_MS)
+    };
+
+    if em.enabled {
+        let (cx, cy) = (em.x * w, em.y * h);
+        let halfw = h * 0.16 * em.scale;
+        let bar_h = (h * 0.005 * em.scale).max(2.0);
+        let tick_h = (h * 0.016 * em.scale).max(6.0);
+        b.rect(
+            cx - halfw,
+            cy - bar_h * 0.5,
+            halfw * 2.0,
+            bar_h,
+            srgb8_to_linear([225, 228, 235], 0.14 * em.alpha),
+        );
+        b.rect(
+            cx - 1.0,
+            cy - tick_h * 0.75,
+            2.0,
+            tick_h * 1.5,
+            srgb8_to_linear([235, 238, 245], 0.85 * em.alpha),
+        );
+        for d in recent() {
+            let age = ((t - d.hit_ms) / METER_FADE_MS) as f32;
+            let frac = (d.err_ms / rhythia_sim::hitreg::DEFAULT_WINDOW_MS) as f32;
+            let x = cx + frac.clamp(-1.0, 1.0) * halfw;
+            let col = meter_color(frac.abs(), (1.0 - age) * em.alpha);
+            b.rect(x - 1.0, cy - tick_h * 0.5, 2.0, tick_h, col);
+        }
+        // Rolling average marker (last 20 hits) under the bar.
+        let last: Vec<f64> = hits.iter().rev().take(20).map(|d| d.err_ms).collect();
+        if !last.is_empty() {
+            let avg = (last.iter().sum::<f64>() / last.len() as f64
+                / rhythia_sim::hitreg::DEFAULT_WINDOW_MS) as f32;
+            let x = cx + avg.clamp(-1.0, 1.0) * halfw;
+            b.rect(
+                x - 1.5,
+                cy + tick_h * 0.75,
+                3.0,
+                (h * 0.006 * em.scale).max(3.0),
+                srgb8_to_linear([235, 238, 245], 0.9 * em.alpha),
+            );
+        }
+    }
+
+    if am.enabled {
+        let (cx, cy) = (am.x * w, am.y * h);
+        let half = h * 0.065 * am.scale;
+        let line = srgb8_to_linear([225, 228, 235], 0.14 * am.alpha);
+        let t_px = 1.5f32;
+        // Square frame (the note's shape) + crosshair.
+        b.rect(cx - half, cy - half, half * 2.0, t_px, line);
+        b.rect(cx - half, cy + half - t_px, half * 2.0, t_px, line);
+        b.rect(cx - half, cy - half, t_px, half * 2.0, line);
+        b.rect(cx + half - t_px, cy - half, t_px, half * 2.0, line);
+        b.rect(cx - half, cy - 0.5, half * 2.0, 1.0, line);
+        b.rect(cx - 0.5, cy - half, 1.0, half * 2.0, line);
+        // A hit dead-centre lands on the crosshair; the frame edge is the
+        // note's edge (±0.5 cells) plus a little margin.
+        const RANGE: f32 = 0.6;
+        for d in recent() {
+            let age = ((t - d.hit_ms) / METER_FADE_MS) as f32;
+            let ox = (d.off_x / RANGE).clamp(-1.0, 1.0) * half;
+            // World +y is up; screen +y is down.
+            let oy = (-d.off_y / RANGE).clamp(-1.0, 1.0) * half;
+            let r = (d.off_x * d.off_x + d.off_y * d.off_y).sqrt() / 0.5;
+            let dot = (h * 0.004 * am.scale).max(2.5);
+            let col = meter_color(r, (1.0 - age) * am.alpha);
+            b.rect(cx + ox - dot * 0.5, cy + oy - dot * 0.5, dot, dot, col);
+        }
+    }
 }
 
 /// Draw the combo ring: a polygon whose side count is the stateful tier

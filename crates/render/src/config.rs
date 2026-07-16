@@ -105,6 +105,35 @@ pub struct HudConfig {
     /// Speed notation under the health bar. The game always shows it; the
     /// field exists so the desktop app can hide it per user override.
     pub speed_label: bool,
+    /// Optional renderer extra (not a game element): timing error bar
+    /// showing how early/late each hit was, danser-style.
+    pub error_meter: ErrorMeter,
+    /// Optional renderer extra: aim scatter showing where the cursor sat
+    /// relative to each hit note's centre.
+    pub aim_meter: ErrorMeter,
+}
+
+/// Placement/looks of an optional overlay meter. Positions are normalised
+/// (0..1 of the frame); scale 1.0 is the design size.
+#[derive(Debug, Clone, Copy)]
+pub struct ErrorMeter {
+    pub enabled: bool,
+    pub x: f32,
+    pub y: f32,
+    pub scale: f32,
+    pub alpha: f32,
+}
+
+impl ErrorMeter {
+    fn at(x: f32, y: f32) -> ErrorMeter {
+        ErrorMeter {
+            enabled: false,
+            x,
+            y,
+            scale: 1.0,
+            alpha: 0.9,
+        }
+    }
 }
 
 impl Default for HudConfig {
@@ -134,6 +163,9 @@ impl Default for HudConfig {
             song_info: true,
             miss_effect_opacity: 1.0,
             speed_label: true,
+            // Below the playfield / to its right by default; both off.
+            error_meter: ErrorMeter::at(0.5, 0.93),
+            aim_meter: ErrorMeter::at(0.87, 0.82),
         }
     }
 }
@@ -504,8 +536,10 @@ impl SkinConfig {
             playfield_combo_text: num("PlayfieldComboTextOpacity", hd.combo_text_opacity) > 0.0,
             song_info: boolean("SongInfoEnabled", hd.song_info),
             miss_effect_opacity: num("MissEffectOpacity", hd.miss_effect_opacity),
-            // Not a game setting — the desktop app's HUD overrides use it.
+            // Not game settings — the desktop app's HUD overrides use these.
             speed_label: hd.speed_label,
+            error_meter: hd.error_meter,
+            aim_meter: hd.aim_meter,
         };
         let note_skin_name = text("NoteSkin");
         Ok(SkinConfig {

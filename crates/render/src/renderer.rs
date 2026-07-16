@@ -1100,6 +1100,7 @@ impl Renderer {
             crate::hud::build_hud(
                 &self.hud_atlas,
                 config,
+                state,
                 &stats,
                 replay,
                 map,
