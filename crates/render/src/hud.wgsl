@@ -46,6 +46,13 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let a = textureSample(atlas, samp, in.uv).r;
     let c = textureSample(cover, samp, in.uv);
     let cb = textureSample(cover_blur, samp, in.uv);
+    if (in.mode > 3.5) {
+        // Fail vignette, ported from the game's vignette.fs: aspect-corrected
+        // radial distance, smoothstep(0.35, 0.85); strength rides in color.a.
+        let d = length(in.uv - vec2<f32>(0.5, 0.5));
+        let v = smoothstep(0.35, 0.85, d);
+        return vec4<f32>(in.color.rgb, in.color.a * v);
+    }
     if (in.mode > 2.5) {
         return vec4<f32>(cb.rgb * in.color.rgb, in.color.a);
     }

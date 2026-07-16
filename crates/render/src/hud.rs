@@ -69,9 +69,15 @@ pub struct FontAtlas {
 }
 
 impl FontAtlas {
-    /// Rasterise the bundled font once into a packed coverage atlas.
-    pub fn new() -> FontAtlas {
-        let font = Font::from_bytes(FONT_BYTES, FontSettings::default()).expect("bundled HUD font");
+    /// Rasterise the HUD font once into a packed coverage atlas. `custom`
+    /// is the game's own font (Nunito, extracted from the user's install);
+    /// the bundled DejaVu approximation is the fallback.
+    pub fn new(custom: Option<&[u8]>) -> FontAtlas {
+        let font = custom
+            .and_then(|b| Font::from_bytes(b, FontSettings::default()).ok())
+            .unwrap_or_else(|| {
+                Font::from_bytes(FONT_BYTES, FontSettings::default()).expect("bundled HUD font")
+            });
 
         // Rasterise every printable ASCII glyph at the base size.
         let mut cells: Vec<(usize, fontdue::Metrics, Vec<u8>)> = Vec::new();
@@ -140,7 +146,7 @@ impl FontAtlas {
 
 impl Default for FontAtlas {
     fn default() -> Self {
-        Self::new()
+        Self::new(None)
     }
 }
 
@@ -760,23 +766,28 @@ pub fn build_hud(
         );
     }
 
-    // Fail vignette: a red edge glow that grows as health drains, banded to
-    // fake a gradient (no gradient primitive in the overlay pass).
+    // Fail vignette — the game's own formula (vignette.fs): a fullscreen
+    // radial smoothstep(0.35, 0.85) in red (0.9, 0.05, 0.05), scaled by a
+    // strength that grows as health drains. The aspect correction from the
+    // shader (p.x *= aspect) is baked into the quad's UVs here.
     if cfg.fail_vignette_opacity > 0.0 {
         let danger = (1.0 - stats.health.clamp(0.0, 1.0)).powi(2);
         let alpha = cfg.fail_vignette_opacity * danger;
         if alpha > 0.002 {
-            let bands = 6;
-            let depth = refd * 0.06;
-            for k in 0..bands {
-                let a = srgb8_to_linear([185, 25, 30], alpha * (1.0 - k as f32 / bands as f32));
-                let t = depth / bands as f32;
-                let o = k as f32 * t;
-                b.rect(o, o, w - 2.0 * o, t, a); // top
-                b.rect(o, _h - o - t, w - 2.0 * o, t, a); // bottom
-                b.rect(o, o + t, t, _h - 2.0 * (o + t), a); // left
-                b.rect(w - o - t, o + t, t, _h - 2.0 * (o + t), a); // right
-            }
+            let aspect = w / _h;
+            let color = srgb8_to_linear([230, 13, 13], alpha);
+            let (u0, u1) = (0.5 - 0.5 * aspect, 0.5 + 0.5 * aspect);
+            let mode = 4.0;
+            let v = &mut b.verts;
+            let quad = [
+                HudVertex::new([0.0, 0.0], [u0, 0.0], color, mode),
+                HudVertex::new([w, 0.0], [u1, 0.0], color, mode),
+                HudVertex::new([w, _h], [u1, 1.0], color, mode),
+                HudVertex::new([0.0, 0.0], [u0, 0.0], color, mode),
+                HudVertex::new([w, _h], [u1, 1.0], color, mode),
+                HudVertex::new([0.0, _h], [u0, 1.0], color, mode),
+            ];
+            v.extend_from_slice(&quad);
         }
     }
 
@@ -931,7 +942,7 @@ mod tests {
 
     #[test]
     fn font_atlas_lays_out_ascii() {
-        let atlas = FontAtlas::new();
+        let atlas = FontAtlas::new(None);
         assert!(atlas.glyph('A').is_some());
         assert!(atlas.glyph('5').is_some());
         // A wider string measures wider.
@@ -1173,6 +1184,7 @@ pub fn build_results(
     stats: &HudStats,
     width: u32,
     height: u32,
+    icons_shown: bool,
 ) -> Vec<HudVertex> {
     let mut b = HudBuilder::new(atlas);
     let (w, h) = (width as f32, height as f32);
@@ -1326,7 +1338,7 @@ pub fn build_results(
     } else {
         speed_label(&mut b, w * 0.545, my, h * 1.6, replay.speed, white);
     }
-    if !replay.mods.is_empty() && replay.mods != "[]" {
+    if !icons_shown && !replay.mods.is_empty() && replay.mods != "[]" {
         let mods = replay
             .mods
             .trim_matches(['[', ']'])
