@@ -260,6 +260,12 @@ details#advanced > div, details#advanced > label { margin-bottom: 10px; }
   pointer-events: none;
 }
 
+#meter-ghost {
+  position: absolute; z-index: 30; pointer-events: none;
+  border: 1.5px dashed var(--accent); border-radius: 4px;
+  background: rgba(47, 214, 208, 0.08);
+}
+
 .meter-opts {
   margin: 2px 6px 8px 14px; padding: 8px 10px;
   border-left: 2px solid var(--accent-soft);

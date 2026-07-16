@@ -1418,6 +1418,17 @@ pub fn build_results(
 
 /// How long a hit stays visible in the meters.
 const METER_FADE_MS: f64 = 3000.0;
+/// Soft pop-in duration for a new tick/dot.
+const METER_POP_MS: f64 = 130.0;
+
+/// Envelope for a hit of the given age: quick eased rise, gentle quadratic
+/// fall — the difference between ticks snapping in and gliding in.
+fn meter_envelope(age_ms: f64) -> f32 {
+    let rise = (age_ms / METER_POP_MS).clamp(0.0, 1.0) as f32;
+    let rise = rise * rise * (3.0 - 2.0 * rise); // smoothstep
+    let fall = (1.0 - age_ms / METER_FADE_MS).clamp(0.0, 1.0) as f32;
+    rise * fall * fall
+}
 
 /// Colour ramp for an error fraction 0..1: green → yellow → red (sRGB in,
 /// linear out via the usual HUD conversion).
@@ -1477,17 +1488,29 @@ fn draw_error_meters(
             srgb8_to_linear([235, 238, 245], 0.85 * em.alpha),
         );
         for d in recent() {
-            let age = ((t - d.hit_ms) / METER_FADE_MS) as f32;
+            let age = t - d.hit_ms;
+            let env = meter_envelope(age);
             let frac = (d.err_ms / rhythia_sim::hitreg::DEFAULT_WINDOW_MS) as f32;
             let x = cx + frac.clamp(-1.0, 1.0) * halfw;
-            let col = meter_color(frac.abs(), (1.0 - age) * em.alpha);
-            b.rect(x - 1.0, cy - tick_h * 0.5, 2.0, tick_h, col);
+            let col = meter_color(frac.abs(), env * em.alpha);
+            let th = tick_h * (0.55 + 0.45 * (age / METER_POP_MS).clamp(0.0, 1.0) as f32);
+            b.rect(x - 1.0, cy - th * 0.5, 2.0, th, col);
         }
-        // Rolling average marker (last 20 hits) under the bar.
-        let last: Vec<f64> = hits.iter().rev().take(20).map(|d| d.err_ms).collect();
-        if !last.is_empty() {
-            let avg = (last.iter().sum::<f64>() / last.len() as f64
-                / rhythia_sim::hitreg::DEFAULT_WINDOW_MS) as f32;
+        // Rolling average marker (last 20 hits), gliding to each new value
+        // instead of snapping when a hit lands.
+        let window_avg = |skip: usize| -> Option<f32> {
+            let vals: Vec<f64> = hits.iter().rev().skip(skip).take(20).map(|d| d.err_ms).collect();
+            (!vals.is_empty()).then(|| {
+                (vals.iter().sum::<f64>() / vals.len() as f64
+                    / rhythia_sim::hitreg::DEFAULT_WINDOW_MS) as f32
+            })
+        };
+        if let Some(now_avg) = window_avg(0) {
+            let prev_avg = window_avg(1).unwrap_or(now_avg);
+            let since_last = hits.last().map(|d| t - d.hit_ms).unwrap_or(f64::MAX);
+            let k = (since_last / 250.0).clamp(0.0, 1.0) as f32;
+            let k = k * k * (3.0 - 2.0 * k);
+            let avg = prev_avg + (now_avg - prev_avg) * k;
             let x = cx + avg.clamp(-1.0, 1.0) * halfw;
             b.rect(
                 x - 1.5,
@@ -1515,13 +1538,15 @@ fn draw_error_meters(
         // note's edge (±0.5 cells) plus a little margin.
         const RANGE: f32 = 0.6;
         for d in recent() {
-            let age = ((t - d.hit_ms) / METER_FADE_MS) as f32;
+            let age = t - d.hit_ms;
+            let env = meter_envelope(age);
             let ox = (d.off_x / RANGE).clamp(-1.0, 1.0) * half;
             // World +y is up; screen +y is down.
             let oy = (-d.off_y / RANGE).clamp(-1.0, 1.0) * half;
             let r = (d.off_x * d.off_x + d.off_y * d.off_y).sqrt() / 0.5;
-            let dot = (h * 0.004 * am.scale).max(2.5);
-            let col = meter_color(r, (1.0 - age) * am.alpha);
+            let dot = (h * 0.004 * am.scale).max(2.5)
+                * (0.6 + 0.4 * (age / METER_POP_MS).clamp(0.0, 1.0) as f32);
+            let col = meter_color(r, env * am.alpha);
             b.rect(cx + ox - dot * 0.5, cy + oy - dot * 0.5, dot, dot, col);
         }
     }

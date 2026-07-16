@@ -176,6 +176,11 @@ function meterRow(key, label, m) {
 
 function renderHudTab() {
   const wrap = $("hud-groups");
+  // Rebuilding the DOM would yank a slider out from under an active drag —
+  // the slider itself is the source of truth then, skip the re-render.
+  if (wrap.contains(document.activeElement) && document.activeElement?.type === "range") {
+    return;
+  }
   const base = status?.config?.base_hud || {};
   const eff = status?.config?.effective_hud || {};
   const overrides = status?.settings?.hud_overrides || {};
@@ -210,12 +215,19 @@ function renderHudTab() {
     });
   });
   wrap.querySelectorAll(".meter-opts input[type=range]").forEach((sl) => {
-    sl.addEventListener("change", async () => {
+    let timer = null;
+    const push = async () => {
       const patch = {};
       patch[sl.dataset.prop] = Number(sl.value) / 100;
       await call(() => invoke("set_meter", { key: sl.dataset.meter, patch }));
       schedulePreview();
+    };
+    // Live while sliding (debounced to the preview's render pace).
+    sl.addEventListener("input", () => {
+      clearTimeout(timer);
+      timer = setTimeout(push, 140);
     });
+    sl.addEventListener("change", push);
   });
 
   wrap.querySelectorAll(".hud-row:not(.meter-toggle)").forEach((row) => {
@@ -365,51 +377,85 @@ function meterBox(key, m, imgW, imgH) {
 
 let meterDrag = null;
 
+// While dragging, a client-side outline follows the pointer instantly; the
+// backend renders once on release (round-tripping a full preview per move
+// felt laggy).
+function dragGhostBox(show, box) {
+  let el = document.getElementById("meter-ghost");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "meter-ghost";
+    $("preview-wrap").appendChild(el);
+  }
+  el.hidden = !show;
+  if (show && box) {
+    Object.assign(el.style, {
+      left: `${box.x}px`,
+      top: `${box.y}px`,
+      width: `${box.w}px`,
+      height: `${box.h}px`,
+    });
+  }
+}
+
 function initMeterDrag() {
   const img = $("preview-img");
-  const toImg = (e) => {
+  const wrap = $("preview-wrap");
+  const geom = (e) => {
     const r = img.getBoundingClientRect();
+    const wr = wrap.getBoundingClientRect();
     return {
       x: ((e.clientX - r.left) / r.width) * (img.naturalWidth || 1280),
       y: ((e.clientY - r.top) / r.height) * (img.naturalHeight || 720),
       iw: img.naturalWidth || 1280,
       ih: img.naturalHeight || 720,
+      rect: r,
+      wrapRect: wr,
+    };
+  };
+  // Meter box in on-screen wrap coordinates for the ghost outline.
+  const screenBox = (key, m, g, nx, ny) => {
+    const b = meterBox(key, { ...m, x: nx, y: ny }, g.iw, g.ih);
+    const sx = g.rect.width / g.iw;
+    const sy = g.rect.height / g.ih;
+    return {
+      x: g.rect.left - g.wrapRect.left + b.x * sx,
+      y: g.rect.top - g.wrapRect.top + b.y * sy,
+      w: b.w * sx,
+      h: b.h * sy,
     };
   };
   img.addEventListener("pointerdown", (e) => {
-    const p = toImg(e);
+    const g = geom(e);
     for (const key of ["error", "aim"]) {
       const m = key === "error" ? status?.settings?.error_meter : status?.settings?.aim_meter;
       if (!m?.enabled) continue;
-      const b = meterBox(key, m, p.iw, p.ih);
-      if (p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h) {
-        meterDrag = { key, lastSent: 0 };
+      const b = meterBox(key, m, g.iw, g.ih);
+      if (g.x >= b.x && g.x <= b.x + b.w && g.y >= b.y && g.y <= b.y + b.h) {
+        meterDrag = { key, m };
         img.setPointerCapture(e.pointerId);
         e.preventDefault();
+        dragGhostBox(true, screenBox(key, m, g, m.x, m.y));
         return;
       }
     }
   });
-  img.addEventListener("pointermove", async (e) => {
+  img.addEventListener("pointermove", (e) => {
     if (!meterDrag) return;
-    const p = toImg(e);
-    const nx = Math.min(1, Math.max(0, p.x / p.iw));
-    const ny = Math.min(1, Math.max(0, p.y / p.ih));
-    const now = Date.now();
-    if (now - meterDrag.lastSent > 180) {
-      meterDrag.lastSent = now;
-      await call(() => invoke("set_meter", { key: meterDrag.key, patch: { x: nx, y: ny } }));
-      schedulePreview();
-    }
+    const g = geom(e);
+    const nx = Math.min(1, Math.max(0, g.x / g.iw));
+    const ny = Math.min(1, Math.max(0, g.y / g.ih));
+    dragGhostBox(true, screenBox(meterDrag.key, meterDrag.m, g, nx, ny));
   });
   img.addEventListener("pointerup", async (e) => {
     if (!meterDrag) return;
-    const p = toImg(e);
+    const g = geom(e);
     const key = meterDrag.key;
     meterDrag = null;
+    dragGhostBox(false);
     await call(() => invoke("set_meter", {
       key,
-      patch: { x: Math.min(1, Math.max(0, p.x / p.iw)), y: Math.min(1, Math.max(0, p.y / p.ih)) },
+      patch: { x: Math.min(1, Math.max(0, g.x / g.iw)), y: Math.min(1, Math.max(0, g.y / g.ih)) },
     }));
     schedulePreview();
   });
