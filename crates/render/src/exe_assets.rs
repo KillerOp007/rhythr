@@ -18,8 +18,9 @@ use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::Path;
 
-/// Only names under this prefix are game skin assets we care about.
-const NAME_PREFIX: &[u8] = b"Rhythia.Resources.Textures.Game.";
+/// All game resources live under this prefix; `route_name` decides which
+/// of them the renderer actually wants.
+const NAME_PREFIX: &[u8] = b"Rhythia.Resources.";
 /// Sanity bound: no single embedded asset is anywhere near this large.
 const MAX_ASSET_BYTES: u64 = 64 << 20;
 /// The real exe has ~600 game entries; a crafted file must not mint more.
@@ -28,8 +29,9 @@ const MAX_ENTRIES: usize = 10_000;
 const MAX_TOTAL_BYTES: u64 = 256 << 20;
 /// Colorset lines become heap strings (~7x amplification) — cap the total.
 const MAX_COLORSET_LINES: usize = 100_000;
-/// The game's asset categories; anything else is a scan false positive.
-const CATEGORIES: [&str; 6] = ["notes", "borders", "cursors", "ratings", "colorsets", ""];
+/// Skin-texture categories under Textures.Game; anything else there is a
+/// scan false positive.
+const GAME_CATEGORIES: [&str; 6] = ["notes", "borders", "cursors", "ratings", "colorsets", ""];
 
 /// One resource entry recovered from the index: name, blob-relative offset,
 /// size.
@@ -147,19 +149,45 @@ pub fn locate_blob_base(exe: &[u8], entries: &[Entry]) -> Option<u64> {
     None
 }
 
-/// Category + file name of a game-texture resource, e.g.
-/// `…Textures.Game.borders.small-corners.png` → ("borders",
-/// "small-corners.png"). Colorset names may themselves contain dots. A rest
-/// with a single dot ("kfc.png") is a top-level file with no category.
-fn split_name(name: &str) -> Option<(&str, &str)> {
+/// Maps a resource name to its cache location `(category, file)` under
+/// `builtin_assets/`, or None for resources the renderer has no use for
+/// (menu art, story music, database schema, …).
+///
+/// Skin textures keep their original layout; the rest lands in dedicated
+/// folders: game shaders in `shaders/` (vignette, fade, instanced_tint …),
+/// the hit/miss sounds in `sounds/`, mod icons in `mods/`, and the two UI
+/// fonts in `fonts/`. Colorset names may themselves contain dots; a
+/// Textures.Game rest with a single dot ("kfc.png") is a top-level file.
+fn route_name(name: &str) -> Option<(&str, &str)> {
     let rest = name.strip_prefix(std::str::from_utf8(NAME_PREFIX).ok()?)?;
-    let (category, file) = rest.split_once('.')?;
-    if file.contains('.') {
-        (!file.is_empty()).then_some((category, file))
-    } else {
-        // "kfc" + "png": no category segment — the whole rest is the name.
-        Some(("", rest))
+    if let Some(game) = rest.strip_prefix("Textures.Game.") {
+        let (category, file) = game.split_once('.')?;
+        return if file.contains('.') {
+            (!file.is_empty()).then_some((category, file))
+        } else {
+            // "kfc" + "png": no category segment — the whole rest is the name.
+            Some(("", game))
+        };
     }
+    if let Some(f) = rest.strip_prefix("Shaders.") {
+        return Some(("shaders", f));
+    }
+    if let Some(f) = rest.strip_prefix("Sounds.default_hits.") {
+        return Some(("sounds", f));
+    }
+    if let Some(f) = rest.strip_prefix("Sounds.default_misses.") {
+        return Some(("sounds", f));
+    }
+    if rest == "Sounds.hit.wav" {
+        return Some(("sounds", "hit.wav"));
+    }
+    if let Some(f) = rest.strip_prefix("Textures.Menu.mods.") {
+        return Some(("mods", f));
+    }
+    if rest == "Fonts.default.ttf" || rest == "Fonts.default2.ttf" {
+        return Some(("fonts", rest.strip_prefix("Fonts.").unwrap()));
+    }
+    None
 }
 
 fn sane_component(s: &str) -> bool {
@@ -187,15 +215,15 @@ pub fn extract_to_dir(exe_path: &Path, out_dir: &Path) -> Result<usize, String> 
     let mut seen: std::collections::BTreeSet<(String, String)> = Default::default();
     let mut budget: u64 = 0;
     for e in &entries {
-        let Some((category, file)) = split_name(&e.name) else {
+        let Some((category, file)) = route_name(&e.name) else {
             continue;
         };
         // Empty category = top-level file directly under builtin_assets.
         if (!category.is_empty() && !sane_component(category)) || !sane_component(file) {
             continue;
         }
-        // Anything outside the game's real categories is a scan artefact.
-        if !CATEGORIES.contains(&category) {
+        // Textures.Game entries outside the real categories are artefacts.
+        if e.name.contains(".Textures.Game.") && !GAME_CATEGORIES.contains(&category) {
             continue;
         }
         // Duplicate names never occur in a genuine resource index; a later
@@ -342,7 +370,7 @@ mod tests {
         let mut colorsets: BTreeMap<String, Vec<String>> = BTreeMap::new();
         let mut written = 0usize;
         for e in entries {
-            let Some((category, file)) = split_name(&e.name) else {
+            let Some((category, file)) = route_name(&e.name) else {
                 continue;
             };
             let start = (base + e.offset) as usize;
