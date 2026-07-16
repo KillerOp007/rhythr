@@ -98,13 +98,35 @@ pub fn render_video(
     let (width, height) = renderer.dimensions();
     // Upload the skin's textures once; reused for every frame.
     let skin = renderer.prepare_skin(config);
+    // Each side plays on its own field: mirror/hardrock from that replay's
+    // mods are applied to its copy of the notes. Speed is the exception —
+    // both runs share one timeline and one audio track, so a ghost with a
+    // different speed cannot race.
+    if let Some(g) = &opts.ghost {
+        if (g.replay.speed - replay.speed).abs() > 0.005 {
+            return Err(Error::Ghost(format!(
+                "speed mods must match: main {:.2}x, ghost {:.2}x",
+                replay.speed, g.replay.speed
+            )));
+        }
+    }
+    let ghost_input = opts.ghost.as_ref().map(|g| {
+        let (gmap, gmods) = crate::mods::map_for_replay(map, &g.replay);
+        crate::hud::GhostInput {
+            state: crate::hud::HudState::new(&gmap, &g.replay),
+            replay: g.replay.clone(),
+            color: g.color,
+            map: gmap,
+            grid_scale: gmods.grid_scale,
+        }
+    });
+    let (map, main_mods) = crate::mods::map_for_replay(map, replay);
+    let map = &map;
+    let mut params = *params;
+    params.grid_scale = main_mods.grid_scale;
+    let params = &params;
     // Resolve every note's hit/miss once; the HUD reads running stats from it.
     let hud_state = crate::hud::HudState::new(map, replay);
-    let ghost_input = opts.ghost.as_ref().map(|g| crate::hud::GhostInput {
-        state: crate::hud::HudState::new(map, &g.replay),
-        replay: g.replay.clone(),
-        color: g.color,
-    });
     // Replay frame times are already song time — speed mods are baked in
     // when the .rhr is recorded (the hit registration matching note times
     // proves it), so the video runs 1:1 with song time and the audio plays

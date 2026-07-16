@@ -9,6 +9,7 @@ pub mod config;
 pub mod exe_assets;
 pub mod hud;
 pub mod mesh;
+pub mod mods;
 pub mod renderer;
 pub mod scene;
 pub mod video;
@@ -31,6 +32,8 @@ pub enum Error {
     Ffmpeg(String),
     #[error("render cancelled")]
     Cancelled,
+    #[error("ghost race: {0}")]
+    Ghost(String),
     #[error("skin config: {0}")]
     Config(String),
     #[error(transparent)]

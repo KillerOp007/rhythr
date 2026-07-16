@@ -844,12 +844,16 @@ impl Renderer {
                         m.y = gy;
                     }
                 }
+                // The ghost plays on its own field: its map already carries
+                // its mods, and its border widens with its grid.
+                let mut ghost_params = *params;
+                ghost_params.grid_scale = g.grid_scale;
                 self.submit_side(
-                    params,
+                    &ghost_params,
                     &ghost_cfg,
                     skin,
                     &g.replay,
-                    map,
+                    &g.map,
                     song_time_ms,
                     hud_state.map(|_| &g.state),
                     (half, self.width - half),
@@ -1481,27 +1485,41 @@ impl Renderer {
         };
         // Background: blurred cover, heavily dimmed.
         quad(&mut verts, 0.0, 0.0, w, h, [0.055, 0.055, 0.06, 1.0], 3.0);
+        // Cover with a green frame, top-left as in the game. One map, one
+        // cover — a ghost race shares it (with the title block) at full
+        // size instead of duplicating it per side.
+        let (cx0, cy0, cx1, cy1) = (w * 0.044, h * 0.062, w * 0.214, h * 0.365);
+        let f = (h * 0.004).max(2.0);
+        quad(
+            &mut verts,
+            cx0 - f,
+            cy0 - f,
+            cx1 + f,
+            cy1 + f,
+            crate::config::srgb8_to_linear([34, 197, 94], 1.0),
+            0.0,
+        );
+        quad(&mut verts, cx0, cy0, cx1, cy1, [1.0, 1.0, 1.0, 1.0], 2.0);
+        if ghost.is_some() {
+            verts.extend(crate::hud::build_results(
+                &self.hud_atlas,
+                replay,
+                map,
+                &sides[0].1,
+                self.width,
+                self.height,
+                true,
+                crate::hud::ResultsPart::Header,
+            ));
+        }
         for (side_replay, side_stats, x_off, w_eff) in &sides {
             let (x_off, w_eff) = (*x_off, *w_eff);
-            // Cover with a green frame, top-left as in the game.
-            let (cx0, cy0, cx1, cy1) = (
-                x_off + w_eff * 0.044,
-                h * 0.062,
-                x_off + w_eff * 0.214,
-                h * 0.365,
-            );
-            let f = (h * 0.004).max(2.0);
-            quad(
-                &mut verts,
-                cx0 - f,
-                cy0 - f,
-                cx1 + f,
-                cy1 + f,
-                crate::config::srgb8_to_linear([34, 197, 94], 1.0),
-                0.0,
-            );
-            quad(&mut verts, cx0, cy0, cx1, cy1, [1.0, 1.0, 1.0, 1.0], 2.0);
             let icons = active_mod_icons(side_replay, config);
+            let part = if ghost.is_some() {
+                crate::hud::ResultsPart::Side
+            } else {
+                crate::hud::ResultsPart::Full
+            };
             let side_verts = crate::hud::build_results(
                 &self.hud_atlas,
                 side_replay,
@@ -1510,6 +1528,7 @@ impl Renderer {
                 w_eff as u32,
                 self.height,
                 !icons.is_empty(),
+                part,
             );
             verts.extend(side_verts.into_iter().map(|mut v| {
                 v.pos[0] += x_off;
@@ -1563,7 +1582,10 @@ impl Renderer {
                 continue;
             }
             let icon_h = (h * 0.052) as u32;
-            let mut x = (x_off + w_eff * 0.58) as u32;
+            // Clear the speed notation, which sits proportionally wider on
+            // a half-width side.
+            let frac = if ghost.is_some() { 0.63 } else { 0.58 };
+            let mut x = (x_off + w_eff * frac) as u32;
             let y = (h * 0.775) as u32 - icon_h / 2;
             for (_, png) in icons {
                 if let Some((rgba, iw, ih)) = decode_image_rgba(png) {

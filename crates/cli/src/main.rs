@@ -220,10 +220,13 @@ fn run() -> anyhow::Result<bool> {
                 eprintln!("warning: replay data is inconsistent — possibly manipulated");
             }
 
-            let params = rhythia_render::scene::SceneParams::from(&cfg);
+            let mut params = rhythia_render::scene::SceneParams::from(&cfg);
             let renderer = rhythia_render::Renderer::new(width, height, cfg.hud_font.as_deref())
                 .context("initialising GPU renderer")?;
             let skin = renderer.prepare_skin(&cfg);
+            // Show the field the player actually saw (mirror/hardrock).
+            let (m, mods) = rhythia_render::mods::map_for_replay(&m, &r);
+            params.grid_scale = mods.grid_scale;
             let hud_state = rhythia_render::hud::HudState::new(&m, &r);
             let pixels = renderer
                 .render_still(&params, &cfg, &skin, &r, &m, song_ms, Some(&hud_state))

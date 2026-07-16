@@ -344,6 +344,12 @@ pub struct GhostInput {
     pub replay: Replay,
     pub state: HudState,
     pub color: [f32; 3],
+    /// The map as this ghost's player saw it — its own geometry mods
+    /// (mirror/hardrock) applied, independent of the main side's.
+    pub map: Map,
+    /// Grid half-extent of this side's playfield (1.0, or wider under
+    /// hardrock); the border follows it.
+    pub grid_scale: f32,
 }
 
 pub struct HudState {
@@ -1209,6 +1215,20 @@ fn health_color(h: f32) -> [u8; 3] {
     }
 }
 
+/// Which portion of the results screen [`build_results`] emits. A single
+/// run renders [`ResultsPart::Full`]; a ghost race shares one map header
+/// across the frame and stacks each racer's numbers into a half-width
+/// [`ResultsPart::Side`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ResultsPart {
+    /// Everything — the classic single-player layout.
+    Full,
+    /// Only the shared map header (title/subtitle/mapper next to the cover).
+    Header,
+    /// One racer's half: played-by line, grade, statistics, graph, mods.
+    Side,
+}
+
 /// Build the results screen shown after a finish or fail: title block,
 /// big grade, statistics with dotted leaders, health graph and mods box.
 /// The blurred-cover background and the cover image itself are drawn by the
@@ -1222,6 +1242,7 @@ pub fn build_results(
     width: u32,
     height: u32,
     icons_shown: bool,
+    part: ResultsPart,
 ) -> Vec<HudVertex> {
     let mut b = HudBuilder::new(atlas);
     let (w, h) = (width as f32, height as f32);
@@ -1230,57 +1251,79 @@ pub fn build_results(
     let line_col = srgb8_to_linear([120, 120, 126], 0.55);
 
     // --- Title block (right of the cover, drawn by the renderer) ---------
-    let tx = w * 0.227;
-    b.text(
-        &map.meta.song_name,
-        tx,
-        h * 0.082,
-        h * 0.037,
-        Align::Left,
-        white,
-    );
-    if !map.meta.title.is_empty() {
+    if part != ResultsPart::Side {
+        let tx = w * 0.227;
         b.text(
-            &format!("< {} >", map.meta.title),
+            &map.meta.song_name,
             tx,
-            h * 0.117,
-            h * 0.026,
-            Align::Left,
-            green,
-        );
-    }
-    if !map.meta.mappers.is_empty() {
-        b.text(
-            &format!("by {}", map.meta.mappers.join(", ")),
-            tx,
-            h * 0.152,
-            h * 0.024,
+            h * 0.082,
+            h * 0.037,
             Align::Left,
             white,
         );
+        if !map.meta.title.is_empty() {
+            b.text(
+                &format!("< {} >", map.meta.title),
+                tx,
+                h * 0.117,
+                h * 0.026,
+                Align::Left,
+                green,
+            );
+        }
+        if !map.meta.mappers.is_empty() {
+            b.text(
+                &format!("by {}", map.meta.mappers.join(", ")),
+                tx,
+                h * 0.152,
+                h * 0.024,
+                Align::Left,
+                white,
+            );
+        }
     }
+    if part == ResultsPart::Header {
+        return b.verts;
+    }
+
     let played = format!(
         "Played by {} on {}",
         replay.player_name,
         format_ticks(replay.timestamp_ticks)
     );
-    b.text(&played, tx, h * 0.34, h * 0.026, Align::Left, white);
-
-    // --- Big grade, top right --------------------------------------------
     let failed = replay.failed();
     let (glabel, gcol) = if failed {
         ("F", [200u8, 40, 45])
     } else {
         (stats.grade.label(), stats.grade.color())
     };
-    b.text(
-        glabel,
-        w * 0.895,
-        h * 0.26,
-        h * 0.13,
-        Align::Center,
-        srgb8_to_linear(gcol, 1.0),
-    );
+    match part {
+        ResultsPart::Full => {
+            b.text(&played, w * 0.227, h * 0.34, h * 0.026, Align::Left, white);
+            // Big grade, top right.
+            b.text(
+                glabel,
+                w * 0.895,
+                h * 0.26,
+                h * 0.13,
+                Align::Center,
+                srgb8_to_linear(gcol, 1.0),
+            );
+        }
+        ResultsPart::Side => {
+            // Compact strip between the shared header and the statistics.
+            b.text(&played, w * 0.038, h * 0.39, h * 0.022, Align::Left, white);
+            b.text(
+                glabel,
+                w * 0.92,
+                h * 0.415,
+                h * 0.085,
+                Align::Center,
+                srgb8_to_linear(gcol, 1.0),
+            );
+        }
+        ResultsPart::Header => unreachable!(),
+    }
 
     // --- Statistics with dotted leaders ----------------------------------
     b.text(
@@ -1383,7 +1426,9 @@ pub fn build_results(
             .replace("mod_", "")
             .replace(',', "  ")
             .to_uppercase();
-        b.text(&mods, w * 0.58, my, h * 0.026, Align::Left, white);
+        // At half width the speed notation reaches further into the box.
+        let mx = if part == ResultsPart::Side { w * 0.63 } else { w * 0.58 };
+        b.text(&mods, mx, my, h * 0.026, Align::Left, white);
     }
 
     b.verts

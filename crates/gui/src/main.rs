@@ -145,6 +145,8 @@ struct PreviewCtx {
     ghost: Option<rhythia_render::hud::GhostInput>,
     cfg: SkinConfig,
     params: SceneParams,
+    /// The map with the main replay's geometry mods applied.
+    map: rhythia_formats::map::Map,
 }
 
 #[derive(Default)]
@@ -704,6 +706,15 @@ fn load_replay(state: tauri::State<'_, App>, path: String) -> Result<StatusDto, 
         inner.map_hash_mismatch = cached_map_hash(replay.map_id)
             .is_some_and(|h| !replay.beatmap_hash.is_empty() && h != replay.beatmap_hash);
     }
+    // A loaded ghost belongs to the previous replay; drop it when it no
+    // longer fits the new one (other map, or a speed it cannot race).
+    if let Some((_, g)) = &inner.ghost {
+        let other_map =
+            g.map_id != replay.map_id && !g.beatmap_hash.is_empty() && g.beatmap_hash != replay.beatmap_hash;
+        if other_map || (g.speed - replay.speed).abs() > 0.005 {
+            inner.ghost = None;
+        }
+    }
     inner.settings.last_replay = Some(path.clone());
     let recent = &mut inner.settings.recent_replays;
     recent.retain(|p| p != &path);
@@ -967,6 +978,14 @@ fn load_ghost(state: tauri::State<'_, App>, path: String) -> Result<StatusDto, S
         if ghost.map_id != r.map_id && !ghost.beatmap_hash.is_empty() && ghost.beatmap_hash != r.beatmap_hash {
             return Err("that replay was played on a different map".into());
         }
+        // Both runs share one timeline and one audio track, so the speed
+        // must match; other mods (mirror, hardrock) may differ per side.
+        if (ghost.speed - r.speed).abs() > 0.005 {
+            return Err(format!(
+                "speed mods must match: your replay is {:.2}x, the ghost {:.2}x",
+                r.speed, ghost.speed
+            ));
+        }
     }
     inner.ghost = Some((PathBuf::from(path), ghost));
     invalidate_preview(&mut inner);
@@ -1181,16 +1200,25 @@ async fn preview(state: tauri::State<'_, App>, time_ms: f64) -> Result<String, S
             let renderer =
                 rhythia_render::Renderer::new(PREVIEW_W, PREVIEW_H, cfg.hud_font.as_deref())
                     .map_err(err_str)?;
-            let params = SceneParams::from(&cfg);
+            let mut params = SceneParams::from(&cfg);
             let skin = renderer.prepare_skin(&cfg);
             let (_, r) = inner.replay.as_ref().unwrap();
             let (_, m) = inner.map.as_ref().unwrap();
-            let hud = rhythia_render::hud::HudState::new(m, r);
-            let ghost = inner.ghost.as_ref().map(|(_, g)| rhythia_render::hud::GhostInput {
-                state: rhythia_render::hud::HudState::new(m, g),
-                replay: g.clone(),
-                color: GHOST_COLOR,
+            // Each side plays on its own field: its replay's mirror/hardrock
+            // applied to its own copy of the notes.
+            let ghost = inner.ghost.as_ref().map(|(_, g)| {
+                let (gmap, gmods) = rhythia_render::mods::map_for_replay(m, g);
+                rhythia_render::hud::GhostInput {
+                    state: rhythia_render::hud::HudState::new(&gmap, g),
+                    replay: g.clone(),
+                    color: GHOST_COLOR,
+                    map: gmap,
+                    grid_scale: gmods.grid_scale,
+                }
             });
+            let (main_map, main_mods) = rhythia_render::mods::map_for_replay(m, r);
+            params.grid_scale = main_mods.grid_scale;
+            let hud = rhythia_render::hud::HudState::new(&main_map, r);
             inner.preview = Some(PreviewCtx {
                 renderer,
                 skin,
@@ -1198,12 +1226,12 @@ async fn preview(state: tauri::State<'_, App>, time_ms: f64) -> Result<String, S
                 ghost,
                 cfg,
                 params,
+                map: main_map,
             });
         }
         let inner = &*inner;
         let ctx = inner.preview.as_ref().unwrap();
         let (_, r) = inner.replay.as_ref().unwrap();
-        let (_, m) = inner.map.as_ref().unwrap();
         let pixels = ctx
             .renderer
             .render_still_with_ghost(
@@ -1211,7 +1239,7 @@ async fn preview(state: tauri::State<'_, App>, time_ms: f64) -> Result<String, S
                 &ctx.cfg,
                 &ctx.skin,
                 r,
-                m,
+                &ctx.map,
                 time_ms,
                 Some(&ctx.hud),
                 ctx.ghost.as_ref(),
@@ -1239,13 +1267,15 @@ async fn export_frame(
         let (_, m) = inner.map.as_ref().ok_or("no map loaded")?;
         let cfg = effective_config(&inner);
         let (w, h) = (inner.settings.width, inner.settings.height);
-        let params = SceneParams::from(&cfg);
+        let mut params = SceneParams::from(&cfg);
         let renderer =
             rhythia_render::Renderer::new(w, h, cfg.hud_font.as_deref()).map_err(err_str)?;
         let skin = renderer.prepare_skin(&cfg);
-        let hud = rhythia_render::hud::HudState::new(m, r);
+        let (m, mods) = rhythia_render::mods::map_for_replay(m, r);
+        params.grid_scale = mods.grid_scale;
+        let hud = rhythia_render::hud::HudState::new(&m, r);
         let pixels = renderer
-            .render_still(&params, &cfg, &skin, r, m, time_ms, Some(&hud))
+            .render_still(&params, &cfg, &skin, r, &m, time_ms, Some(&hud))
             .map_err(err_str)?;
         rhythia_render::write_png(Path::new(&path), &pixels, w, h).map_err(err_str)
     })

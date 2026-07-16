@@ -56,6 +56,10 @@ pub struct SceneParams {
     pub note_opacity: f32,
     /// HalfGhost mod: notes fade toward half opacity near the hit plane.
     pub half_ghost: bool,
+    /// Grid half-extent of the playfield (1.0; hardrock widens it to
+    /// [`crate::mods::HARDROCK_GRID_SCALE`]). Note positions are already
+    /// transformed in the map; this only widens the border.
+    pub grid_scale: f32,
     /// near/far clip planes (raylib defaults).
     pub near: f32,
     pub far: f32,
@@ -81,6 +85,7 @@ impl Default for SceneParams {
             spin: false,
             note_opacity: 1.0,
             half_ghost: false,
+            grid_scale: 1.0,
             near: 0.01,
             far: 1000.0,
         }
@@ -146,7 +151,7 @@ impl SceneParams {
     /// The factor is pixel-calibrated against the game's bracket box (the
     /// health bar spanning it measures 773px at 1440p ↔ 1.3395 world units).
     pub fn playfield_half(&self) -> f32 {
-        1.0 + self.note_radius * 0.73
+        self.grid_scale + self.note_radius * 0.73
     }
 
     /// Depth of a note at the given song time, or None if it is not on
