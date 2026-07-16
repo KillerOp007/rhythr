@@ -260,6 +260,14 @@ details#advanced > div, details#advanced > label { margin-bottom: 10px; }
   pointer-events: none;
 }
 
+#update-banner {
+  position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 10px; z-index: 40;
+  background: var(--panel-2); border: 1px solid var(--accent);
+  border-radius: 8px; padding: 8px 12px; font-size: 12.5px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+}
+
 ::-webkit-scrollbar { width: 9px; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }

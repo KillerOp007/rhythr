@@ -1,0 +1,10 @@
+{
+  "bundle": {
+    "resources": [
+      "ffmpeg.exe",
+      "ffmpeg-LICENSE.txt",
+      "README.txt",
+      "FONT-LICENSE.txt"
+    ]
+  }
+}

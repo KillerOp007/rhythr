@@ -667,6 +667,35 @@ async function initEncoders() {
 
 // ------------------------------------------------------------ boot
 
+async function initUpdater() {
+  // Non-blocking: check GitHub for a newer release; the user decides.
+  try {
+    const update = await window.__TAURI__.updater.check();
+    if (!update) return;
+    $("update-text").textContent = `Update ${update.version} is available.`;
+    $("update-banner").hidden = false;
+    $("btn-update-later").onclick = () => { $("update-banner").hidden = true; };
+    $("btn-update").onclick = async () => {
+      $("btn-update").disabled = true;
+      let got = 0;
+      try {
+        await update.downloadAndInstall((e) => {
+          if (e.event === "Progress") {
+            got += e.data.chunkLength;
+            $("update-text").textContent = `Downloading update… ${(got / 1048576).toFixed(0)} MB`;
+          } else if (e.event === "Finished") {
+            $("update-text").textContent = "Installing…";
+          }
+        });
+        await window.__TAURI__.process.relaunch();
+      } catch (err) {
+        $("update-text").textContent = `Update failed: ${err}`;
+        $("btn-update").disabled = false;
+      }
+    };
+  } catch { /* offline or first run — try again next launch */ }
+}
+
 window.addEventListener("DOMContentLoaded", async () => {
   initControls();
   initScrubber();
@@ -675,4 +704,5 @@ window.addEventListener("DOMContentLoaded", async () => {
   const st = await invoke("get_status");
   await applyStatus(st);
   initEncoders();
+  setTimeout(initUpdater, 2500);
 });

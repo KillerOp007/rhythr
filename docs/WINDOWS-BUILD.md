@@ -102,3 +102,22 @@ and installs per-user (no admin prompt, `installMode: currentUser`).
   `WEBKIT_DISABLE_DMABUF_RENDERER=1 WEBKIT_DISABLE_COMPOSITING_MODE=1`,
   otherwise the window attaches to a live Wayland session or renders
   blank. Irrelevant on Windows (WebView2, not WebKitGTK).
+
+## Releasing with auto-update
+
+Updates are signed (minisign). The private key lives OUTSIDE the repo;
+the matching public key is pinned in `tauri.conf.json`.
+
+```sh
+export TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.tauri/rhythr-updater.key)"
+# Windows: tauri build --runner cargo-xwin --target x86_64-pc-windows-msvc
+# Linux:   tauri build --bundles deb,appimage
+python3 scripts/make-latest-json.py <version>
+gh release create v<version> <setup.exe> <AppImage> <deb> latest.json ...
+```
+
+`latest.json` must be attached to every release — installed apps poll
+`releases/latest/download/latest.json`, verify the signature against
+the pinned key, and offer the update in-app. Without the private key
+no valid update can be produced, so keep it backed up: losing it means
+shipped apps can never auto-update again.

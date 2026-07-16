@@ -24,3 +24,4 @@ testdata/*_cover.png
 /notes
 /.cargo/config.toml
 /crates/gui/FONT-LICENSE.txt
+/latest.json
