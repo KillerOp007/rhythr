@@ -578,7 +578,6 @@ pub fn build_hud(
     cfg: &crate::config::SkinConfig,
     state: &HudState,
     stats: &HudStats,
-    ghost: Option<(&GhostInput, &HudStats)>,
     replay: &Replay,
     map: &Map,
     song_time_ms: f64,
@@ -859,32 +858,6 @@ pub fn build_hud(
                 HudVertex::new([0.0, _h], [u0, 1.0], color, mode),
             ];
             v.extend_from_slice(&quad);
-        }
-    }
-
-    // --- Ghost race versus panel ------------------------------------------
-    if let Some((g, gstats)) = ghost {
-        let x = w * 0.015;
-        let mut y = _h * 0.075;
-        let name_px = refd * 0.017;
-        let stat_px = refd * 0.0145;
-        let ghost_col = srgb8_to_linear(
-            [
-                (g.color[0] * 255.0) as u8,
-                (g.color[1] * 255.0) as u8,
-                (g.color[2] * 255.0) as u8,
-            ],
-            1.0,
-        );
-        let rows = [
-            (replay.player_name.as_str(), stats, value_col),
-            (g.replay.player_name.as_str(), gstats, ghost_col),
-        ];
-        for (name, st, col) in rows {
-            b.text(name, x, y, name_px, Align::Left, col);
-            let line = format!("{}  {:.2}%", thousands(st.score), st.accuracy_pct);
-            b.text(&line, x, y + refd * 0.02, stat_px, Align::Left, label_col);
-            y += refd * 0.052;
         }
     }
 
@@ -1468,31 +1441,46 @@ fn draw_error_meters(
             .take_while(move |d| t - d.hit_ms < METER_FADE_MS)
     };
 
+    // Accent in the side's cursor colour so a ghost-split's bars read as
+    // belonging to their player.
+    let accent = srgb8_to_linear(
+        [
+            (cfg.cursor_color[0] * 255.0) as u8,
+            (cfg.cursor_color[1] * 255.0) as u8,
+            (cfg.cursor_color[2] * 255.0) as u8,
+        ],
+        0.9,
+    );
     if em.enabled {
+        // One-sided: hits can only ever be late (the hitbox arms at the
+        // note's time — verified across 6k reference hits, min error 0.0),
+        // so the bar runs 0 → +80 ms with the anchor on the left.
         let (cx, cy) = (em.x * w, em.y * h);
         let halfw = h * 0.16 * em.scale;
+        let (x0, bar_w) = (cx - halfw, halfw * 2.0);
         let bar_h = (h * 0.005 * em.scale).max(2.0);
         let tick_h = (h * 0.016 * em.scale).max(6.0);
         b.rect(
-            cx - halfw,
+            x0,
             cy - bar_h * 0.5,
-            halfw * 2.0,
+            bar_w,
             bar_h,
             srgb8_to_linear([225, 228, 235], 0.14 * em.alpha),
         );
+        // "0 ms" anchor in the accent colour.
         b.rect(
-            cx - 1.0,
+            x0 - 1.0,
             cy - tick_h * 0.75,
             2.0,
             tick_h * 1.5,
-            srgb8_to_linear([235, 238, 245], 0.85 * em.alpha),
+            [accent[0], accent[1], accent[2], accent[3] * em.alpha],
         );
         for d in recent() {
             let age = t - d.hit_ms;
             let env = meter_envelope(age);
             let frac = (d.err_ms / rhythia_sim::hitreg::DEFAULT_WINDOW_MS) as f32;
-            let x = cx + frac.clamp(-1.0, 1.0) * halfw;
-            let col = meter_color(frac.abs(), env * em.alpha);
+            let x = x0 + frac.clamp(0.0, 1.0) * bar_w;
+            let col = meter_color(frac, env * em.alpha);
             let th = tick_h * (0.55 + 0.45 * (age / METER_POP_MS).clamp(0.0, 1.0) as f32);
             b.rect(x - 1.0, cy - th * 0.5, 2.0, th, col);
         }
@@ -1511,13 +1499,13 @@ fn draw_error_meters(
             let k = (since_last / 250.0).clamp(0.0, 1.0) as f32;
             let k = k * k * (3.0 - 2.0 * k);
             let avg = prev_avg + (now_avg - prev_avg) * k;
-            let x = cx + avg.clamp(-1.0, 1.0) * halfw;
+            let x = x0 + avg.clamp(0.0, 1.0) * bar_w;
             b.rect(
                 x - 1.5,
                 cy + tick_h * 0.75,
                 3.0,
                 (h * 0.006 * em.scale).max(3.0),
-                srgb8_to_linear([235, 238, 245], 0.9 * em.alpha),
+                [accent[0], accent[1], accent[2], accent[3] * em.alpha],
             );
         }
     }

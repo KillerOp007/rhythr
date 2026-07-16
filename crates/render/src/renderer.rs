@@ -786,9 +786,10 @@ impl Renderer {
         )
     }
 
-    /// Like [`Self::submit_frame`], with an optional second replay rendered
-    /// as a "ghost": its cursor and trail in a distinct colour, plus a
-    /// small versus panel comparing live score/accuracy.
+    /// Like [`Self::submit_frame`], with an optional second replay: the
+    /// frame splits into two side-by-side views — the player's run on the
+    /// left, the ghost's on the right — each with its own full HUD and the
+    /// ghost's cursor/trail in its distinct colour.
     #[allow(clippy::too_many_arguments)]
     pub fn submit_frame_with_ghost(
         &self,
@@ -802,7 +803,73 @@ impl Renderer {
         ghost: Option<&crate::hud::GhostInput>,
         slot: usize,
     ) -> Result<(), Error> {
-        let aspect = self.width as f32 / self.height as f32;
+        match ghost {
+            None => self.submit_side(
+                params,
+                config,
+                skin,
+                replay,
+                map,
+                song_time_ms,
+                hud_state,
+                (0, self.width),
+                true,
+                Some(slot),
+            ),
+            Some(g) => {
+                let half = self.width / 2;
+                self.submit_side(
+                    params,
+                    config,
+                    skin,
+                    replay,
+                    map,
+                    song_time_ms,
+                    hud_state,
+                    (0, half),
+                    true,
+                    None,
+                )?;
+                let mut ghost_cfg = config.clone();
+                ghost_cfg.cursor_color = g.color;
+                ghost_cfg.cursor_trail_color = g.color;
+                ghost_cfg.cursor_trail_gradient.clear();
+                ghost_cfg.cursor_trail_inherit = true;
+                self.submit_side(
+                    params,
+                    &ghost_cfg,
+                    skin,
+                    &g.replay,
+                    map,
+                    song_time_ms,
+                    hud_state.map(|_| &g.state),
+                    (half, self.width - half),
+                    false,
+                    Some(slot),
+                )
+            }
+        }
+    }
+
+    /// Renders one view into the given horizontal viewport slice: the full
+    /// scene plus its HUD, optionally clearing first and queueing the
+    /// framebuffer readback.
+    #[allow(clippy::too_many_arguments)]
+    fn submit_side(
+        &self,
+        params: &SceneParams,
+        config: &SkinConfig,
+        skin: &SkinTextures,
+        replay: &Replay,
+        map: &Map,
+        song_time_ms: f64,
+        hud_state: Option<&crate::hud::HudState>,
+        viewport: (u32, u32),
+        clear: bool,
+        readback_slot: Option<usize>,
+    ) -> Result<(), Error> {
+        let (vp_x, vp_w) = viewport;
+        let aspect = vp_w as f32 / self.height as f32;
         let cursor = replay.cursor_at(song_time_ms);
         let view_proj = params.view_proj(aspect, cursor);
 
@@ -1079,14 +1146,6 @@ impl Renderer {
         // Cursor (+ optional trail) render after everything with the
         // depth-free overlay pipeline, in list order.
         let mut overlay: Vec<Instance> = Vec::new();
-        if let Some(g) = ghost {
-            let mut ghost_cfg = config.clone();
-            ghost_cfg.cursor_color = g.color;
-            ghost_cfg.cursor_trail_color = g.color;
-            ghost_cfg.cursor_trail_gradient.clear();
-            ghost_cfg.cursor_trail_inherit = true;
-            self.push_cursor(&mut overlay, &ghost_cfg, &g.replay, song_time_ms);
-        }
         self.push_cursor(&mut overlay, config, replay, song_time_ms);
 
         items.sort_by(|a, b| a.0.total_cmp(&b.0));
@@ -1113,16 +1172,21 @@ impl Renderer {
                     resolve_target: None,
                     depth_slice: None,
                     ops: wgpu::Operations {
-                        // Background colour from the config (default black).
-                        load: wgpu::LoadOp::Clear({
-                            let [r, g, b] = srgb_to_linear(config.background_color);
-                            wgpu::Color {
-                                r: r as f64,
-                                g: g as f64,
-                                b: b as f64,
-                                a: 1.0,
-                            }
-                        }),
+                        // Background colour from the config (default black);
+                        // the right half of a split frame loads the left.
+                        load: if clear {
+                            wgpu::LoadOp::Clear({
+                                let [r, g, b] = srgb_to_linear(config.background_color);
+                                wgpu::Color {
+                                    r: r as f64,
+                                    g: g as f64,
+                                    b: b as f64,
+                                    a: 1.0,
+                                }
+                            })
+                        } else {
+                            wgpu::LoadOp::Load
+                        },
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -1138,6 +1202,14 @@ impl Renderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
+            pass.set_viewport(
+                vp_x as f32,
+                0.0,
+                vp_w as f32,
+                self.height as f32,
+                0.0,
+                1.0,
+            );
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &self.bind_group, &[]);
             pass.set_bind_group(1, &skin.bind_group, &[]);
@@ -1159,7 +1231,7 @@ impl Renderer {
         // the flat 2D stat panels/bars/ring/title on top (no depth).
         let hud_verts = hud_state.filter(|_| !config.disable_gui).map(|state| {
             let stats = state.stats_at(map, replay, song_time_ms);
-            let field = self.playfield_screen(&view_proj, params.playfield_half());
+            let field = self.playfield_screen(&view_proj, params.playfield_half(), vp_w);
             // Project freshly missed notes' cells to screen for the X marks.
             let miss_marks: Vec<(f32, f32, f64)> = state
                 .recent_misses(map, song_time_ms)
@@ -1169,29 +1241,32 @@ impl Renderer {
                     let c = view_proj * glam::Vec4::new(wx, wy, 0.0, 1.0);
                     let ndc = c.truncate() / c.w;
                     (
-                        (ndc.x * 0.5 + 0.5) * self.width as f32,
+                        (ndc.x * 0.5 + 0.5) * vp_w as f32,
                         (0.5 - ndc.y * 0.5) * self.height as f32,
                         age,
                     )
                 })
                 .collect();
-            let ghost_stats = ghost.map(|g| g.state.stats_at(map, &g.replay, song_time_ms));
             crate::hud::build_hud(
                 &self.hud_atlas,
                 config,
                 state,
                 &stats,
-                ghost.zip(ghost_stats.as_ref()),
                 replay,
                 map,
                 song_time_ms,
                 &field,
                 &miss_marks,
-                self.width,
+                vp_w,
                 self.height,
             )
         });
         if let Some(mut verts) = hud_verts.filter(|v| !v.is_empty()) {
+            if vp_x > 0 {
+                for v in &mut verts {
+                    v.pos[0] += vp_x as f32;
+                }
+            }
             verts.truncate(HUD_VERT_CAP - HUD_VERT_CAP % 3);
             self.queue
                 .write_buffer(&self.hud_vbuf, 0, bytemuck::cast_slice(&verts));
@@ -1218,32 +1293,38 @@ impl Renderer {
         }
 
         // Queue the framebuffer copy into the slot's readback buffer as part
-        // of the same submission, and remember its index for a targeted wait.
-        let padded = (self.width * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
-            * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-        encoder.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo {
-                texture: &self.color_tex,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyBufferInfo {
-                buffer: &self.readback_bufs[slot % READBACK_SLOTS],
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(padded),
-                    rows_per_image: Some(self.height),
+        // of the same submission, and remember its index for a targeted
+        // wait. A side without readback (the left half of a split frame)
+        // just submits its work.
+        if let Some(slot) = readback_slot {
+            let padded = (self.width * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
+                * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+            encoder.copy_texture_to_buffer(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &self.color_tex,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
                 },
-            },
-            wgpu::Extent3d {
-                width: self.width,
-                height: self.height,
-                depth_or_array_layers: 1,
-            },
-        );
-        let idx = self.queue.submit(Some(encoder.finish()));
-        self.readback_submissions.borrow_mut()[slot % READBACK_SLOTS] = Some(idx);
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &self.readback_bufs[slot % READBACK_SLOTS],
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(padded),
+                        rows_per_image: Some(self.height),
+                    },
+                },
+                wgpu::Extent3d {
+                    width: self.width,
+                    height: self.height,
+                    depth_or_array_layers: 1,
+                },
+            );
+            let idx = self.queue.submit(Some(encoder.finish()));
+            self.readback_submissions.borrow_mut()[slot % READBACK_SLOTS] = Some(idx);
+        } else {
+            self.queue.submit(Some(encoder.finish()));
+        }
         Ok(())
     }
 
@@ -1293,22 +1374,35 @@ impl Renderer {
         map: &Map,
         hud_state: &crate::hud::HudState,
         config: &SkinConfig,
+        ghost: Option<&crate::hud::GhostInput>,
     ) -> Result<Vec<u8>, Error> {
-        let active_icons = active_mod_icons(replay, config);
         let (w, h) = (self.width as f32, self.height as f32);
         // Final stats. A failed run ends at its fail time — notes after it
         // were never attempted and must not count as misses. The window
         // margin lets the killing miss itself (note at ~fail time) register.
-        let stats_end = if replay.failed() {
-            replay.fail_time_ms as f64 + rhythia_sim::hitreg::DEFAULT_WINDOW_MS + 1.0
-        } else {
-            f64::MAX
+        let final_stats = |r: &Replay, state: &crate::hud::HudState| {
+            let stats_end = if r.failed() {
+                r.fail_time_ms as f64 + rhythia_sim::hitreg::DEFAULT_WINDOW_MS + 1.0
+            } else {
+                f64::MAX
+            };
+            let mut st = state.stats_at(map, r, stats_end);
+            // The results screen shows the stored final score; the running
+            // 100-per-combo sum can drift a few thousandths from it.
+            if !r.failed() {
+                st.score = r.total_score;
+            }
+            st
         };
-        let mut stats = hud_state.stats_at(map, replay, stats_end);
-        // The results screen shows the stored final score; the running
-        // 100-per-combo sum can drift a few thousandths from it.
-        if !replay.failed() {
-            stats.score = replay.total_score;
+        // One side per player: the whole layout renders once at full width,
+        // or twice at half width for a ghost race (two scores, one screen).
+        let mut sides: Vec<(&Replay, crate::hud::HudStats, f32, f32)> = Vec::new();
+        match ghost {
+            None => sides.push((replay, final_stats(replay, hud_state), 0.0, w)),
+            Some(g) => {
+                sides.push((replay, final_stats(replay, hud_state), 0.0, w * 0.5));
+                sides.push((&g.replay, final_stats(&g.replay, &g.state), w * 0.5, w * 0.5));
+            }
         }
 
         // Cover textures: full resolution + a tiny average-pooled copy that
@@ -1378,28 +1472,41 @@ impl Renderer {
         };
         // Background: blurred cover, heavily dimmed.
         quad(&mut verts, 0.0, 0.0, w, h, [0.055, 0.055, 0.06, 1.0], 3.0);
-        // Cover with a green frame, top-left as in the game.
-        let (cx0, cy0, cx1, cy1) = (w * 0.044, h * 0.062, w * 0.214, h * 0.365);
-        let f = (h * 0.004).max(2.0);
-        quad(
-            &mut verts,
-            cx0 - f,
-            cy0 - f,
-            cx1 + f,
-            cy1 + f,
-            crate::config::srgb8_to_linear([34, 197, 94], 1.0),
-            0.0,
-        );
-        quad(&mut verts, cx0, cy0, cx1, cy1, [1.0, 1.0, 1.0, 1.0], 2.0);
-        verts.extend(crate::hud::build_results(
-            &self.hud_atlas,
-            replay,
-            map,
-            &stats,
-            self.width,
-            self.height,
-            !active_icons.is_empty(),
-        ));
+        for (side_replay, side_stats, x_off, w_eff) in &sides {
+            let (x_off, w_eff) = (*x_off, *w_eff);
+            // Cover with a green frame, top-left as in the game.
+            let (cx0, cy0, cx1, cy1) = (
+                x_off + w_eff * 0.044,
+                h * 0.062,
+                x_off + w_eff * 0.214,
+                h * 0.365,
+            );
+            let f = (h * 0.004).max(2.0);
+            quad(
+                &mut verts,
+                cx0 - f,
+                cy0 - f,
+                cx1 + f,
+                cy1 + f,
+                crate::config::srgb8_to_linear([34, 197, 94], 1.0),
+                0.0,
+            );
+            quad(&mut verts, cx0, cy0, cx1, cy1, [1.0, 1.0, 1.0, 1.0], 2.0);
+            let icons = active_mod_icons(side_replay, config);
+            let side_verts = crate::hud::build_results(
+                &self.hud_atlas,
+                side_replay,
+                map,
+                side_stats,
+                w_eff as u32,
+                self.height,
+                !icons.is_empty(),
+            );
+            verts.extend(side_verts.into_iter().map(|mut v| {
+                v.pos[0] += x_off;
+                v
+            }));
+        }
 
         let vbuf = self
             .device
@@ -1439,13 +1546,17 @@ impl Renderer {
 
         // Mod icons, composited onto the static frame CPU-side (cheaper than
         // extra texture plumbing for a once-per-render image). They sit in
-        // the Mods box, right of the speed letter, where the text fallback
-        // would otherwise be.
-        if !active_icons.is_empty() {
+        // each side's Mods box, right of the speed letter, where the text
+        // fallback would otherwise be.
+        for (side_replay, _, x_off, w_eff) in &sides {
+            let icons = active_mod_icons(side_replay, config);
+            if icons.is_empty() {
+                continue;
+            }
             let icon_h = (h * 0.052) as u32;
-            let mut x = (w * 0.58) as u32;
+            let mut x = (x_off + w_eff * 0.58) as u32;
             let y = (h * 0.775) as u32 - icon_h / 2;
-            for (_, png) in &active_icons {
+            for (_, png) in icons {
                 if let Some((rgba, iw, ih)) = decode_image_rgba(png) {
                     let (small, sw, sh) = downscale_icon(&rgba, iw, ih, icon_h.max(8));
                     blit_over(&mut pixels, self.width, &small, sw, sh, x, y);
@@ -1492,12 +1603,17 @@ impl Renderer {
     /// Screen-space (pixel) box of the playfield border at the hit plane,
     /// used to anchor the HUD. Projects the world origin and the ±`world_half`
     /// edges (the bracket box the game's HUD hangs off).
-    fn playfield_screen(&self, view_proj: &Mat4, world_half: f32) -> crate::hud::Playfield {
+    fn playfield_screen(
+        &self,
+        view_proj: &Mat4,
+        world_half: f32,
+        width_px: u32,
+    ) -> crate::hud::Playfield {
         let project = |p: glam::Vec3| -> [f32; 2] {
             let c = *view_proj * glam::Vec4::new(p.x, p.y, p.z, 1.0);
             let ndc = c.truncate() / c.w;
             [
-                (ndc.x * 0.5 + 0.5) * self.width as f32,
+                (ndc.x * 0.5 + 0.5) * width_px as f32,
                 (0.5 - ndc.y * 0.5) * self.height as f32,
             ]
         };

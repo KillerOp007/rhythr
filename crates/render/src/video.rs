@@ -316,7 +316,7 @@ pub fn render_video(
     }
     if results_frames > 0 {
         // The results screen is static: render once, repeat.
-        let pixels = renderer.render_results(replay, map, &hud_state, config)?;
+        let pixels = renderer.render_results(replay, map, &hud_state, config, ghost_input.as_ref())?;
         for i in 0..results_frames {
             write_frame(&pixels, play_frames + i, &mut guard.child)?;
             if !progress(play_frames + i + 1, total_frames) {
