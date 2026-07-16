@@ -57,6 +57,10 @@ struct Settings {
     encoder: String,
     preset: String,
     results_secs: f64,
+    /// Motion blur strength 0-2 (tmix).
+    motion_blur: u32,
+    /// Render speed of the last completed render, for the time estimate.
+    last_render_fps: f64,
     /// Song volume in percent (0-150).
     music_volume: u32,
     /// Hit/miss-sound volume in percent (0 = off).
@@ -82,6 +86,8 @@ impl Default for Settings {
             encoder: "auto".into(),
             preset: "veryfast".into(),
             results_secs: 4.0,
+            motion_blur: 0,
+            last_render_fps: 0.0,
             music_volume: 100,
             hitsound_volume: 50,
             hud_overrides: BTreeMap::new(),
@@ -894,6 +900,7 @@ struct OutputUpdate {
     encoder: Option<String>,
     preset: Option<String>,
     results_secs: Option<f64>,
+    motion_blur: Option<u32>,
     music_volume: Option<u32>,
     hitsound_volume: Option<u32>,
     output_dir: Option<String>,
@@ -926,6 +933,9 @@ fn set_output(state: tauri::State<'_, App>, update: OutputUpdate) -> Result<Stat
     }
     if let Some(v) = update.results_secs {
         s.results_secs = v.clamp(0.0, 30.0);
+    }
+    if let Some(v) = update.motion_blur {
+        s.motion_blur = v.min(2);
     }
     if let Some(v) = update.music_volume {
         s.music_volume = v.min(150);
@@ -1135,6 +1145,7 @@ fn start_render(
             encoder: s.encoder.clone(),
             preset: s.preset.clone(),
             results_secs: s.results_secs,
+            motion_blur: s.motion_blur,
             music_volume: s.music_volume.min(150) as f32 / 100.0,
             hitsounds: load_hitsounds(s),
             ffmpeg: resolve_ffmpeg(s),
@@ -1194,6 +1205,7 @@ struct RenderJob {
     encoder: String,
     preset: String,
     results_secs: f64,
+    motion_blur: u32,
     music_volume: f32,
     hitsounds: Option<rhythia_render::video::HitsoundOptions>,
     ffmpeg: String,
@@ -1251,12 +1263,14 @@ fn run_render_job(
         preset: job.preset.clone(),
         encoder,
         results_secs: job.results_secs,
+        motion_blur: job.motion_blur,
         music_volume: job.music_volume,
         hitsounds: job.hitsounds,
     };
 
     let started = std::time::Instant::now();
     let mut last_emit = std::time::Instant::now();
+    let mut final_fps = 0.0f64;
     rhythia_render::video::render_video(
         &renderer,
         &params,
@@ -1273,6 +1287,7 @@ fn run_render_job(
                 last_emit = std::time::Instant::now();
                 let elapsed = started.elapsed().as_secs_f64();
                 let fps = if elapsed > 0.0 { done as f64 / elapsed } else { 0.0 };
+                final_fps = fps;
                 let eta = if fps > 0.0 {
                     (total - done) as f64 / fps
                 } else {
@@ -1291,6 +1306,11 @@ fn run_render_job(
             true
         },
     )?;
+    if final_fps > 1.0 {
+        let mut inner = app.lock();
+        inner.settings.last_render_fps = final_fps;
+        inner.settings.save();
+    }
     Ok(job.out)
 }
 

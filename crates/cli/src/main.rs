@@ -96,6 +96,9 @@ enum Command {
         height: u32,
         #[arg(long, default_value_t = 18)]
         crf: u32,
+        /// Motion blur strength: 0 = off, 1 = light, 2 = strong (tmix).
+        #[arg(long, default_value_t = 0)]
+        motion_blur: u32,
         /// Music volume in percent (0-150).
         #[arg(long, default_value_t = 100)]
         music_volume: u32,
@@ -243,6 +246,7 @@ fn run() -> anyhow::Result<bool> {
             width,
             height,
             crf,
+            motion_blur,
             music_volume,
             hitsound_volume,
             results_secs,
@@ -359,6 +363,7 @@ fn run() -> anyhow::Result<bool> {
                 preset,
                 encoder,
                 results_secs,
+                motion_blur,
                 music_volume: music_volume.min(150) as f32 / 100.0,
                 hitsounds,
             };

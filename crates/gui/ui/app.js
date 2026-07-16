@@ -199,6 +199,7 @@ function renderOutputTab() {
   $("crf-val").textContent = String(s.crf);
   $("set-encoder").value = s.encoder;
   $("set-results").value = String(Math.round(s.results_secs));
+  $("set-mblur").value = String(s.motion_blur);
   $("set-musicvol").value = String(s.music_volume);
   $("musicvol-val").textContent = `${s.music_volume}%`;
   $("set-hitvol").value = String(s.hitsound_volume);
@@ -402,8 +403,16 @@ function updateRenderButton() {
   const ready = !!(status?.replay && status?.map);
   $("btn-render").disabled = !ready || rendering;
   if (!rendering) {
+    let readyText = "Ready to render the full run";
+    const fps = status?.settings?.last_render_fps || 0;
+    if (ready && fps > 1) {
+      const runMs = status.replay.failed ? status.replay.fail_time_ms : status.replay.length_ms;
+      const frames = (runMs / 1000) * (status.settings.fps || 60);
+      const est = frames / fps + (status.settings.results_secs || 0);
+      readyText = `Ready to render the full run (~${fmtTime(est * 1000)} at last speed)`;
+    }
     $("render-text").textContent = ready
-      ? "Ready to render the full run"
+      ? readyText
       : status?.replay
         ? "Map missing — download or browse one"
         : "Load a replay to render";
@@ -573,6 +582,7 @@ function initControls() {
   $("set-crf").addEventListener("change", () => pushOutput({ crf: Number($("set-crf").value) }));
   $("set-encoder").addEventListener("change", () => pushOutput({ encoder: $("set-encoder").value }));
   $("set-results").addEventListener("change", () => pushOutput({ results_secs: Number($("set-results").value) }));
+  $("set-mblur").addEventListener("change", () => pushOutput({ motion_blur: Number($("set-mblur").value) }));
   $("set-musicvol").addEventListener("input", () => { $("musicvol-val").textContent = `${$("set-musicvol").value}%`; });
   $("set-musicvol").addEventListener("change", () => pushOutput({ music_volume: Number($("set-musicvol").value) }));
   $("set-hitvol").addEventListener("input", () => { $("hitvol-val").textContent = `${$("set-hitvol").value}%`; });

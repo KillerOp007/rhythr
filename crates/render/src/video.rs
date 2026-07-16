@@ -34,6 +34,9 @@ pub struct VideoOptions {
     /// Seconds of results screen appended after the clip (0 disables). Only
     /// shown when the clip reaches the end of the run (or its fail).
     pub results_secs: f64,
+    /// Motion blur strength 0..=2 (0 = off): blends each output frame with
+    /// its neighbours via ffmpeg's tmix (1 → 2 frames, 2 → 3 frames).
+    pub motion_blur: u32,
     /// Music (song) volume, 0..=1.
     pub music_volume: f32,
     /// Hit/miss sounds mixed onto the song at the registered hit times.
@@ -60,6 +63,7 @@ impl Default for VideoOptions {
             preset: "veryfast".into(),
             encoder: "x264".into(),
             results_secs: 4.0,
+            motion_blur: 0,
             music_volume: 1.0,
             hitsounds: None,
         }
@@ -157,20 +161,46 @@ pub fn render_video(
     // Video encode: a hardware encoder when selected, software x264
     // otherwise. Quality knobs are mapped from the x264 CRF.
     let crf = opts.crf.to_string();
+    // Optional motion blur: tmix averages neighbouring frames — free at
+    // encode time, no extra rendering. It must run before any hardware
+    // upload in the filter chain.
+    let tmix = match opts.motion_blur.min(2) {
+        0 => None,
+        n => Some(format!("tmix=frames={}", n + 1)),
+    };
+    let vf = |hw_tail: &str| -> String {
+        match (&tmix, hw_tail.is_empty()) {
+            (Some(t), true) => t.clone(),
+            (Some(t), false) => format!("{t},{hw_tail}"),
+            (None, _) => hw_tail.to_string(),
+        }
+    };
     match opts.encoder.as_str() {
         "vaapi" => {
-            cmd.args(["-vf", "format=nv12,hwupload", "-c:v", "h264_vaapi"]);
+            cmd.args(["-vf", &vf("format=nv12,hwupload"), "-c:v", "h264_vaapi"]);
             cmd.args(["-qp", &crf]);
         }
         "nvenc" => {
+            let f = vf("");
+            if !f.is_empty() {
+                cmd.args(["-vf", &f]);
+            }
             cmd.args(["-c:v", "h264_nvenc", "-pix_fmt", "yuv420p"]);
             cmd.args(["-preset", "p5", "-rc", "vbr", "-cq", &crf, "-b:v", "0"]);
         }
         "qsv" => {
+            let f = vf("");
+            if !f.is_empty() {
+                cmd.args(["-vf", &f]);
+            }
             cmd.args(["-c:v", "h264_qsv", "-pix_fmt", "nv12"]);
             cmd.args(["-global_quality", &crf]);
         }
         _ => {
+            let f = vf("");
+            if !f.is_empty() {
+                cmd.args(["-vf", &f]);
+            }
             cmd.args(["-c:v", "libx264", "-pix_fmt", "yuv420p"]);
             cmd.args(["-crf", &crf, "-preset", &opts.preset]);
         }
