@@ -3,6 +3,7 @@
 //! Read-only: consumes parsed replays/maps and produces pixels. It never
 //! writes replay data.
 
+pub mod audio;
 pub mod builtin;
 pub mod config;
 pub mod exe_assets;

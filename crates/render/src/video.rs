@@ -34,6 +34,18 @@ pub struct VideoOptions {
     /// Seconds of results screen appended after the clip (0 disables). Only
     /// shown when the clip reaches the end of the run (or its fail).
     pub results_secs: f64,
+    /// Music (song) volume, 0..=1.
+    pub music_volume: f32,
+    /// Hit/miss sounds mixed onto the song at the registered hit times.
+    pub hitsounds: Option<HitsoundOptions>,
+}
+
+/// The game's hit/miss sounds (extracted from the user's install or a
+/// custom skin) plus their volume, 0..=1.
+pub struct HitsoundOptions {
+    pub hit_wav: Vec<u8>,
+    pub miss_wav: Option<Vec<u8>>,
+    pub volume: f32,
 }
 
 impl Default for VideoOptions {
@@ -48,6 +60,8 @@ impl Default for VideoOptions {
             preset: "veryfast".into(),
             encoder: "x264".into(),
             results_secs: 4.0,
+            music_volume: 1.0,
+            hitsounds: None,
         }
     }
 }
@@ -112,6 +126,34 @@ pub fn render_video(
         cmd.args(["-ss", &format!("{:.3}", opts.start_ms / 1000.0)]);
         cmd.arg("-i").arg(audio);
     }
+    // Hit/miss sounds: mixed into their own PCM track at the registered
+    // hit times, fed to ffmpeg as a third input.
+    let mut _hits_tmp: Option<tempfile::NamedTempFile> = None;
+    if let (Some(hs), true) = (&opts.hitsounds, opts.audio.is_some()) {
+        let track = crate::audio::Clip::from_wav(&hs.hit_wav).and_then(|hit| {
+            let miss = hs.miss_wav.as_deref().and_then(crate::audio::Clip::from_wav);
+            let note_times: Vec<f64> = map.notes.iter().map(|n| n.time_ms as f64).collect();
+            crate::audio::build_hitsound_wav(
+                &hit,
+                miss.as_ref(),
+                hud_state.results(),
+                &note_times,
+                opts.start_ms,
+                end_ms,
+                hs.volume.clamp(0.0, 1.0),
+            )
+        });
+        if let Some(wav) = track {
+            let mut tmp = tempfile::Builder::new()
+                .prefix("rhythr-hits-")
+                .suffix(".wav")
+                .tempfile()?;
+            std::io::Write::write_all(&mut tmp, &wav)?;
+            cmd.arg("-i").arg(tmp.path());
+            _hits_tmp = Some(tmp);
+        }
+    }
+
     // Video encode: a hardware encoder when selected, software x264
     // otherwise. Quality knobs are mapped from the x264 CRF.
     let crf = opts.crf.to_string();
@@ -135,10 +177,28 @@ pub fn render_video(
     }
     // Audio encode: the music stops where the clip ends (a fail cuts it off);
     // silence pads the appended results screen, and the output is capped at
-    // the exact video duration instead of -shortest.
+    // the exact video duration instead of -shortest. With hit sounds a
+    // filter graph mixes the effects track on top of the (volume-scaled)
+    // song; amix must not renormalise or the song would dip per overlap.
     if opts.audio.is_some() {
         let play_secs = span_ms / 1000.0;
-        cmd.args(["-af", &format!("atrim=duration={play_secs:.3},apad")]);
+        let mv = opts.music_volume.clamp(0.0, 1.5);
+        if _hits_tmp.is_some() {
+            cmd.args([
+                "-filter_complex",
+                &format!(
+                    "[1:a]volume={mv:.3},atrim=duration={play_secs:.3},apad[song];                     [song][2:a]amix=inputs=2:duration=first:normalize=0[aout]"
+                ),
+                "-map",
+                "0:v",
+                "-map",
+                "[aout]",
+            ]);
+        } else if (mv - 1.0).abs() > 0.001 {
+            cmd.args(["-af", &format!("volume={mv:.3},atrim=duration={play_secs:.3},apad")]);
+        } else {
+            cmd.args(["-af", &format!("atrim=duration={play_secs:.3},apad")]);
+        }
         cmd.args(["-c:a", "aac", "-b:a", "192k"]);
     }
     let video_dur = total_frames as f64 / opts.fps as f64;
@@ -210,7 +270,7 @@ pub fn render_video(
     }
     if results_frames > 0 {
         // The results screen is static: render once, repeat.
-        let pixels = renderer.render_results(replay, map, &hud_state)?;
+        let pixels = renderer.render_results(replay, map, &hud_state, config)?;
         for i in 0..results_frames {
             write_frame(&pixels, play_frames + i, &mut guard.child)?;
             if !progress(play_frames + i + 1, total_frames) {
