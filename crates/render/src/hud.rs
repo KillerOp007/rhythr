@@ -793,7 +793,8 @@ pub fn build_hud(
         speed_label(&mut b, field.cx, sy, refd, replay.speed, value_col);
     }
 
-    // Title header + clock, sitting just above the playfield (as the game).
+    // Title header, sitting just above the playfield (as the game).
+    let ty = field.cy - field.half - refd * 0.053;
     if hud.song_info {
         let title = if replay.player_name.is_empty() {
             map.meta.song_name.clone()
@@ -803,7 +804,6 @@ pub fn build_hud(
                 replay.player_name, map.meta.song_name
             )
         };
-        let ty = field.cy - field.half - refd * 0.053;
         b.text(
             &title,
             field.cx,
@@ -812,6 +812,10 @@ pub fn build_hud(
             Align::Center,
             value_col,
         );
+    }
+    // The elapsed/total clock belongs to the song progress bar, not the
+    // title — hiding the title must keep the clock (user report 16.07.).
+    if hud.song_progress_bar {
         let dur = replay.length_ms().max(map.meta.duration_ms as f64);
         let time = format!("{} / {}", clock(song_time_ms), clock(dur));
         b.text(
