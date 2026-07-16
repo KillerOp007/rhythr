@@ -59,6 +59,10 @@ endorsed by Rhythia or Capo Games.
   pick the `.sspm` file yourself.
 - **Built-in skin looks slightly off** — run **Detect game** (step 2).
   Re-run it after game updates.
+- **Linux: blank window or crash on startup (Wayland)** — the app
+  disables WebKitGTK's DMA-BUF renderer by itself; if you still hit
+  issues, try `WEBKIT_DISABLE_COMPOSITING_MODE=1` and, as a last
+  resort, `GDK_BACKEND=x11` to run through XWayland.
 
 ## Fair play
 

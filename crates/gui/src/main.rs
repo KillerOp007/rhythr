@@ -1297,6 +1297,15 @@ async fn probe_encoders(state: tauri::State<'_, App>) -> Result<EncoderProbe, St
 // -------------------------------------------------------------------- main
 
 fn main() {
+    // WebKitGTK's DMA-BUF renderer is broken on many Linux/Wayland driver
+    // combinations (blank window or a Wayland protocol-error crash,
+    // especially on NVIDIA). Default it off unless the user overrides —
+    // the UI is light, the webview performance cost is negligible.
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    }
+
     let shared: App = Arc::new(Shared {
         inner: Mutex::new(Inner {
             settings: Settings::load(),
