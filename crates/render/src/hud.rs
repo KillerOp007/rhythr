@@ -848,30 +848,34 @@ mod tests {
     }
 
     #[test]
-    fn ring_shrinks_after_a_miss_until_a_hit_freezes_it() {
-        // Footage: a 35x heptagon read as a hexagon right after one miss and
-        // a pentagon after the second; "1x" kept counting in the pentagon
-        // because the player kept hitting (the hit freezes the shrink).
+    fn ring_drops_one_side_per_miss_and_holds_otherwise() {
+        // Footage + user 16.07.2026: heptagon → miss → hexagon → miss →
+        // pentagon; the shape only ever moves down on a miss (no time
+        // decay) and only the streak formula grows it back.
         let (mut r, t) = ring_after_hits(35);
         assert_eq!(r.sides_at(t), 7);
         let fill = r.on_miss(t + 10.0);
         assert!((fill - 3.0 / 8.0).abs() < 1e-6); // 35 % 8 = 3
-        assert_eq!(r.sides_at(t + 20.0), 6); // one side drops immediately
+        assert_eq!(r.sides_at(t + 20.0), 6);
         r.on_miss(t + 400.0);
         assert_eq!(r.sides_at(t + 410.0), 5);
-        r.on_hit(t + 700.0); // freezes the pentagon
-        assert_eq!(r.sides_at(t + 710.0), 5);
-        assert_eq!(r.sides_at(t + 5000.0), 5); // frozen, no further decay
-                                               // Growth follows the pure combo formula: the pentagon floor holds
-                                               // until the streak catches up; the octagon needs a true 40+ streak
-                                               // (user-reported: it must NOT refill at ~30 combo after a miss).
-        let mut now = t + 700.0;
-        for _ in 0..7 {
-            now += 100.0;
-            r.on_hit(now); // streak 8
-        }
-        assert_eq!((r.sides_at(now), r.progress()), (5, 0.0));
-        for _ in 0..16 {
+        // Idle time changes nothing.
+        assert_eq!(r.sides_at(t + 60_000.0), 5);
+        // A couple of hits (not enough to refill) then another miss: one
+        // more side gone.
+        r.on_hit(t + 700.0);
+        r.on_hit(t + 800.0);
+        assert_eq!(r.sides_at(t + 810.0), 5);
+        r.on_miss(t + 900.0);
+        assert_eq!(r.sides_at(t + 910.0), 4);
+        r.on_miss(t + 1000.0);
+        assert_eq!(r.sides_at(t + 1010.0), 3);
+        r.on_miss(t + 1100.0); // never below the triangle
+        assert_eq!(r.sides_at(t + 1110.0), 3);
+        // Growth follows the pure combo formula past the floor; the octagon
+        // needs a true 40+ streak (must NOT refill at ~30 after a miss).
+        let mut now = t + 1200.0;
+        for _ in 0..24 {
             now += 100.0;
             r.on_hit(now); // streak 24
         }
@@ -881,22 +885,6 @@ mod tests {
             r.on_hit(now); // streak 40
         }
         assert_eq!((r.sides_at(now), r.progress()), (8, 1.0));
-    }
-
-    #[test]
-    fn ring_decays_to_the_empty_triangle_when_idle_after_a_miss() {
-        // User: losing an 80 combo and not hitting anything brings the ring
-        // back to the empty triangle.
-        let (mut r, t) = ring_after_hits(80);
-        assert_eq!(r.sides_at(t), 8);
-        r.on_miss(t);
-        assert_eq!(r.sides_at(t + 10.0), 7);
-        assert_eq!(r.sides_at(t + 5.0 * RING_SHRINK_STEP_MS + 10.0), 3);
-        assert!((r.progress() - 0.0).abs() < 1e-6);
-        // The shape never shrinks below the triangle.
-        let mut tri = RingState::new();
-        tri.on_miss(0.0);
-        assert_eq!(tri.sides_at(60_000.0), 3);
     }
 
     #[test]
@@ -971,37 +959,21 @@ const MISS_X_MS: f64 = 500.0;
 /// The octagon (reached at 40 streak on a clean run) renders full.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RingState {
-    /// Post-miss floor the shape shrinks from (3..=8).
+    /// Post-miss floor the shape sits on (3..=8). Each miss lowers it by
+    /// one side; only the streak formula raises the shape above it again
+    /// (user-verified 16.07.2026: no time-based shrinking — the footage's
+    /// heptagon → two misses → pentagon is exactly −1 per miss).
     floor: u32,
-    /// Song time the shrink is anchored to; `None` when frozen (a hit after
-    /// the miss stops further shrinking).
-    shrink_since: Option<f64>,
     /// Current hit streak (== displayed combo).
     streak: u32,
 }
 
-/// After a miss the shape steps down one side immediately, then one more
-/// per this interval until it reaches the pure-formula size (triangle at
-/// combo 0) — unless a hit freezes it first. Reconciles the footage (a 35x
-/// heptagon read as a pentagon while the player kept hitting) with the
-/// user's report that an idle combo loss ends back at the empty triangle.
-const RING_SHRINK_STEP_MS: f64 = 1000.0;
-
 impl RingState {
     fn new() -> RingState {
-        RingState {
-            floor: 3,
-            shrink_since: None,
-            streak: 0,
-        }
+        RingState { floor: 3, streak: 0 }
     }
 
-    fn on_hit(&mut self, now_ms: f64) {
-        if self.shrink_since.is_some() {
-            // A hit freezes the post-miss shrink at its current size.
-            self.floor = self.sides_at(now_ms);
-            self.shrink_since = None;
-        }
+    fn on_hit(&mut self, _now_ms: f64) {
         self.streak += 1;
     }
 
@@ -1009,9 +981,8 @@ impl RingState {
     /// can start from it.
     fn on_miss(&mut self, now_ms: f64) -> f32 {
         let fill = self.progress();
-        // One side drops immediately; the rest shrink over time.
+        // The shape drops exactly one side per miss, down to the triangle.
         self.floor = self.sides_at(now_ms).saturating_sub(1).max(3);
-        self.shrink_since = Some(now_ms);
         self.streak = 0;
         fill
     }
@@ -1020,15 +991,8 @@ impl RingState {
     /// combo formula ("same combo, same progress, up to 40"); the post-miss
     /// floor only holds the shape up — and decays a side per
     /// [`RING_SHRINK_STEP_MS`] while no hit has frozen it.
-    fn sides_at(&self, now_ms: f64) -> u32 {
-        let floor = match self.shrink_since {
-            Some(t0) => {
-                let steps = ((now_ms - t0).max(0.0) / RING_SHRINK_STEP_MS) as u32;
-                self.floor.saturating_sub(steps).max(3)
-            }
-            None => self.floor,
-        };
-        (3 + self.streak / RING_TIER).max(floor).min(8)
+    fn sides_at(&self, _now_ms: f64) -> u32 {
+        (3 + self.streak / RING_TIER).max(self.floor).min(8)
     }
 
     /// Target fill fraction of the outline. Only a true 40+ streak renders
