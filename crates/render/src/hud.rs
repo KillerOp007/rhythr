@@ -1503,8 +1503,9 @@ fn draw_error_meters(
         let (cx, cy) = (em.x * w, em.y * h);
         let halfw = h * 0.16 * em.scale;
         let (x0, bar_w) = (cx - halfw, halfw * 2.0);
-        let bar_h = (h * 0.005 * em.scale).max(2.0);
+        let bar_h = (h * 0.0028 * em.scale).max(1.5);
         let tick_h = (h * 0.016 * em.scale).max(6.0);
+        let tick_w = (h * 0.0055 * em.scale).max(4.0);
         b.rect(
             x0,
             cy - bar_h * 0.5,
@@ -1526,8 +1527,9 @@ fn draw_error_meters(
             let frac = (d.err_ms / rhythia_sim::hitreg::DEFAULT_WINDOW_MS) as f32;
             let x = x0 + frac.clamp(0.0, 1.0) * bar_w;
             let col = meter_color(frac, env * em.alpha);
-            let th = tick_h * (0.55 + 0.45 * (age / METER_POP_MS).clamp(0.0, 1.0) as f32);
-            b.rect(x - 1.0, cy - th * 0.5, 2.0, th, col);
+            // Short and chunky: easier to read than the taller hairlines.
+            let th = tick_h * 0.5 * (0.55 + 0.45 * (age / METER_POP_MS).clamp(0.0, 1.0) as f32);
+            b.rect(x - tick_w * 0.5, cy - th * 0.5, tick_w, th, col);
         }
         // Rolling average marker (last 20 hits), gliding to each new value
         // instead of snapping when a hit lands.
@@ -1558,15 +1560,17 @@ fn draw_error_meters(
     if am.enabled {
         let (cx, cy) = (am.x * w, am.y * h);
         let half = h * 0.065 * am.scale;
-        let line = srgb8_to_linear([225, 228, 235], 0.14 * am.alpha);
-        let t_px = 1.5f32;
+        // Bright enough to actually see at full opacity.
+        let line = srgb8_to_linear([225, 228, 235], 0.28 * am.alpha);
+        let t_px = (h * 0.0028 * am.scale).max(2.5);
         // Square frame (the note's shape) + crosshair.
         b.rect(cx - half, cy - half, half * 2.0, t_px, line);
         b.rect(cx - half, cy + half - t_px, half * 2.0, t_px, line);
         b.rect(cx - half, cy - half, t_px, half * 2.0, line);
         b.rect(cx + half - t_px, cy - half, t_px, half * 2.0, line);
-        b.rect(cx - half, cy - 0.5, half * 2.0, 1.0, line);
-        b.rect(cx - 0.5, cy - half, 1.0, half * 2.0, line);
+        let cross = (t_px * 0.7).max(1.5);
+        b.rect(cx - half, cy - cross * 0.5, half * 2.0, cross, line);
+        b.rect(cx - cross * 0.5, cy - half, cross, half * 2.0, line);
         // A hit dead-centre lands on the crosshair; the frame edge is the
         // note's edge (±0.5 cells) plus a little margin.
         const RANGE: f32 = 0.6;
