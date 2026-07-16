@@ -199,6 +199,10 @@ function renderOutputTab() {
   $("crf-val").textContent = String(s.crf);
   $("set-encoder").value = s.encoder;
   $("set-results").value = String(Math.round(s.results_secs));
+  $("set-musicvol").value = String(s.music_volume);
+  $("musicvol-val").textContent = `${s.music_volume}%`;
+  $("set-hitvol").value = String(s.hitsound_volume);
+  $("hitvol-val").textContent = `${s.hitsound_volume}%`;
   $("set-outdir").value = s.output_dir || "";
   $("set-filename").value = s.file_name || "";
   $("set-assets").value = s.game_assets || "";
@@ -569,6 +573,10 @@ function initControls() {
   $("set-crf").addEventListener("change", () => pushOutput({ crf: Number($("set-crf").value) }));
   $("set-encoder").addEventListener("change", () => pushOutput({ encoder: $("set-encoder").value }));
   $("set-results").addEventListener("change", () => pushOutput({ results_secs: Number($("set-results").value) }));
+  $("set-musicvol").addEventListener("input", () => { $("musicvol-val").textContent = `${$("set-musicvol").value}%`; });
+  $("set-musicvol").addEventListener("change", () => pushOutput({ music_volume: Number($("set-musicvol").value) }));
+  $("set-hitvol").addEventListener("input", () => { $("hitvol-val").textContent = `${$("set-hitvol").value}%`; });
+  $("set-hitvol").addEventListener("change", () => pushOutput({ hitsound_volume: Number($("set-hitvol").value) }));
   $("set-filename").addEventListener("change", () => pushOutput({ file_name: $("set-filename").value }));
   $("set-ffmpeg").addEventListener("change", () => pushOutput({ ffmpeg: $("set-ffmpeg").value }));
   $("btn-outdir").addEventListener("click", async () => {

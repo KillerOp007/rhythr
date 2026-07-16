@@ -9,10 +9,10 @@ use std::path::Path;
 /// and blank lines everywhere.
 fn strip_comments(name: &str, text: &str) -> String {
     let mut out = text.to_string();
-    let strip_blocks = |out: &mut String, open: &str, close: &str| loop {
-        let Some(a) = out.find(open) else { break };
-        let Some(rel) = out[a..].find(close) else { break };
-        out.replace_range(a..a + rel + close.len(), "");
+    let strip_blocks = |out: &mut String, open: &str, close: &str| {
+        while let (Some(a), Some(rel)) = (out.find(open), out.find(open).and_then(|a| out[a..].find(close))) {
+            out.replace_range(a..a + rel + close.len(), "");
+        }
     };
     if name.ends_with(".css") {
         strip_blocks(&mut out, "/*", "*/");

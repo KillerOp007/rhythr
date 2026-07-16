@@ -137,6 +137,15 @@
           <span class="sub" id="encoder-note" hidden></span>
         </label>
         <label class="field">
+          <span>Music volume <em id="musicvol-val" class="mono">100%</em></span>
+          <input type="range" id="set-musicvol" min="0" max="150" step="5" value="100" />
+        </label>
+        <label class="field">
+          <span>Hit sounds <em id="hitvol-val" class="mono">50%</em></span>
+          <input type="range" id="set-hitvol" min="0" max="150" step="5" value="50" />
+          <span class="sub">The game's hit/miss sounds at the exact hit times. Needs game assets (Advanced). 0% = off.</span>
+        </label>
+        <label class="field">
           <span>Results screen</span>
           <select id="set-results">
             <option value="0">Off</option>
