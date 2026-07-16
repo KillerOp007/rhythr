@@ -41,6 +41,15 @@ pub struct VideoOptions {
     pub music_volume: f32,
     /// Hit/miss sounds mixed onto the song at the registered hit times.
     pub hitsounds: Option<HitsoundOptions>,
+    /// A second replay of the same map, rendered as a ghost overlay.
+    pub ghost: Option<GhostOptions>,
+}
+
+/// Ghost-race settings: the second replay and its overlay colour (sRGB
+/// 0..1).
+pub struct GhostOptions {
+    pub replay: Replay,
+    pub color: [f32; 3],
 }
 
 /// The game's hit/miss sounds (extracted from the user's install or a
@@ -66,6 +75,7 @@ impl Default for VideoOptions {
             motion_blur: 0,
             music_volume: 1.0,
             hitsounds: None,
+            ghost: None,
         }
     }
 }
@@ -90,6 +100,11 @@ pub fn render_video(
     let skin = renderer.prepare_skin(config);
     // Resolve every note's hit/miss once; the HUD reads running stats from it.
     let hud_state = crate::hud::HudState::new(map, replay);
+    let ghost_input = opts.ghost.as_ref().map(|g| crate::hud::GhostInput {
+        state: crate::hud::HudState::new(map, &g.replay),
+        replay: g.replay.clone(),
+        color: g.color,
+    });
     // Replay frame times are already song time — speed mods are baked in
     // when the .rhr is recorded (the hit registration matching note times
     // proves it), so the video runs 1:1 with song time and the audio plays
@@ -272,7 +287,7 @@ pub fn render_video(
     let slot = |i: u64| (i % crate::renderer::READBACK_SLOTS as u64) as usize;
     for i in 0..play_frames {
         let song_ms = opts.start_ms + i as f64 * song_dt_ms;
-        renderer.submit_frame(
+        renderer.submit_frame_with_ghost(
             params,
             config,
             &skin,
@@ -280,6 +295,7 @@ pub fn render_video(
             map,
             song_ms,
             Some(&hud_state),
+            ghost_input.as_ref(),
             slot(i),
         )?;
         // Read a frame that has DEPTH newer frames in flight behind it —

@@ -33,6 +33,8 @@ const USER_AGENT: &str = concat!(
 const API_BEATMAP_PAGE: &str = "https://production.rhythia.com/api/getBeatmapPage";
 /// Refuse to download maps larger than this (malformed/hostile responses).
 const MAX_MAP_BYTES: u64 = 512 * 1024 * 1024;
+/// Ghost overlay colour (sRGB 0..1) — a warm orange, clearly distinct.
+const GHOST_COLOR: [f32; 3] = [1.0, 0.55, 0.24];
 const PREVIEW_W: u32 = 1280;
 const PREVIEW_H: u32 = 720;
 
@@ -140,6 +142,7 @@ struct PreviewCtx {
     renderer: rhythia_render::Renderer,
     skin: rhythia_render::renderer::SkinTextures,
     hud: rhythia_render::hud::HudState,
+    ghost: Option<rhythia_render::hud::GhostInput>,
     cfg: SkinConfig,
     params: SceneParams,
 }
@@ -152,6 +155,8 @@ struct Inner {
     /// True when the cached map's hash does not match the replay header.
     map_hash_mismatch: bool,
     config_path: Option<PathBuf>,
+    /// Optional second replay rendered as a ghost overlay.
+    ghost: Option<(PathBuf, Replay)>,
     base_config: SkinConfig,
     settings: Settings,
     preview: Option<PreviewCtx>,
@@ -230,8 +235,16 @@ struct ConfigDto {
 }
 
 #[derive(Serialize, Clone)]
+struct GhostDto {
+    file_name: String,
+    player: String,
+    same_map: bool,
+}
+
+#[derive(Serialize, Clone)]
 struct StatusDto {
     replay: Option<ReplayDto>,
+    ghost: Option<GhostDto>,
     map: Option<MapDto>,
     config: ConfigDto,
     settings: Settings,
@@ -531,10 +544,24 @@ fn assemble_status(inner: &Inner, rendering: bool) -> StatusDto {
         source: inner.map_source.clone(),
         hash_mismatch: inner.map_hash_mismatch,
     });
+    let ghost = inner.ghost.as_ref().map(|(path, g)| GhostDto {
+        file_name: path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned(),
+        player: g.player_name.clone(),
+        same_map: inner
+            .replay
+            .as_ref()
+            .map(|(_, r)| g.map_id == r.map_id)
+            .unwrap_or(false),
+    });
     let base_hud = hud_flags(&inner.base_config);
     let effective_hud = hud_flags(&effective_config(inner));
     StatusDto {
         replay,
+        ghost,
         map,
         config: ConfigDto {
             path: inner
@@ -924,6 +951,30 @@ fn set_hud_override(
     Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
 }
 
+#[tauri::command]
+fn load_ghost(state: tauri::State<'_, App>, path: String) -> Result<StatusDto, String> {
+    let app = state.inner();
+    let ghost = Replay::from_path(&path).map_err(err_str)?;
+    let mut inner = app.lock();
+    if let Some((_, r)) = &inner.replay {
+        if ghost.map_id != r.map_id && !ghost.beatmap_hash.is_empty() && ghost.beatmap_hash != r.beatmap_hash {
+            return Err("that replay was played on a different map".into());
+        }
+    }
+    inner.ghost = Some((PathBuf::from(path), ghost));
+    invalidate_preview(&mut inner);
+    Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
+}
+
+#[tauri::command]
+fn clear_ghost(state: tauri::State<'_, App>) -> Result<StatusDto, String> {
+    let app = state.inner();
+    let mut inner = app.lock();
+    inner.ghost = None;
+    invalidate_preview(&mut inner);
+    Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
+}
+
 #[derive(Deserialize, Default)]
 #[serde(default)]
 struct MeterPatch {
@@ -1120,10 +1171,16 @@ async fn preview(state: tauri::State<'_, App>, time_ms: f64) -> Result<String, S
             let (_, r) = inner.replay.as_ref().unwrap();
             let (_, m) = inner.map.as_ref().unwrap();
             let hud = rhythia_render::hud::HudState::new(m, r);
+            let ghost = inner.ghost.as_ref().map(|(_, g)| rhythia_render::hud::GhostInput {
+                state: rhythia_render::hud::HudState::new(m, g),
+                replay: g.clone(),
+                color: GHOST_COLOR,
+            });
             inner.preview = Some(PreviewCtx {
                 renderer,
                 skin,
                 hud,
+                ghost,
                 cfg,
                 params,
             });
@@ -1134,7 +1191,7 @@ async fn preview(state: tauri::State<'_, App>, time_ms: f64) -> Result<String, S
         let (_, m) = inner.map.as_ref().unwrap();
         let pixels = ctx
             .renderer
-            .render_still(
+            .render_still_with_ghost(
                 &ctx.params,
                 &ctx.cfg,
                 &ctx.skin,
@@ -1142,6 +1199,7 @@ async fn preview(state: tauri::State<'_, App>, time_ms: f64) -> Result<String, S
                 m,
                 time_ms,
                 Some(&ctx.hud),
+                ctx.ghost.as_ref(),
             )
             .map_err(err_str)?;
         png_data_url(&pixels, PREVIEW_W, PREVIEW_H)
@@ -1235,6 +1293,12 @@ fn start_render(
             motion_blur: s.motion_blur,
             music_volume: s.music_volume.min(150) as f32 / 100.0,
             hitsounds: load_hitsounds(s),
+            ghost: inner.ghost.as_ref().map(|(_, g)| {
+                rhythia_render::video::GhostOptions {
+                    replay: g.clone(),
+                    color: GHOST_COLOR,
+                }
+            }),
             ffmpeg: resolve_ffmpeg(s),
             out: out.clone(),
         };
@@ -1295,6 +1359,7 @@ struct RenderJob {
     motion_blur: u32,
     music_volume: f32,
     hitsounds: Option<rhythia_render::video::HitsoundOptions>,
+    ghost: Option<rhythia_render::video::GhostOptions>,
     ffmpeg: String,
     out: PathBuf,
 }
@@ -1353,6 +1418,7 @@ fn run_render_job(
         motion_blur: job.motion_blur,
         music_volume: job.music_volume,
         hitsounds: job.hitsounds,
+        ghost: job.ghost,
     };
 
     let started = std::time::Instant::now();
@@ -1522,6 +1588,8 @@ fn main() {
             detect_game,
             set_hud_override,
             set_meter,
+            load_ghost,
+            clear_ghost,
             reset_hud_overrides,
             set_output,
             suggest_file_name,

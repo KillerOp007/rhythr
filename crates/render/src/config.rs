@@ -584,11 +584,11 @@ impl SkinConfig {
             .map(|layers| {
                 layers
                     .iter()
-                    .filter_map(|l| {
+                    .map(|l| {
                         let f =
                             |k: &str, d: f64| l.get(k).and_then(|x| x.as_f64()).unwrap_or(d) as f32;
                         let i = |k: &str| l.get(k).and_then(|x| x.as_i64()).unwrap_or(0);
-                        Some(BackgroundLayer {
+                        BackgroundLayer {
                             bytes: Vec::new(),
                             fit: i("Fit"),
                             placement: i("Placement"),
@@ -610,7 +610,7 @@ impl SkinConfig {
                                 f("TintBlue", 255.0) / 255.0,
                                 f("TintOpacity", 1.0),
                             ],
-                        })
+                        }
                     })
                     .collect()
             })

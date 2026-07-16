@@ -96,6 +96,10 @@ enum Command {
         height: u32,
         #[arg(long, default_value_t = 18)]
         crf: u32,
+        /// Second replay of the same map, rendered as a ghost overlay
+        /// (cursor + trail in orange, with a versus panel).
+        #[arg(long)]
+        ghost_replay: Option<PathBuf>,
         /// Motion blur strength: 0 = off, 1 = light, 2 = strong (tmix).
         #[arg(long, default_value_t = 0)]
         motion_blur: u32,
@@ -246,6 +250,7 @@ fn run() -> anyhow::Result<bool> {
             width,
             height,
             crf,
+            ghost_replay,
             motion_blur,
             music_volume,
             hitsound_volume,
@@ -353,6 +358,20 @@ fn run() -> anyhow::Result<bool> {
             if hitsound_volume > 0 && hitsounds.is_none() {
                 eprintln!("note: hit sounds requested but not found (need --game-assets with extracted sounds)");
             }
+            let ghost = match &ghost_replay {
+                Some(p) => {
+                    let g = Replay::from_path(p)
+                        .with_context(|| format!("reading ghost replay {}", p.display()))?;
+                    if g.map_id != r.map_id && !g.beatmap_hash.is_empty() && g.beatmap_hash != r.beatmap_hash {
+                        anyhow::bail!("ghost replay was played on a different map");
+                    }
+                    Some(rhythia_render::video::GhostOptions {
+                        replay: g,
+                        color: [1.0, 0.55, 0.24],
+                    })
+                }
+                None => None,
+            };
             let opts = rhythia_render::video::VideoOptions {
                 fps,
                 start_ms,
@@ -366,6 +385,7 @@ fn run() -> anyhow::Result<bool> {
                 motion_blur,
                 music_volume: music_volume.min(150) as f32 / 100.0,
                 hitsounds,
+                ghost,
             };
 
             println!(

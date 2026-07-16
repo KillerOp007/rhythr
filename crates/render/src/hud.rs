@@ -338,6 +338,14 @@ fn note_multiplier(combo: u32) -> f64 {
 }
 
 /// Per-replay hit resolution, computed once and reused for every frame.
+/// A second replay rendered as a ghost for comparison: the parsed replay,
+/// its resolved hit state, and the overlay colour (sRGB 0..1).
+pub struct GhostInput {
+    pub replay: Replay,
+    pub state: HudState,
+    pub color: [f32; 3],
+}
+
 pub struct HudState {
     outcome: MatchOutcome,
     /// Per-hit detail for the optional error meters, sorted by hit time.
@@ -570,6 +578,7 @@ pub fn build_hud(
     cfg: &crate::config::SkinConfig,
     state: &HudState,
     stats: &HudStats,
+    ghost: Option<(&GhostInput, &HudStats)>,
     replay: &Replay,
     map: &Map,
     song_time_ms: f64,
@@ -850,6 +859,32 @@ pub fn build_hud(
                 HudVertex::new([0.0, _h], [u0, 1.0], color, mode),
             ];
             v.extend_from_slice(&quad);
+        }
+    }
+
+    // --- Ghost race versus panel ------------------------------------------
+    if let Some((g, gstats)) = ghost {
+        let x = w * 0.015;
+        let mut y = _h * 0.075;
+        let name_px = refd * 0.017;
+        let stat_px = refd * 0.0145;
+        let ghost_col = srgb8_to_linear(
+            [
+                (g.color[0] * 255.0) as u8,
+                (g.color[1] * 255.0) as u8,
+                (g.color[2] * 255.0) as u8,
+            ],
+            1.0,
+        );
+        let rows = [
+            (replay.player_name.as_str(), stats, value_col),
+            (g.replay.player_name.as_str(), gstats, ghost_col),
+        ];
+        for (name, st, col) in rows {
+            b.text(name, x, y, name_px, Align::Left, col);
+            let line = format!("{}  {:.2}%", thousands(st.score), st.accuracy_pct);
+            b.text(&line, x, y + refd * 0.02, stat_px, Align::Left, label_col);
+            y += refd * 0.052;
         }
     }
 

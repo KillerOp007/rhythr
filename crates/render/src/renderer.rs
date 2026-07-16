@@ -716,6 +716,7 @@ impl Renderer {
     /// (row-major, width*height*4 bytes). The player's `config` drives the
     /// note shape, border style, cursor, trail and colours.
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     pub fn render_still(
         &self,
         params: &SceneParams,
@@ -726,7 +727,22 @@ impl Renderer {
         song_time_ms: f64,
         hud_state: Option<&crate::hud::HudState>,
     ) -> Result<Vec<u8>, Error> {
-        self.submit_frame(
+        self.render_still_with_ghost(params, config, skin, replay, map, song_time_ms, hud_state, None)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_still_with_ghost(
+        &self,
+        params: &SceneParams,
+        config: &SkinConfig,
+        skin: &SkinTextures,
+        replay: &Replay,
+        map: &Map,
+        song_time_ms: f64,
+        hud_state: Option<&crate::hud::HudState>,
+        ghost: Option<&crate::hud::GhostInput>,
+    ) -> Result<Vec<u8>, Error> {
+        self.submit_frame_with_ghost(
             params,
             config,
             skin,
@@ -734,6 +750,7 @@ impl Renderer {
             map,
             song_time_ms,
             hud_state,
+            ghost,
             0,
         )?;
         self.with_slot_pixels(0, |px| px.to_vec())
@@ -744,6 +761,7 @@ impl Renderer {
     /// frame N and then reading slot N-1 overlaps GPU rendering with the
     /// CPU-side readback/encode of the previous frame.
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     pub fn submit_frame(
         &self,
         params: &SceneParams,
@@ -753,6 +771,35 @@ impl Renderer {
         map: &Map,
         song_time_ms: f64,
         hud_state: Option<&crate::hud::HudState>,
+        slot: usize,
+    ) -> Result<(), Error> {
+        self.submit_frame_with_ghost(
+            params,
+            config,
+            skin,
+            replay,
+            map,
+            song_time_ms,
+            hud_state,
+            None,
+            slot,
+        )
+    }
+
+    /// Like [`Self::submit_frame`], with an optional second replay rendered
+    /// as a "ghost": its cursor and trail in a distinct colour, plus a
+    /// small versus panel comparing live score/accuracy.
+    #[allow(clippy::too_many_arguments)]
+    pub fn submit_frame_with_ghost(
+        &self,
+        params: &SceneParams,
+        config: &SkinConfig,
+        skin: &SkinTextures,
+        replay: &Replay,
+        map: &Map,
+        song_time_ms: f64,
+        hud_state: Option<&crate::hud::HudState>,
+        ghost: Option<&crate::hud::GhostInput>,
         slot: usize,
     ) -> Result<(), Error> {
         let aspect = self.width as f32 / self.height as f32;
@@ -1032,6 +1079,14 @@ impl Renderer {
         // Cursor (+ optional trail) render after everything with the
         // depth-free overlay pipeline, in list order.
         let mut overlay: Vec<Instance> = Vec::new();
+        if let Some(g) = ghost {
+            let mut ghost_cfg = config.clone();
+            ghost_cfg.cursor_color = g.color;
+            ghost_cfg.cursor_trail_color = g.color;
+            ghost_cfg.cursor_trail_gradient.clear();
+            ghost_cfg.cursor_trail_inherit = true;
+            self.push_cursor(&mut overlay, &ghost_cfg, &g.replay, song_time_ms);
+        }
         self.push_cursor(&mut overlay, config, replay, song_time_ms);
 
         items.sort_by(|a, b| a.0.total_cmp(&b.0));
@@ -1120,11 +1175,13 @@ impl Renderer {
                     )
                 })
                 .collect();
+            let ghost_stats = ghost.map(|g| g.state.stats_at(map, &g.replay, song_time_ms));
             crate::hud::build_hud(
                 &self.hud_atlas,
                 config,
                 state,
                 &stats,
+                ghost.zip(ghost_stats.as_ref()),
                 replay,
                 map,
                 song_time_ms,

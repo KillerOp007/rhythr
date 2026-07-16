@@ -109,6 +109,21 @@ function renderConfigCard() {
     <div class="src-meta">${esc(path)}</div>`;
 }
 
+function renderGhostCard() {
+  const g = status?.ghost;
+  $("btn-ghost-clear").hidden = !g;
+  const body = $("ghost-body");
+  if (!g) {
+    body.innerHTML = `<p class="hint">Optional second replay of the same map, shown as an orange ghost cursor with a versus panel</p>`;
+    return;
+  }
+  const warn = g.same_map ? "" : `<span class="chip warn">may be a different map</span>`;
+  body.innerHTML = `
+    <div class="src-title" style="color:#ff8c3d">${esc(g.player)}</div>
+    <div class="src-meta">${esc(g.file_name)}</div>
+    <span class="chip info">ghost active</span> ${warn}`;
+}
+
 function renderRecent() {
   const list = status?.settings?.recent_replays || [];
   $("card-recent").hidden = list.length === 0;
@@ -544,6 +559,7 @@ async function applyStatus(st) {
   const mapChanged = status?.map?.path !== st.map?.path;
   status = st;
   renderReplayCard();
+  renderGhostCard();
   renderMapCard();
   renderConfigCard();
   renderRecent();
@@ -661,6 +677,16 @@ function initControls() {
     if (p) await loadPath(p);
   });
   $("btn-config-clear").addEventListener("click", () => call(() => invoke("clear_config")).then(schedulePreview));
+  $("btn-ghost").addEventListener("click", async () => {
+    const p = await dialog.open({ filters: [{ name: "Rhythia replay", extensions: ["rhr"] }] });
+    if (!p) return;
+    try {
+      await call(() => invoke("load_ghost", { path: p }));
+      loadNote("Ghost replay loaded.");
+      schedulePreview();
+    } catch (e) { loadNote(String(e)); }
+  });
+  $("btn-ghost-clear").addEventListener("click", () => call(() => invoke("clear_ghost")).then(schedulePreview));
 
   $("recent-list").addEventListener("click", (e) => {
     const li = e.target.closest("li[data-path]");
