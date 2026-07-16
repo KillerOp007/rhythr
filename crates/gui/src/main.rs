@@ -57,6 +57,10 @@ struct Settings {
     encoder: String,
     preset: String,
     results_secs: f64,
+    /// Song volume in percent (0-150).
+    music_volume: u32,
+    /// Hit/miss-sound volume in percent (0 = off).
+    hitsound_volume: u32,
     /// HUD element key -> forced on/off. Absent key = follow the config.
     hud_overrides: BTreeMap<String, bool>,
     recent_replays: Vec<String>,
@@ -78,6 +82,8 @@ impl Default for Settings {
             encoder: "auto".into(),
             preset: "veryfast".into(),
             results_secs: 4.0,
+            music_volume: 100,
+            hitsound_volume: 50,
             hud_overrides: BTreeMap::new(),
             recent_replays: Vec::new(),
         }
@@ -384,6 +390,22 @@ fn suggested_name(inner: &Inner) -> String {
         .filter(|s| !s.is_empty())
         .unwrap_or("render");
     sanitize_filename(&format!("{player} - {song}.mp4"))
+}
+
+/// The game's hit/miss sounds from the extracted assets, when present and
+/// the volume is above zero.
+fn load_hitsounds(s: &Settings) -> Option<rhythia_render::video::HitsoundOptions> {
+    if s.hitsound_volume == 0 {
+        return None;
+    }
+    let dir = PathBuf::from(s.game_assets.as_ref()?)
+        .join("builtin_assets")
+        .join("sounds");
+    Some(rhythia_render::video::HitsoundOptions {
+        hit_wav: std::fs::read(dir.join("hit.wav")).ok()?,
+        miss_wav: std::fs::read(dir.join("miss.wav")).ok(),
+        volume: s.hitsound_volume.min(150) as f32 / 100.0,
+    })
 }
 
 /// ffmpeg to run: explicit setting, else a bundled sibling of the exe
@@ -872,6 +894,8 @@ struct OutputUpdate {
     encoder: Option<String>,
     preset: Option<String>,
     results_secs: Option<f64>,
+    music_volume: Option<u32>,
+    hitsound_volume: Option<u32>,
     output_dir: Option<String>,
     file_name: Option<String>,
     ffmpeg: Option<String>,
@@ -902,6 +926,12 @@ fn set_output(state: tauri::State<'_, App>, update: OutputUpdate) -> Result<Stat
     }
     if let Some(v) = update.results_secs {
         s.results_secs = v.clamp(0.0, 30.0);
+    }
+    if let Some(v) = update.music_volume {
+        s.music_volume = v.min(150);
+    }
+    if let Some(v) = update.hitsound_volume {
+        s.hitsound_volume = v.min(150);
     }
     if let Some(v) = update.output_dir {
         s.output_dir = if v.trim().is_empty() { None } else { Some(v) };
@@ -984,9 +1014,10 @@ async fn preview(state: tauri::State<'_, App>, time_ms: f64) -> Result<String, S
             return Err("load a replay and map first".to_string());
         }
         if inner.preview.is_none() {
-            let renderer =
-                rhythia_render::Renderer::new(PREVIEW_W, PREVIEW_H).map_err(err_str)?;
             let cfg = effective_config(&inner);
+            let renderer =
+                rhythia_render::Renderer::new(PREVIEW_W, PREVIEW_H, cfg.hud_font.as_deref())
+                    .map_err(err_str)?;
             let params = SceneParams::from(&cfg);
             let skin = renderer.prepare_skin(&cfg);
             let (_, r) = inner.replay.as_ref().unwrap();
@@ -1039,7 +1070,8 @@ async fn export_frame(
         let cfg = effective_config(&inner);
         let (w, h) = (inner.settings.width, inner.settings.height);
         let params = SceneParams::from(&cfg);
-        let renderer = rhythia_render::Renderer::new(w, h).map_err(err_str)?;
+        let renderer =
+            rhythia_render::Renderer::new(w, h, cfg.hud_font.as_deref()).map_err(err_str)?;
         let skin = renderer.prepare_skin(&cfg);
         let hud = rhythia_render::hud::HudState::new(m, r);
         let pixels = renderer
@@ -1103,6 +1135,8 @@ fn start_render(
             encoder: s.encoder.clone(),
             preset: s.preset.clone(),
             results_secs: s.results_secs,
+            music_volume: s.music_volume.min(150) as f32 / 100.0,
+            hitsounds: load_hitsounds(s),
             ffmpeg: resolve_ffmpeg(s),
             out: out.clone(),
         };
@@ -1160,6 +1194,8 @@ struct RenderJob {
     encoder: String,
     preset: String,
     results_secs: f64,
+    music_volume: f32,
+    hitsounds: Option<rhythia_render::video::HitsoundOptions>,
     ffmpeg: String,
     out: PathBuf,
 }
@@ -1170,7 +1206,8 @@ fn run_render_job(
     job: RenderJob,
 ) -> Result<PathBuf, rhythia_render::Error> {
     let _ = handle.emit("render-stage", "starting GPU renderer");
-    let renderer = rhythia_render::Renderer::new(job.width, job.height)?;
+    let renderer =
+        rhythia_render::Renderer::new(job.width, job.height, job.cfg.hud_font.as_deref())?;
     let params = SceneParams::from(&job.cfg);
 
     // Probe hardware encoders unless one was forced.
@@ -1214,6 +1251,8 @@ fn run_render_job(
         preset: job.preset.clone(),
         encoder,
         results_secs: job.results_secs,
+        music_volume: job.music_volume,
+        hitsounds: job.hitsounds,
     };
 
     let started = std::time::Instant::now();

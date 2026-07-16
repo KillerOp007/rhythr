@@ -96,6 +96,13 @@ enum Command {
         height: u32,
         #[arg(long, default_value_t = 18)]
         crf: u32,
+        /// Music volume in percent (0-150).
+        #[arg(long, default_value_t = 100)]
+        music_volume: u32,
+        /// Hit/miss-sound volume in percent (0 = off); needs --game-assets
+        /// for the game's extracted sound files.
+        #[arg(long, default_value_t = 0)]
+        hitsound_volume: u32,
         /// Seconds of results screen appended when the clip reaches the end
         /// of the run (0 disables).
         #[arg(long, default_value_t = 4.0)]
@@ -207,7 +214,7 @@ fn run() -> anyhow::Result<bool> {
             }
 
             let params = rhythia_render::scene::SceneParams::from(&cfg);
-            let renderer = rhythia_render::Renderer::new(width, height)
+            let renderer = rhythia_render::Renderer::new(width, height, cfg.hud_font.as_deref())
                 .context("initialising GPU renderer")?;
             let skin = renderer.prepare_skin(&cfg);
             let hud_state = rhythia_render::hud::HudState::new(&m, &r);
@@ -236,6 +243,8 @@ fn run() -> anyhow::Result<bool> {
             width,
             height,
             crf,
+            music_volume,
+            hitsound_volume,
             results_secs,
             preset,
             encoder,
@@ -302,7 +311,7 @@ fn run() -> anyhow::Result<bool> {
             };
 
             let params = rhythia_render::scene::SceneParams::from(&cfg);
-            let renderer = rhythia_render::Renderer::new(width, height)
+            let renderer = rhythia_render::Renderer::new(width, height, cfg.hud_font.as_deref())
                 .context("initialising GPU renderer")?;
 
             // Pick the fastest working encoder: probe the hardware encoders
@@ -324,6 +333,22 @@ fn run() -> anyhow::Result<bool> {
                     _ => "libx264 (software)",
                 }
             );
+            // Hit sounds come from the extracted game assets folder.
+            let hitsounds = game_assets
+                .as_ref()
+                .filter(|_| hitsound_volume > 0)
+                .and_then(|dir| {
+                    let sounds = dir.join("builtin_assets").join("sounds");
+                    let hit_wav = std::fs::read(sounds.join("hit.wav")).ok()?;
+                    Some(rhythia_render::video::HitsoundOptions {
+                        hit_wav,
+                        miss_wav: std::fs::read(sounds.join("miss.wav")).ok(),
+                        volume: hitsound_volume.min(150) as f32 / 100.0,
+                    })
+                });
+            if hitsound_volume > 0 && hitsounds.is_none() {
+                eprintln!("note: hit sounds requested but not found (need --game-assets with extracted sounds)");
+            }
             let opts = rhythia_render::video::VideoOptions {
                 fps,
                 start_ms,
@@ -334,6 +359,8 @@ fn run() -> anyhow::Result<bool> {
                 preset,
                 encoder,
                 results_secs,
+                music_volume: music_volume.min(150) as f32 / 100.0,
+                hitsounds,
             };
 
             println!(

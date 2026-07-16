@@ -45,6 +45,25 @@ impl BuiltinAssets {
         BuiltinAssets { dir, colorsets }
     }
 
+    /// All mod icons from the extraction (name without extension → PNG).
+    pub fn mod_icons(&self) -> Vec<(String, Vec<u8>)> {
+        let dir = self.dir.join("builtin_assets").join("mods");
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return Vec::new();
+        };
+        let mut icons = Vec::new();
+        for e in entries.flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if let Some(stem) = name.strip_suffix(".png") {
+                if let Ok(bytes) = std::fs::read(e.path()) {
+                    icons.push((stem.to_string(), bytes));
+                }
+            }
+        }
+        icons.sort();
+        icons
+    }
+
     /// Colours of a named built-in colorset (case-insensitive).
     pub fn colorset(&self, name: &str) -> Option<&[[f32; 3]]> {
         self.colorsets
@@ -100,6 +119,12 @@ impl SkinConfig {
                     self.colorset = cols.to_vec();
                 }
             }
+        }
+        if self.hud_font.is_none() {
+            self.hud_font = assets.texture("fonts", "default.ttf");
+        }
+        if self.mod_icons.is_empty() {
+            self.mod_icons = assets.mod_icons();
         }
         if self.note_texture.is_none() {
             if let Some(file) = builtin_ref(&self.note_skin_name, "notes") {

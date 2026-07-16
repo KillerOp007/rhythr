@@ -217,6 +217,12 @@ pub struct SkinConfig {
     pub colorset: Vec<[f32; 3]>,
     /// HUD/overlay toggles and colours.
     pub hud: HudConfig,
+    /// Mod icons (name without extension → PNG bytes) from the user's
+    /// own installation, shown on the results screen.
+    pub mod_icons: Vec<(String, Vec<u8>)>,
+    /// The game's HUD font (Nunito ExtraBold) from the user's own
+    /// installation; the bundled DejaVu is the fallback.
+    pub hud_font: Option<Vec<u8>>,
     /// Playfield background colour (`BackgroundRed/Green/Blue`).
     pub background_color: [f32; 3],
     pub cursor_opacity: f32,
@@ -284,6 +290,8 @@ impl Default for SkinConfig {
             cursor_texture: None,
             colorset: Vec::new(),
             hud: HudConfig::default(),
+            mod_icons: Vec::new(),
+            hud_font: None,
             background_color: [0.0, 0.0, 0.0],
             cursor_opacity: 1.0,
             cursor_rotation_deg: 0.0,
@@ -501,6 +509,8 @@ impl SkinConfig {
         };
         let note_skin_name = text("NoteSkin");
         Ok(SkinConfig {
+            mod_icons: Vec::new(),
+            hud_font: None,
             camera_fov: num("CameraFov", d.camera_fov),
             approach_rate: num("ApproachRate", d.approach_rate),
             spawn_distance: num("SpawnDistance", d.spawn_distance),

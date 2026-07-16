@@ -145,11 +145,15 @@ const COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
 impl Renderer {
-    pub fn new(width: u32, height: u32) -> Result<Renderer, Error> {
-        pollster::block_on(Self::new_async(width, height))
+    pub fn new(width: u32, height: u32, hud_font: Option<&[u8]>) -> Result<Renderer, Error> {
+        pollster::block_on(Self::new_async(width, height, hud_font))
     }
 
-    async fn new_async(width: u32, height: u32) -> Result<Renderer, Error> {
+    async fn new_async(
+        width: u32,
+        height: u32,
+        hud_font: Option<&[u8]>,
+    ) -> Result<Renderer, Error> {
         let instance = wgpu::Instance::default();
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
@@ -396,7 +400,7 @@ impl Renderer {
         });
 
         // --- HUD overlay pipeline ---------------------------------------
-        let hud_atlas = crate::hud::FontAtlas::new();
+        let hud_atlas = crate::hud::FontAtlas::new(hud_font);
         let atlas_tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("hud-atlas"),
             size: wgpu::Extent3d {
@@ -1207,7 +1211,9 @@ impl Renderer {
         replay: &Replay,
         map: &Map,
         hud_state: &crate::hud::HudState,
+        config: &SkinConfig,
     ) -> Result<Vec<u8>, Error> {
+        let active_icons = active_mod_icons(replay, config);
         let (w, h) = (self.width as f32, self.height as f32);
         // Final stats. A failed run ends at its fail time — notes after it
         // were never attempted and must not count as misses. The window
@@ -1311,6 +1317,7 @@ impl Renderer {
             &stats,
             self.width,
             self.height,
+            !active_icons.is_empty(),
         ));
 
         let vbuf = self
@@ -1347,7 +1354,25 @@ impl Renderer {
             pass.draw(0..verts.len() as u32, 0..1);
         }
         self.queue.submit(Some(encoder.finish()));
-        self.read_pixels()
+        let mut pixels = self.read_pixels()?;
+
+        // Mod icons, composited onto the static frame CPU-side (cheaper than
+        // extra texture plumbing for a once-per-render image). They sit in
+        // the Mods box, right of the speed letter, where the text fallback
+        // would otherwise be.
+        if !active_icons.is_empty() {
+            let icon_h = (h * 0.052) as u32;
+            let mut x = (w * 0.58) as u32;
+            let y = (h * 0.775) as u32 - icon_h / 2;
+            for (_, png) in &active_icons {
+                if let Some((rgba, iw, ih)) = decode_image_rgba(png) {
+                    let (small, sw, sh) = downscale_icon(&rgba, iw, ih, icon_h.max(8));
+                    blit_over(&mut pixels, self.width, &small, sw, sh, x, y);
+                    x += sw + (h * 0.015) as u32;
+                }
+            }
+        }
+        Ok(pixels)
     }
 
     /// Uploads an RGBA8 image as an sRGB texture.
@@ -1609,6 +1634,73 @@ fn gradient_color(stops: &[(f32, [f32; 3])], t: f32) -> [f32; 3] {
 }
 
 /// Decodes PNG bytes to (rgba8, width, height); None on any decode error.
+/// Mod icons matching the replay's active mods (parsed from its JSON list),
+/// in declaration order.
+fn active_mod_icons<'a>(replay: &Replay, config: &'a SkinConfig) -> Vec<&'a (String, Vec<u8>)> {
+    let mods: Vec<String> = serde_json::from_str(&replay.mods).unwrap_or_default();
+    mods.iter()
+        .filter_map(|m| config.mod_icons.iter().find(|(name, _)| name == m))
+        .collect()
+}
+
+/// Downscales RGBA to `target` px on the longer side, alpha-aware: colour
+/// channels average premultiplied so transparent texels don't bleed dark
+/// halos into icons (average_pool is for opaque covers).
+fn downscale_icon(rgba: &[u8], w: u32, h: u32, target: u32) -> (Vec<u8>, u32, u32) {
+    let scale = (w.max(h)).div_ceil(target).max(1);
+    let (ow, oh) = (w.div_ceil(scale).max(1), h.div_ceil(scale).max(1));
+    let mut out = vec![0u8; (ow * oh * 4) as usize];
+    for oy in 0..oh {
+        for ox in 0..ow {
+            let (mut r, mut g, mut b, mut a, mut n) = (0u32, 0u32, 0u32, 0u32, 0u32);
+            for sy in (oy * scale)..((oy + 1) * scale).min(h) {
+                for sx in (ox * scale)..((ox + 1) * scale).min(w) {
+                    let i = ((sy * w + sx) * 4) as usize;
+                    let pa = rgba[i + 3] as u32;
+                    r += rgba[i] as u32 * pa;
+                    g += rgba[i + 1] as u32 * pa;
+                    b += rgba[i + 2] as u32 * pa;
+                    a += pa;
+                    n += 1;
+                }
+            }
+            let o = ((oy * ow + ox) * 4) as usize;
+            if let (Some(rr), Some(gg), Some(bb)) =
+                (r.checked_div(a), g.checked_div(a), b.checked_div(a))
+            {
+                out[o] = rr as u8;
+                out[o + 1] = gg as u8;
+                out[o + 2] = bb as u8;
+            }
+            out[o + 3] = (a / n.max(1)) as u8;
+        }
+    }
+    (out, ow, oh)
+}
+
+/// Alpha-blends `src` (RGBA, sw×sh) onto `dst` (RGBA, dw wide) at (x, y).
+fn blit_over(dst: &mut [u8], dw: u32, src: &[u8], sw: u32, sh: u32, x: u32, y: u32) {
+    for row in 0..sh {
+        for col in 0..sw {
+            let si = ((row * sw + col) * 4) as usize;
+            let a = src[si + 3] as u32;
+            if a == 0 {
+                continue;
+            }
+            let di = (((y + row) * dw + (x + col)) * 4) as usize;
+            if di + 3 >= dst.len() {
+                continue;
+            }
+            for c in 0..3 {
+                let s = src[si + c] as u32;
+                let d = dst[di + c] as u32;
+                dst[di + c] = ((s * a + d * (255 - a)) / 255) as u8;
+            }
+            dst[di + 3] = 255;
+        }
+    }
+}
+
 fn decode_image_rgba(bytes: &[u8]) -> Option<(Vec<u8>, u32, u32)> {
     // Map covers in the wild are PNGs of every flavour (indexed, 16-bit)
     // and just as often JPEGs — decode whatever the image crate recognises.
