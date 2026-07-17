@@ -3,7 +3,7 @@
 rhythr is an unofficial community tool and is not affiliated with or
 endorsed by Rhythia or Capo Games.
 
-## v0.3.0 — unreleased
+## v0.3.0 — 2026-07-17
 
 The Linux release. Also: auto-updates, ghost races, game sounds, and a
 round of pixel-parity upgrades pulled from the game's own files.
