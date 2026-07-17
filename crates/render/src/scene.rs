@@ -213,15 +213,18 @@ impl SceneParams {
     }
 }
 
-/// Residual opacity a HalfGhost note keeps at/after the fade-out end. SS+'s
-/// documented default is 0.20, but the player's own footage measures ~0.065
-/// on a near note (a clean, scale-independent colour read), so we match that.
-pub const HALFGHOST_FLOOR: f32 = 0.065;
+/// Residual opacity a HalfGhost note keeps at/after the fade-out end.
+/// Measured against the reference footage with the pipeline blending in
+/// sRGB space like the game: a white note reads 72/255 at 70 ms out
+/// (α≈0.28 with the curve's tail), and SS+'s documented default of 0.20
+/// is in the same range. (The earlier 0.065 belonged to the linear-light
+/// pipeline, which needed skewed constants to hit the same pixels.)
+pub const HALFGHOST_FLOOR: f32 = 0.26;
 
 /// Curvature of the HalfGhost fade-out. `> 1` keeps the note bright through
-/// the far part of the window and pulls opacity down sharply as it nears the
-/// plane; 2.0 fits the footage's mid-window point (~48% at ~180 ms).
-pub const HALFGHOST_CURVE: f32 = 2.0;
+/// the far part of the window and pulls opacity down as it nears the
+/// plane; 1.3 fits the footage at −200/−120/−70 ms (α 0.80/0.44/0.28).
+pub const HALFGHOST_CURVE: f32 = 1.3;
 
 #[cfg(test)]
 mod tests {

@@ -152,7 +152,7 @@ const INSTANCE_CAP: usize = 16 * 1024;
 /// Capacity of the persistent HUD vertex buffer (vertices per frame).
 const HUD_VERT_CAP: usize = 64 * 1024;
 
-const COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
+const COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
 impl Renderer {
@@ -384,7 +384,7 @@ impl Renderer {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            format: wgpu::TextureFormat::Rgba8Unorm,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
@@ -712,7 +712,7 @@ impl Renderer {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            format: wgpu::TextureFormat::Rgba8Unorm,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
@@ -1632,7 +1632,7 @@ impl Renderer {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            format: wgpu::TextureFormat::Rgba8Unorm,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
@@ -2084,15 +2084,14 @@ fn average_pool(pixels: &[u8], w: u32, h: u32, target: u32) -> (Vec<u8>, u32, u3
     (out, ow, oh)
 }
 
+/// The game (raylib) blends straight in the sRGB framebuffer — no linear
+/// light anywhere. The whole pipeline therefore stays in sRGB space
+/// (Unorm targets, raw colour values); this shim keeps the old call sites
+/// while making that explicit. Verified against footage on a white skin:
+/// a 75%-alpha near-black note frame reads 69/255 in game — sRGB-space
+/// blending reproduces it exactly, linear blending gave 137.
 fn srgb_to_linear(c: [f32; 3]) -> [f32; 3] {
-    let f = |v: f32| {
-        if v <= 0.04045 {
-            v / 12.92
-        } else {
-            ((v + 0.055) / 1.055).powf(2.4)
-        }
-    };
-    [f(c[0]), f(c[1]), f(c[2])]
+    c
 }
 
 fn colorset_color(name: &str, i: usize) -> [f32; 3] {

@@ -82,7 +82,7 @@ impl BuiltinAssets {
     }
 }
 
-/// `#rrggbb` → linear-ish RGB in [0,1].
+/// `#rrggbb` → sRGB components in [0,1].
 fn parse_hex(s: &str) -> Option<[f32; 3]> {
     let hex = s.trim().trim_start_matches('#');
     if hex.len() != 6 {

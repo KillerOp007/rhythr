@@ -52,24 +52,18 @@ impl NoteShape {
 /// Converts an 8-bit sRGB colour plus a straight alpha into the linear RGBA
 /// the shaders blend in (the render target re-encodes to sRGB on write).
 ///
-/// The game blends its HUD in sRGB space (no sRGB framebuffer), so a config
-/// opacity like 0.05 means `0.05 × 255` on screen. Our pipeline blends in
-/// linear space; decoding the alpha through the sRGB curve reproduces the
-/// game's result (verified: combo text at opacity 0.05 measures ~17/255 in
-/// footage — linear alpha would give 62).
+/// The game (raylib) blends straight in the sRGB framebuffer, and so do
+/// we: the render target is non-sRGB and every colour stays a raw sRGB
+/// value from config to pixel. (The previous linear-light pipeline needed
+/// an alpha-through-the-sRGB-curve hack to approximate the game's combo
+/// text on black; on light backgrounds it drifted badly — a 75%-alpha
+/// near-black note frame read 137/255 instead of the game's 69.)
 pub fn srgb8_to_linear(rgb: [u8; 3], a: f32) -> [f32; 4] {
-    fn ch(s: f32) -> f32 {
-        if s <= 0.04045 {
-            s / 12.92
-        } else {
-            ((s + 0.055) / 1.055).powf(2.4)
-        }
-    }
     [
-        ch(rgb[0] as f32 / 255.0),
-        ch(rgb[1] as f32 / 255.0),
-        ch(rgb[2] as f32 / 255.0),
-        ch(a.clamp(0.0, 1.0)),
+        rgb[0] as f32 / 255.0,
+        rgb[1] as f32 / 255.0,
+        rgb[2] as f32 / 255.0,
+        a.clamp(0.0, 1.0),
     ]
 }
 
@@ -436,7 +430,7 @@ fn first_zip_entry_under(zip: &mut ZipCursor, prefix: &str) -> Result<Option<Vec
     }
 }
 
-/// Parses a colorset `.txt` (one `#rrggbb` per line) to linear-ish RGB
+/// Parses a colorset `.txt` (one `#rrggbb` per line) to sRGB components
 /// triples in [0,1].
 fn parse_colorset(text: &str) -> Vec<[f32; 3]> {
     text.lines()
