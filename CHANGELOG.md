@@ -3,6 +3,17 @@
 rhythr is an unofficial community tool and is not affiliated with or
 endorsed by Rhythia or Capo Games.
 
+## v0.3.1 — 2026-07-17
+
+### Fixed
+
+- **Speed mods play back at their real speed.** A 1.45x run rendered at
+  1x with normal-pitch audio (matching the website's replay viewer, not
+  the game). The video timeline now compresses by the replay's speed
+  factor and the song is rate-shifted — faster and higher-pitched —
+  exactly like the run felt in-game. Hit sounds follow along.
+- The top bar shows the actual app version (it was stuck saying v0.2).
+
 ## v0.3.0 — 2026-07-17
 
 The Linux release. Also: auto-updates, ghost races, game sounds, and a
