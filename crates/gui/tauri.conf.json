@@ -62,7 +62,8 @@
         "depends": [
           "ffmpeg"
         ]
-      }
+      },
+      "rpm": {}
     },
     "createUpdaterArtifacts": true
   },

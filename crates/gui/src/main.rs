@@ -480,24 +480,64 @@ fn load_hitsounds(s: &Settings) -> Option<rhythia_render::video::HitsoundOptions
     })
 }
 
-/// ffmpeg to run: explicit setting, else a bundled sibling of the exe
-/// (Windows installer ships one), else PATH.
+/// Bundle resource directory, set once at startup — where the AppImage
+/// carries its ffmpeg (on Windows the resources sit next to the exe, so
+/// the sibling check below covers it).
+static RESOURCE_DIR: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+
+/// ffmpeg to run: explicit setting first. On Windows the bundled sibling
+/// wins (the installer ships a full build). On Linux the DISTRO ffmpeg
+/// wins when present — its VAAPI/NVENC are linked against the system's
+/// own driver libraries, where a portable static build can misbehave —
+/// and the copy bundled in the AppImage is the fallback so the app still
+/// works on systems with no ffmpeg at all.
 fn resolve_ffmpeg(settings: &Settings) -> String {
     if let Some(f) = &settings.ffmpeg {
         if !f.trim().is_empty() {
             return f.clone();
         }
     }
+    let name = if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" };
+    let in_path = || {
+        std::env::var_os("PATH").into_iter().any(|paths| {
+            std::env::split_paths(&paths).any(|d| d.join(name).is_file())
+        })
+    };
+    let mut candidates: Vec<PathBuf> = Vec::new();
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            let name = if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" };
-            let sibling = dir.join(name);
-            if sibling.exists() {
-                return sibling.to_string_lossy().into_owned();
-            }
+            candidates.push(dir.join(name));
         }
     }
-    "ffmpeg".into()
+    if let Some(Some(res)) = RESOURCE_DIR.get() {
+        candidates.push(res.join(name));
+    }
+    if !cfg!(windows) && in_path() {
+        return name.into();
+    }
+    for c in candidates {
+        if c.exists() {
+            return c.to_string_lossy().into_owned();
+        }
+    }
+    name.into()
+}
+
+/// Whether this install can replace itself through the updater: Windows
+/// (NSIS) and the Linux AppImage can; a deb/rpm install updates through
+/// its package manager or a manual download instead.
+#[tauri::command]
+fn can_self_update() -> bool {
+    cfg!(windows) || std::env::var_os("APPIMAGE").is_some()
+}
+
+/// Opens the GitHub releases page (the update path for deb/rpm installs).
+#[tauri::command]
+fn open_releases_page(app: tauri::AppHandle) {
+    use tauri_plugin_opener::OpenerExt;
+    let _ = app
+        .opener()
+        .open_url("https://github.com/KillerOp007/rhythr/releases/latest", None::<&str>);
 }
 
 fn verify_dto(replay: &Replay, map: &Map) -> VerifyDto {
@@ -906,14 +946,30 @@ async fn set_game_assets(
 
 /// Looks for the game's exe in the usual Steam locations (incl. extra
 /// library folders from libraryfolders.vdf). Returns the exe path.
+///
+/// On Linux the game runs through Proton, so the same `rhythia.exe` sits
+/// under the native (or Flatpak/Snap) Steam library — the file-based
+/// asset extraction works on it unchanged.
 #[tauri::command]
 fn detect_game() -> Option<String> {
     let mut roots: Vec<PathBuf> = Vec::new();
-    for base in [
-        "C:\\Program Files (x86)\\Steam",
-        "C:\\Program Files\\Steam",
-    ] {
-        roots.push(PathBuf::from(base));
+    if cfg!(windows) {
+        for base in [
+            "C:\\Program Files (x86)\\Steam",
+            "C:\\Program Files\\Steam",
+        ] {
+            roots.push(PathBuf::from(base));
+        }
+    } else if let Some(home) = dirs::home_dir() {
+        for rel in [
+            ".local/share/Steam",
+            ".steam/steam",
+            ".steam/root",
+            ".var/app/com.valvesoftware.Steam/.local/share/Steam",
+            "snap/steam/common/.local/share/Steam",
+        ] {
+            roots.push(home.join(rel));
+        }
     }
     // Extra Steam libraries.
     let mut libs: Vec<PathBuf> = Vec::new();
@@ -1622,8 +1678,14 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(shared)
+        .setup(|app| {
+            let _ = RESOURCE_DIR.set(app.path().resource_dir().ok());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             get_status,
+            can_self_update,
+            open_releases_page,
             load_replay,
             load_map,
             download_map,

@@ -892,6 +892,12 @@ async function initUpdater() {
     $("update-text").textContent = `Update ${update.version} is available.`;
     $("update-banner").hidden = false;
     $("btn-update-later").onclick = () => { $("update-banner").hidden = true; };
+    // deb/rpm installs can't replace themselves — point at the release.
+    if (!(await invoke("can_self_update"))) {
+      $("btn-update").textContent = "Open download page";
+      $("btn-update").onclick = () => invoke("open_releases_page");
+      return;
+    }
     $("btn-update").onclick = async () => {
       $("btn-update").disabled = true;
       let got = 0;
