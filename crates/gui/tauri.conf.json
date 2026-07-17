@@ -44,7 +44,8 @@
         ],
         "name": "Rhythia Replay",
         "description": "Rhythia replay file",
-        "role": "Viewer"
+        "role": "Viewer",
+        "mimeType": "application/x-rhythia-replay"
       }
     ],
     "windows": {
@@ -61,9 +62,18 @@
       "deb": {
         "depends": [
           "ffmpeg"
-        ]
+        ],
+        "files": {
+          "/usr/share/mime/packages/rhythr.xml": "../../packaging/linux/rhythr-mime.xml"
+        },
+        "desktopTemplate": "../../packaging/linux/rhythr.desktop"
       },
-      "rpm": {}
+      "rpm": {
+        "files": {
+          "/usr/share/mime/packages/rhythr.xml": "../../packaging/linux/rhythr-mime.xml"
+        },
+        "desktopTemplate": "../../packaging/linux/rhythr.desktop"
+      }
     },
     "createUpdaterArtifacts": true
   },

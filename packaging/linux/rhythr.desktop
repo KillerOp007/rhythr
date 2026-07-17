@@ -1,0 +1,10 @@
+[Desktop Entry]
+Categories=AudioVideo;Video;
+Comment=Render Rhythia replays to video
+Exec=rhythr %f
+Icon=rhythr
+Name=rhythr
+Terminal=false
+Type=Application
+StartupWMClass=rhythr
+MimeType=application/x-rhythia-replay;

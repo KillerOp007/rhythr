@@ -114,7 +114,7 @@ function renderGhostCard() {
   $("btn-ghost-clear").hidden = !g;
   const body = $("ghost-body");
   if (!g) {
-    body.innerHTML = `<p class="hint">Optional second replay of the same map, shown as an orange ghost cursor with a versus panel</p>`;
+    body.innerHTML = `<p class="hint">Optional second replay of the same map: the video splits into two side-by-side runs, each with its own HUD and results. Needs the same speed mod; other mods may differ.</p>`;
     return;
   }
   const warn = g.same_map ? "" : `<span class="chip warn">may be a different map</span>`;
