@@ -1,8 +1,8 @@
 //! Video export: render the replay frame by frame and stream raw RGBA into
 //! a single ffmpeg process (rawvideo on stdin → H.264), muxing the map
-//! audio. The video runs 1:1 with song time — speed mods are already baked
-//! into the replay's frame times, so no time compression or audio pitching
-//! happens here (the website's replay viewer behaves the same).
+//! audio. Speed mods play back as in the game: the timeline is compressed
+//! by the replay's speed factor and the song is rate-shifted (faster and
+//! higher-pitched), so a 1.45x run watches like a 1.45x run.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -127,10 +127,11 @@ pub fn render_video(
     let params = &params;
     // Resolve every note's hit/miss once; the HUD reads running stats from it.
     let hud_state = crate::hud::HudState::new(map, replay);
-    // Replay frame times are already song time — speed mods are baked in
-    // when the .rhr is recorded (the hit registration matching note times
-    // proves it), so the video runs 1:1 with song time and the audio plays
-    // unshifted, exactly like the website's replay viewer.
+    // Replay frame times are song time — speed mods are baked in when the
+    // .rhr is recorded (the hit registration matching note times proves
+    // it). The VIDEO however runs at the modded speed, like the game did:
+    // a 1.45x run covers song time 1.45x faster and the audio is rate-
+    // shifted (pitch up, as in the game). speed is 1.0 unless modded.
     // A failed run ends at its fail time — the game stops there.
     let run_end = if replay.failed() {
         replay.fail_time_ms as f64
@@ -140,8 +141,11 @@ pub fn render_video(
     let end_ms = opts.end_ms.min(run_end.max(opts.start_ms));
     // Results screen only when the clip reaches the end of the run.
     let show_results = opts.results_secs > 0.0 && end_ms >= run_end - 500.0;
+    let speed = (replay.speed as f64).clamp(0.25, 3.0);
     let span_ms = (end_ms - opts.start_ms).max(0.0);
-    let play_frames = (span_ms / 1000.0 * opts.fps as f64).ceil() as u64;
+    // Wall-clock length of the clip: song span compressed by the speed mod.
+    let span_real_ms = span_ms / speed;
+    let play_frames = (span_real_ms / 1000.0 * opts.fps as f64).ceil() as u64;
     let play_frames = play_frames.max(1);
     let results_frames = if show_results {
         (opts.results_secs * opts.fps as f64).ceil() as u64
@@ -149,7 +153,9 @@ pub fn render_video(
         0
     };
     let total_frames = play_frames + results_frames;
-    let song_dt_ms = 1000.0 / opts.fps as f64;
+    // Song time advanced per output frame: at 1.45x each real frame covers
+    // 1.45 frames' worth of song.
+    let song_dt_ms = 1000.0 / opts.fps as f64 * speed;
 
     let mut cmd = Command::new(&opts.ffmpeg);
     hide_console_window(&mut cmd);
@@ -181,6 +187,7 @@ pub fn render_video(
                 &note_times,
                 opts.start_ms,
                 end_ms,
+                speed,
                 hs.volume.clamp(0.0, 1.0),
             )
         });
@@ -248,21 +255,29 @@ pub fn render_video(
     // filter graph mixes the effects track on top of the (volume-scaled)
     // song; amix must not renormalise or the song would dip per overlap.
     if opts.audio.is_some() {
-        let play_secs = span_ms / 1000.0;
+        let play_secs = span_real_ms / 1000.0;
         let mv = opts.music_volume.clamp(0.0, 1.5);
+        // Speed mod: rate-shift the song like the game does (faster AND
+        // higher-pitched) — resample to a known rate first so asetrate
+        // scales from a fixed base.
+        let rate = if (speed - 1.0).abs() > 0.001 {
+            format!("aresample=48000,asetrate={:.0},aresample=48000,", 48000.0 * speed)
+        } else {
+            String::new()
+        };
         if _hits_tmp.is_some() {
             cmd.args([
                 "-filter_complex",
                 &format!(
-                    "[1:a]volume={mv:.3},atrim=duration={play_secs:.3},apad[song];                     [song][2:a]amix=inputs=2:duration=first:normalize=0[aout]"
+                    "[1:a]{rate}volume={mv:.3},atrim=duration={play_secs:.3},apad[song];                     [song][2:a]amix=inputs=2:duration=first:normalize=0[aout]"
                 ),
                 "-map",
                 "0:v",
                 "-map",
                 "[aout]",
             ]);
-        } else if (mv - 1.0).abs() > 0.001 {
-            cmd.args(["-af", &format!("volume={mv:.3},atrim=duration={play_secs:.3},apad")]);
+        } else if (mv - 1.0).abs() > 0.001 || !rate.is_empty() {
+            cmd.args(["-af", &format!("{rate}volume={mv:.3},atrim=duration={play_secs:.3},apad")]);
         } else {
             cmd.args(["-af", &format!("atrim=duration={play_secs:.3},apad")]);
         }

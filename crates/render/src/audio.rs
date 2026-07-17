@@ -77,9 +77,12 @@ impl Clip {
 }
 
 /// Mixes hit sounds (and optionally miss sounds) for the clip window
-/// `[start_ms, end_ms]` into a WAV byte buffer. `results` comes from the
+/// `[start_ms, end_ms]` (song time) into a WAV byte buffer. `speed` is the
+/// replay's speed mod: the track is laid out in wall-clock time, so a hit
+/// at song time t sounds at (t - start)/speed. `results` comes from the
 /// resolved hit registration; miss times use each note's own time. Returns
 /// None when nothing would sound.
+#[allow(clippy::too_many_arguments)]
 pub fn build_hitsound_wav(
     hit: &Clip,
     miss: Option<&Clip>,
@@ -87,20 +90,21 @@ pub fn build_hitsound_wav(
     note_times: &[f64],
     start_ms: f64,
     end_ms: f64,
+    speed: f64,
     volume: f32,
 ) -> Option<Vec<u8>> {
     let span_ms = end_ms - start_ms;
-    if span_ms <= 0.0 || volume <= 0.0 {
+    if span_ms <= 0.0 || volume <= 0.0 || speed <= 0.0 {
         return None;
     }
-    let frames = (span_ms / 1000.0 * RATE as f64).ceil() as usize;
+    let frames = (span_ms / speed / 1000.0 * RATE as f64).ceil() as usize;
     let mut mix = vec![0.0f32; frames * CHANNELS];
     let mut add = |at_ms: f64, clip: &Clip| -> bool {
         let rel = at_ms - start_ms;
         if rel < 0.0 || rel >= span_ms {
             return false;
         }
-        let offset = (rel / 1000.0 * RATE as f64) as usize * CHANNELS;
+        let offset = (rel / speed / 1000.0 * RATE as f64) as usize * CHANNELS;
         for (i, s) in clip.samples.iter().enumerate() {
             if let Some(slot) = mix.get_mut(offset + i) {
                 *slot += s * volume;
@@ -187,7 +191,7 @@ mod tests {
             NoteResult { note_index: 0, hit: true, hit_ms: Some(100.0) },
             NoteResult { note_index: 1, hit: false, hit_ms: None },
         ];
-        let wav = build_hitsound_wav(&clip, None, &results, &[100.0, 200.0], 0.0, 1000.0, 1.0)
+        let wav = build_hitsound_wav(&clip, None, &results, &[100.0, 200.0], 0.0, 1000.0, 1.0, 1.0)
             .expect("has sound");
         assert_eq!(&wav[0..4], b"RIFF");
         // Hit at 100 ms → non-zero samples at frame 4410.
@@ -205,7 +209,16 @@ mod tests {
             .collect();
         results.push(NoteResult { note_index: 3, hit: false, hit_ms: None });
         let times: Vec<f64> = (0..4).map(|i| 10.0 + i as f64).collect();
-        let wav = build_hitsound_wav(&clip, Some(&clip), &results, &times, 500.0, 1000.0, 1.0);
+        let wav = build_hitsound_wav(&clip, Some(&clip), &results, &times, 500.0, 1000.0, 1.0, 1.0);
         assert!(wav.is_none(), "no hits in window and miss below threshold");
+
+        // Speed mod: a hit at song time 400 lands at wall-clock 200 ms.
+        let results = vec![NoteResult { note_index: 0, hit: true, hit_ms: Some(400.0) }];
+        let wav = build_hitsound_wav(&clip, None, &results, &[400.0], 0.0, 1000.0, 2.0, 1.0)
+            .expect("has sound");
+        let frame = |ms: f64| 44 + (ms / 1000.0 * 44_100.0) as usize * 2 * 2;
+        let s_at = |off: usize| i16::from_le_bytes([wav[off], wav[off + 1]]);
+        assert!(s_at(frame(200.0)).abs() > 8000, "hit at half the song time");
+        assert_eq!(s_at(frame(400.0)), 0, "nothing at the unscaled position");
     }
 }
