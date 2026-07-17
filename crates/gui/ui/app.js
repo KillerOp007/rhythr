@@ -920,6 +920,7 @@ async function initUpdater() {
 }
 
 window.addEventListener("DOMContentLoaded", async () => {
+  window.__TAURI__.app.getVersion().then((v) => { $("app-ver").textContent = `v${v}`; });
   initControls();
   initScrubber();
   initMeterDrag();
