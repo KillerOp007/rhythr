@@ -3,6 +3,33 @@
 rhythr is an unofficial community tool and is not affiliated with or
 endorsed by Rhythia or Capo Games.
 
+## v0.3.2 — 2026-07-17
+
+The custom-skin release: renders now match the game on ANY skin, not
+just dark ones.
+
+### Fixed
+
+- **Colours blend exactly like the game's.** The game blends straight
+  in sRGB; our renderer blended in linear light, which drifted on
+  every semi-transparent pixel — worst on bright skins, where notes
+  came out far too pale (a near-black note frame read 137/255 where
+  the game shows 69). The whole pipeline now blends in sRGB space,
+  measured to within 1-2/255 of real footage, and the HalfGhost fade
+  was recalibrated to match.
+- **The cursor trail uses its own texture.** Skins with a hollow
+  cursor and a filled trail (`CursorTrailSkin`) rendered hollow trail
+  rings; the trail now loads its configured image.
+- **Stat panels sit, spread and lean like the game's.** Disabling
+  panels collapsed the rest upward; the game pins the outer slots and
+  spreads the enabled ones (a lone panel centres on the field).
+  `PanelAngle` now fans the entries too.
+
+### Changed
+
+- On bright backgrounds the hit-error meters switch to near-black
+  lines at strong opacity, and the aim grid's lines are thicker.
+
 ## v0.3.1 — 2026-07-17
 
 ### Fixed
