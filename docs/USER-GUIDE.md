@@ -8,21 +8,34 @@ endorsed by Rhythia or Capo Games.
 
 ## Quick start
 
-1. **Install** — run the setup exe. Windows SmartScreen may warn about an
-   "unknown publisher" because the installer is not code-signed; click
-   "More info" → "Run anyway".
+1. **Install**
+   - *Windows*: run the setup exe. SmartScreen may warn about an
+     "unknown publisher" because the installer is not code-signed;
+     click "More info" → "Run anyway".
+   - *Linux*: grab the `.AppImage`, make it executable
+     (`chmod +x rhythr_*.AppImage`) and run it — everything, including
+     ffmpeg, is inside. On Debian/Ubuntu/Mint you can install the
+     `.deb` instead (`sudo apt install ./rhythr_*.deb`), on
+     Fedora/openSUSE the `.rpm`, on Arch the AUR package `rhythr-bin`.
 2. **Connect your game (recommended, once)** — open the app, go to
    **Output → Advanced → Detect game**. The app finds your Steam
    installation and reads the built-in skin textures and color sets
    directly from your own `rhythia.exe`. Without this step, built-in
    skins are only approximated. If Steam lives somewhere unusual, use
-   **From rhythia.exe…** and pick the exe yourself.
+   **From rhythia.exe…** and pick the exe yourself. On Linux the game
+   runs through Proton — detection covers native, Flatpak and Snap
+   Steam installs, and the extraction works on the same `rhythia.exe`.
 3. **Export a replay from the game** — in Rhythia, go to the map you
    played, **right-click it and choose Export** to save the replay as a
    `.rhr` file.
 4. **Export your skin from the game** — in the game's **Settings, click
    Export at the very top**. This saves your current skin/config as a
-   `.rhs` file (look in `%APPDATA%\CapoRhythia\exports`).
+   `.rhs` file (look in `%APPDATA%\CapoRhythia\exports`). On Linux
+   (Proton) that folder lives inside the game's Steam prefix:
+   `~/.local/share/Steam/steamapps/compatdata/<appid>/pfx/drive_c/`
+   `users/steamuser/AppData/Roaming/CapoRhythia/exports` — the numeric
+   `<appid>` folder is the one that contains `pfx`. Exported replays
+   land next to it in `CapoRhythia`.
 5. **Drop both files into the app** — the map downloads automatically
    from rhythia.com (verified against the replay and cached), a live
    preview appears, and **Render video** does the rest. Done.
@@ -59,10 +72,21 @@ endorsed by Rhythia or Capo Games.
   pick the `.sspm` file yourself.
 - **Built-in skin looks slightly off** — run **Detect game** (step 2).
   Re-run it after game updates.
+- **Linux: AppImage won't start** — some distros lack FUSE2. Install
+  `libfuse2` (Ubuntu/Debian) / `fuse2` (Arch), or run the file with
+  `./rhythr_*.AppImage --appimage-extract-and-run`.
+- **Linux: "ffmpeg not found"** — the AppImage brings its own. The
+  `.deb` installs the distro ffmpeg automatically; for the `.rpm` on
+  Fedora, enable RPM Fusion and `sudo dnf install ffmpeg` (the stock
+  "ffmpeg-free" lacks the x264 encoder).
 - **Linux: blank window or crash on startup (Wayland)** — the app
   disables WebKitGTK's DMA-BUF renderer by itself; if you still hit
   issues, try `WEBKIT_DISABLE_COMPOSITING_MODE=1` and, as a last
   resort, `GDK_BACKEND=x11` to run through XWayland.
+- **Updates** — Windows and the AppImage update themselves through the
+  in-app banner. A deb/rpm install shows the banner too, but points
+  you at the download page instead (package installs can't replace
+  themselves).
 
 ## Fair play
 
@@ -80,8 +104,9 @@ the rights needed to publish rendered videos.
 rhythr is MIT-licensed. Source code:
 https://github.com/KillerOp007/rhythr
 
-Video encoding uses **ffmpeg** (bundled as `ffmpeg.exe`, invoked as a
-separate program). ffmpeg is licensed under the GPL — see
+Video encoding uses **ffmpeg** (bundled with the Windows installer and
+the Linux AppImage, invoked as a separate program; native Linux
+packages use the system ffmpeg). ffmpeg is licensed under the GPL — see
 `ffmpeg-LICENSE.txt` next to the app and https://ffmpeg.org for
 sources. Game assets are never bundled or redistributed: the optional
 extraction reads them from *your own* game installation, locally, at

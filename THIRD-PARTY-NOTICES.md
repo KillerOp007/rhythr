@@ -2,7 +2,7 @@
 
 ## Bundled components
 
-- **ffmpeg** (Windows builds ship `ffmpeg.exe`, invoked as a separate
+- **ffmpeg** (the Windows installer and the Linux AppImage ship a copy, invoked as a separate
   process) — GPL; license text ships next to the app as
   `ffmpeg-LICENSE.txt`. Sources: https://ffmpeg.org and
   https://github.com/BtbN/FFmpeg-Builds

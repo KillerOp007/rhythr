@@ -4,16 +4,33 @@
 (`.rhr`) replays into videos. It is not affiliated with or endorsed by
 Rhythia or Capo Games.
 
-**[Download the latest Windows installer](https://github.com/KillerOp007/rhythr/releases/latest)** —
-run it, click through SmartScreen ("More info" → "Run anyway"; the
-installer is not code-signed), then follow the bundled README.txt:
-connect your game once via *Advanced → Detect game* and drop a replay.
-GPU renderer (wgpu) aiming for pixel-parity with the game, so a rendered
-video looks exactly like watching the replay in-game with your own skin.
+**[Download from the releases page](https://github.com/KillerOp007/rhythr/releases/latest)** —
+then connect your game once via *Advanced → Detect game* and drop a
+replay. GPU renderer (wgpu) aiming for pixel-parity with the game, so a
+rendered video looks exactly like watching the replay in-game with your
+own skin.
+
+- **Windows** — `rhythr_x.y.z_x64-setup.exe`. Click through SmartScreen
+  ("More info" → "Run anyway"; the installer is not code-signed).
+- **Linux (any distro)** — `rhythr_x.y.z_amd64.AppImage`. One
+  self-contained file (ffmpeg included): `chmod +x`, run. Needs glibc
+  2.35+ (Ubuntu 22.04 / Debian 12 / Fedora 36 or newer, Arch, openSUSE
+  Leap 15.6+, SteamOS 3.5+). If your distro lacks FUSE2, install
+  `libfuse2`, or run with `--appimage-extract-and-run`.
+- **Debian/Ubuntu/Mint** — `rhythr_x.y.z_amd64.deb`
+  (`sudo apt install ./rhythr_*.deb`; uses the system ffmpeg and
+  registers the `.rhr` file type).
+- **Fedora/openSUSE** — `rhythr-x.y.z-1.x86_64.rpm`. Install ffmpeg
+  separately (RPM Fusion on Fedora) or use the AppImage.
+- **Arch** — install from the AUR (`rhythr-bin`), or use the AppImage.
+
+The game runs through Proton on Linux; *Detect game* finds the Steam
+(native, Flatpak or Snap) install and reads the built-in assets from it
+just like on Windows.
 
 **Status: working end-to-end.** Parsers, integrity check, the GPU renderer
 (pixel-calibrated against real footage: notes, skins, HUD, results screen)
-and a desktop app are functional, with a Windows installer on the
+and a desktop app are functional, with Windows and Linux packages on the
 releases page.
 
 ## Anti-cheat statement

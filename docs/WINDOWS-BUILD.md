@@ -111,9 +111,9 @@ the matching public key is pinned in `tauri.conf.json`.
 ```sh
 export TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.tauri/rhythr-updater.key)"
 # Windows: tauri build --runner cargo-xwin --target x86_64-pc-windows-msvc
-# Linux:   tauri build --bundles deb,appimage
+scripts/build-linux.sh              # Linux bundles (see docs/LINUX-BUILD.md)
 python3 scripts/make-latest-json.py <version>
-gh release create v<version> <setup.exe> <AppImage> <deb> latest.json ...
+gh release create v<version> <setup.exe> <AppImage> <deb> <rpm> latest.json ...
 ```
 
 `latest.json` must be attached to every release — installed apps poll

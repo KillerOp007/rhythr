@@ -15,7 +15,14 @@ from pathlib import Path
 version = sys.argv[1].lstrip("v")
 root = Path(__file__).resolve().parent.parent
 win = root / f"target/x86_64-pc-windows-msvc/release/bundle/nsis/rhythr_{version}_x64-setup.exe"
-appimage = root / f"target/release/bundle/appimage/rhythr_{version}_amd64.AppImage"
+# Container build (scripts/build-linux.sh) first, host build as fallback.
+appimage = next(
+    (p for p in [
+        root / f"target-linux22/release/bundle/appimage/rhythr_{version}_amd64.AppImage",
+        root / f"target/release/bundle/appimage/rhythr_{version}_amd64.AppImage",
+    ] if p.exists()),
+    root / f"target-linux22/release/bundle/appimage/rhythr_{version}_amd64.AppImage",
+)
 base = f"https://github.com/KillerOp007/rhythr/releases/download/v{version}"
 
 platforms = {}
