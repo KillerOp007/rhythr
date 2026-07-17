@@ -307,6 +307,10 @@ pub struct SkinConfig {
     pub panel_opacity: f32,
     pub panel_background_opacity: f32,
     pub panel_gap: f32,
+    /// `PanelAngle` (radians): the stat columns lean like billboards in
+    /// the game's 3D scene, so entries tilt more the further they sit
+    /// from the field's vertical centre.
+    pub panel_angle: f32,
     /// Missed notes fly past the hit plane instead of vanishing (`PushBack`).
     pub push_back: bool,
     /// Hides the whole HUD (`GameSceneDisableGui`).
@@ -369,6 +373,7 @@ impl Default for SkinConfig {
             panel_opacity: 1.0,
             panel_background_opacity: 0.0,
             panel_gap: 0.0,
+            panel_angle: 0.0,
             push_back: false,
             disable_gui: false,
             spin_camera: false,
@@ -717,6 +722,7 @@ impl SkinConfig {
             panel_opacity: num("PanelOpacity", d.panel_opacity),
             panel_background_opacity: num("PanelBackgroundOpacity", d.panel_background_opacity),
             panel_gap: num("PanelGap", d.panel_gap),
+            panel_angle: num("PanelAngle", d.panel_angle),
             push_back: boolean("PushBack", d.push_back),
             disable_gui: boolean("GameSceneDisableGui", d.disable_gui),
             spin_camera: boolean("SpinCamera", d.spin_camera),

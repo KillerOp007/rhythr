@@ -504,9 +504,9 @@ impl HudState {
     }
 }
 
-/// Live RP (Rhythia Points, like osu pp) at the current accuracy. The real
-/// per-play value is an osu!relax-style server calculation over the map's
-/// star rating (per the Rhythia wiki), which a renderer can't reproduce —
+/// Live RP (Rhythia Points) at the current accuracy. The real per-play
+/// value is a server-side calculation over the map's star rating (per
+/// the Rhythia wiki), which a renderer can't reproduce —
 /// but its accuracy response observed in footage is a steep curve above
 /// ~90% (0 RP at 92.31%, 2 at 96.67%, 4 at 97.37% on one map, a constant 78
 /// through a 100%-accuracy run on another). We model that shape with a
@@ -637,18 +637,6 @@ pub fn build_hud(
         }
     }
 
-    // Combo ring (top of the left column).
-    if hud.combo_ring {
-        combo_ring(
-            &mut b,
-            left_x,
-            field.cy - field.half * 0.62,
-            refd * 0.048,
-            stats,
-            srgb8_to_linear(hud.combo_ring_color, hud.combo_ring_opacity),
-        );
-    }
-
     // Red X on each freshly missed note's cell: scales/fades in over the
     // first ~100 ms, holds, fades out by 500 ms (from footage; #e83040).
     if hud.miss_effect_opacity > 0.0 {
@@ -684,25 +672,83 @@ pub fn build_hud(
         b.text(value, x, y + value_px * 1.15, value_px, Align::Center, vcol);
     };
 
-    // Left column (below the ring): Pauses, Grade (bare colour letter), Acc.
-    let mut ly = field.cy - field.half * 0.18;
+    // The game pins each column's outer slots and spreads the ENABLED
+    // entries evenly between them (measured against footage: four entries
+    // fill every slot, two sit at both ends, a single one centres on the
+    // field). Both columns end level; the left one starts lower to make
+    // room for the combo ring's larger footprint.
+    let bottom = field.cy - field.half * 0.79 + 3.0 * row;
+    let slot_y = move |n: usize, i: usize, top: f32| -> f32 {
+        if n <= 1 {
+            // A lone entry centres its label+value block on the field.
+            field.cy - value_px * 0.4
+        } else {
+            top + (bottom - top) * i as f32 / (n - 1) as f32
+        }
+    };
+    let top_l = field.cy - field.half * 0.60;
+    let top_r = field.cy - field.half * 0.79;
+    // PanelAngle fans the entries: level at the field's vertical centre,
+    // tilting further the higher/lower an entry sits (the columns lean
+    // like billboards in the game's 3D scene; the 1.3 projection factor
+    // is measured from footage).
+    let fan_tilt = |b: &mut HudBuilder, from: usize, cx: f32, cy: f32| {
+        let ang = cfg.panel_angle * (cy - field.cy) / (1.5 * row) * 1.3;
+        if ang.abs() < 1e-4 {
+            return;
+        }
+        let (sn, cs) = ang.sin_cos();
+        for v in &mut b.verts[from..] {
+            let (dx, dy) = (v.pos[0] - cx, v.pos[1] - cy);
+            v.pos[0] = cx + dx * cs - dy * sn;
+            v.pos[1] = cy + dx * sn + dy * cs;
+        }
+    };
+
+    // Left column: combo ring, Pauses, Grade (bare colour letter), Accuracy.
+    let ln = [hud.combo_ring, hud.pauses, hud.grade, hud.accuracy]
+        .iter()
+        .filter(|&&e| e)
+        .count();
+    let mut li = 0usize;
+    let next_left = |i: &mut usize| {
+        let y = slot_y(ln, *i, top_l);
+        *i += 1;
+        y
+    };
+    if hud.combo_ring {
+        let y = next_left(&mut li);
+        combo_ring(
+            &mut b,
+            left_x,
+            y - refd * 0.016,
+            refd * 0.048,
+            stats,
+            srgb8_to_linear(hud.combo_ring_color, hud.combo_ring_opacity),
+        );
+    }
     if hud.pauses {
-        entry(&mut b, left_x, ly, "PAUSES", "0", value_col);
-        ly += row;
+        let y = next_left(&mut li);
+        let from = b.verts.len();
+        entry(&mut b, left_x, y, "PAUSES", "0", value_col);
+        fan_tilt(&mut b, from, left_x, y + value_px * 0.6);
     }
     if hud.grade {
+        let y = next_left(&mut li);
         let g = stats.grade;
+        let from = b.verts.len();
         b.text(
             g.label(),
             left_x,
-            ly + value_px * 0.9,
+            y + value_px * 0.9,
             value_px * 1.5,
             Align::Center,
             srgb8_to_linear(g.color(), 1.0),
         );
-        ly += row;
+        fan_tilt(&mut b, from, left_x, y + value_px * 0.6);
     }
     if hud.accuracy {
+        let y = next_left(&mut li);
         // "--" until the first note resolves; then two decimals, trailing
         // zeros stripped ("92.31%", "100%") — as the game formats it.
         let acc = if stats.resolved == 0 {
@@ -711,52 +757,41 @@ pub fn build_hud(
             let s = format!("{:.2}", stats.accuracy_pct);
             format!("{}%", s.trim_end_matches('0').trim_end_matches('.'))
         };
-        entry(&mut b, left_x, ly, "ACCURACY", &acc, value_col);
+        let from = b.verts.len();
+        entry(&mut b, left_x, y, "ACCURACY", &acc, value_col);
+        fan_tilt(&mut b, from, left_x, y + value_px * 0.6);
     }
 
     // Right column: Score, Points, Misses, Notes.
-    let mut ry = field.cy - field.half * 0.79;
+    let rn = [hud.score, hud.points, hud.misses, hud.notes]
+        .iter()
+        .filter(|&&e| e)
+        .count();
+    let mut ri = 0usize;
+    let mut right_entry = |b: &mut HudBuilder, label: &str, value: &str| {
+        let y = slot_y(rn, ri, top_r);
+        ri += 1;
+        let from = b.verts.len();
+        entry(b, right_x, y, label, value, value_col);
+        fan_tilt(b, from, right_x, y + value_px * 0.6);
+    };
     if hud.score {
-        entry(
-            &mut b,
-            right_x,
-            ry,
-            "SCORE",
-            &thousands(stats.score),
-            value_col,
-        );
-        ry += row;
+        right_entry(&mut b, "SCORE", &thousands(stats.score));
     }
     if hud.points {
-        // RP (Rhythia Points, like osu pp) — "--" until a note resolves.
+        // RP (Rhythia Points) — "--" until a note resolves.
         let pts = if stats.resolved == 0 {
             "--".to_string()
         } else {
             format!("{:.0}", stats.points)
         };
-        entry(&mut b, right_x, ry, "POINTS", &pts, value_col);
-        ry += row;
+        right_entry(&mut b, "POINTS", &pts);
     }
     if hud.misses {
-        entry(
-            &mut b,
-            right_x,
-            ry,
-            "MISSES",
-            &stats.misses.to_string(),
-            value_col,
-        );
-        ry += row;
+        right_entry(&mut b, "MISSES", &stats.misses.to_string());
     }
     if hud.notes {
-        entry(
-            &mut b,
-            right_x,
-            ry,
-            "NOTES",
-            &format!("{}/{}", stats.hits, stats.resolved),
-            value_col,
-        );
+        right_entry(&mut b, "NOTES", &format!("{}/{}", stats.hits, stats.resolved));
     }
 
     // Health bar just below the playfield.
@@ -1496,6 +1531,14 @@ fn draw_error_meters(
         ],
         0.9,
     );
+    // Meter chrome (tracks, frames, crosshairs) must survive any skin:
+    // light grey vanishes on light backgrounds, so flip to a dark tone
+    // (and boost the subtle alphas a little) when the background is
+    // bright.
+    let bg = cfg.background_color;
+    let light_bg = 0.299 * bg[0] + 0.587 * bg[1] + 0.114 * bg[2] > 0.55;
+    let chrome: [u8; 3] = if light_bg { [45, 48, 55] } else { [225, 228, 235] };
+    let chrome_boost = if light_bg { 1.6f32 } else { 1.0 };
     if em.enabled {
         // One-sided: hits can only ever be late (the hitbox arms at the
         // note's time — verified across 6k reference hits, min error 0.0),
@@ -1511,7 +1554,7 @@ fn draw_error_meters(
             cy - bar_h * 0.5,
             bar_w,
             bar_h,
-            srgb8_to_linear([225, 228, 235], 0.14 * em.alpha),
+            srgb8_to_linear(chrome, (0.14 * chrome_boost) * em.alpha),
         );
         // "0 ms" anchor in the accent colour.
         b.rect(
@@ -1561,7 +1604,7 @@ fn draw_error_meters(
         let (cx, cy) = (am.x * w, am.y * h);
         let half = h * 0.065 * am.scale;
         // Bright enough to actually see at full opacity.
-        let line = srgb8_to_linear([225, 228, 235], 0.28 * am.alpha);
+        let line = srgb8_to_linear(chrome, (0.28 * chrome_boost).min(0.5) * am.alpha);
         let t_px = (h * 0.0028 * am.scale).max(2.5);
         // Square frame (the note's shape) + crosshair.
         b.rect(cx - half, cy - half, half * 2.0, t_px, line);
