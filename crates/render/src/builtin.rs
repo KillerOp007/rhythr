@@ -141,6 +141,11 @@ impl SkinConfig {
                 self.cursor_texture = assets.texture("cursors", file);
             }
         }
+        if self.trail_texture.is_none() {
+            if let Some(file) = builtin_ref(&self.trail_skin_name, "cursors") {
+                self.trail_texture = assets.texture("cursors", file);
+            }
+        }
     }
 }
 

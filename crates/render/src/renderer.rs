@@ -21,6 +21,8 @@ struct Globals {
     params: [f32; 4],
     /// Which imported skin textures are bound: x=note y=border z=cursor.
     tex_flags: [f32; 4],
+    /// x = trail texture bound (CursorTrailSkin, separate from the cursor).
+    tex_flags2: [f32; 4],
 }
 
 #[repr(C)]
@@ -46,6 +48,14 @@ impl Instance {
             model: model.to_cols_array_2d(),
             color,
             kind: 1.0,
+            _pad: [0.0; 3],
+        }
+    }
+    fn trail_dot(model: Mat4, color: [f32; 4]) -> Self {
+        Instance {
+            model: model.to_cols_array_2d(),
+            color,
+            kind: 5.0,
             _pad: [0.0; 3],
         }
     }
@@ -80,6 +90,7 @@ struct GpuMesh {
 pub struct SkinTextures {
     bind_group: wgpu::BindGroup,
     tex_flags: [f32; 4],
+    tex_flags2: [f32; 4],
 }
 
 pub struct Renderer {
@@ -219,6 +230,7 @@ impl Renderer {
                 tex_entry(1),
                 tex_entry(2),
                 tex_entry(4),
+                tex_entry(5),
                 wgpu::BindGroupLayoutEntry {
                     binding: 3,
                     visibility: wgpu::ShaderStages::FRAGMENT,
@@ -628,6 +640,10 @@ impl Renderer {
             .cursor_texture
             .as_deref()
             .and_then(|b| self.upload_png(b));
+        let trail = config
+            .trail_texture
+            .as_deref()
+            .and_then(|b| self.upload_png(b));
         // Custom background layers, composited once on the CPU into a
         // frame-sized image (static under camera motion — a documented
         // approximation for parallax/spin).
@@ -669,11 +685,16 @@ impl Renderer {
                     binding: 4,
                     resource: wgpu::BindingResource::TextureView(&view(&background)),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(&view(&trail)),
+                },
             ],
         });
         SkinTextures {
             bind_group,
             tex_flags,
+            tex_flags2: [trail.is_some() as u32 as f32, 0.0, 0.0, 0.0],
         }
     }
 
@@ -897,6 +918,7 @@ impl Renderer {
                 0.30,
             ],
             tex_flags: skin.tex_flags,
+            tex_flags2: skin.tex_flags2,
         };
         self.queue
             .write_buffer(&self.globals_buf, 0, bytemuck::bytes_of(&globals));
@@ -1717,7 +1739,7 @@ impl Renderer {
                     if w > 1e-3 && alpha > 0.002 {
                         let model = Mat4::from_translation(glam::Vec3::new(x, y, 0.01))
                             * Mat4::from_scale(glam::Vec3::splat(w));
-                        trail.push(Instance::dot(model, [tr, tg, tb, alpha]));
+                        trail.push(Instance::trail_dot(model, [tr, tg, tb, alpha]));
                     }
                     stamps += 1;
                     if stamps >= 4000 {

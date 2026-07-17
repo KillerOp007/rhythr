@@ -11,6 +11,9 @@ struct Globals {
     params: vec4<f32>,
     // Which imported skin textures are present: x=note y=border z=cursor.
     tex_flags: vec4<f32>,
+    // .x: trail texture present (the skin's CursorTrailSkin, distinct from
+    // the cursor's own texture).
+    tex_flags2: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> globals: Globals;
@@ -22,6 +25,7 @@ struct Globals {
 @group(1) @binding(2) var cursor_tex: texture_2d<f32>;
 @group(1) @binding(3) var skin_samp: sampler;
 @group(1) @binding(4) var bg_tex: texture_2d<f32>;
+@group(1) @binding(5) var trail_tex: texture_2d<f32>;
 
 struct VsIn {
     @location(0) pos: vec3<f32>,
@@ -44,7 +48,7 @@ struct VsOut {
 fn vs_main(in: VsIn) -> VsOut {
     let model = mat4x4<f32>(in.m0, in.m1, in.m2, in.m3);
     var out: VsOut;
-    if (in.kind > 3.5) {
+    if (in.kind > 3.5 && in.kind < 4.5) {
         // Background quad: the unit quad IS the screen (NDC), far plane.
         out.clip = vec4<f32>(in.pos.xy, 0.99995, 1.0);
         out.color = in.color;
@@ -72,6 +76,19 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let ay = abs(in.local.y);
     // Quad-local (±1) → texture uv, V flipped (image top = +y).
     let uv = vec2<f32>(in.local.x * 0.5 + 0.5, 0.5 - in.local.y * 0.5);
+
+    if (in.kind > 4.5) {
+        // Trail stamp: the skin's own trail texture when present, else the
+        // same crisp filled circle the cursor falls back to.
+        if globals.tex_flags2.x > 0.5 {
+            let t = textureSample(trail_tex, skin_samp, uv);
+            return vec4<f32>(in.color.rgb * t.rgb, t.a * in.color.a);
+        }
+        let r = length(in.local);
+        let aa = fwidth(r) * 1.5 + 1e-4;
+        let a = (1.0 - smoothstep(1.0 - aa, 1.0, r)) * in.color.a;
+        return vec4<f32>(in.color.rgb, a);
+    }
 
     if (in.kind > 3.5) {
         let bg = textureSample(bg_tex, skin_samp, uv);

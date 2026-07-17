@@ -1532,13 +1532,12 @@ fn draw_error_meters(
         0.9,
     );
     // Meter chrome (tracks, frames, crosshairs) must survive any skin:
-    // light grey vanishes on light backgrounds, so flip to a dark tone
-    // (and boost the subtle alphas a little) when the background is
-    // bright.
+    // light grey vanishes on light backgrounds, so flip to near-black at
+    // strong opacity when the background is bright.
     let bg = cfg.background_color;
     let light_bg = 0.299 * bg[0] + 0.587 * bg[1] + 0.114 * bg[2] > 0.55;
-    let chrome: [u8; 3] = if light_bg { [45, 48, 55] } else { [225, 228, 235] };
-    let chrome_boost = if light_bg { 1.6f32 } else { 1.0 };
+    let chrome: [u8; 3] = if light_bg { [12, 13, 16] } else { [225, 228, 235] };
+    let chrome_boost = if light_bg { 4.0f32 } else { 1.0 };
     if em.enabled {
         // One-sided: hits can only ever be late (the hitbox arms at the
         // note's time — verified across 6k reference hits, min error 0.0),
@@ -1554,7 +1553,7 @@ fn draw_error_meters(
             cy - bar_h * 0.5,
             bar_w,
             bar_h,
-            srgb8_to_linear(chrome, (0.14 * chrome_boost) * em.alpha),
+            srgb8_to_linear(chrome, (0.14 * chrome_boost).min(0.55) * em.alpha),
         );
         // "0 ms" anchor in the accent colour.
         b.rect(
@@ -1604,8 +1603,8 @@ fn draw_error_meters(
         let (cx, cy) = (am.x * w, am.y * h);
         let half = h * 0.065 * am.scale;
         // Bright enough to actually see at full opacity.
-        let line = srgb8_to_linear(chrome, (0.28 * chrome_boost).min(0.5) * am.alpha);
-        let t_px = (h * 0.0028 * am.scale).max(2.5);
+        let line = srgb8_to_linear(chrome, (0.28 * chrome_boost).min(0.8) * am.alpha);
+        let t_px = (h * 0.0042 * am.scale).max(3.5);
         // Square frame (the note's shape) + crosshair.
         b.rect(cx - half, cy - half, half * 2.0, t_px, line);
         b.rect(cx - half, cy + half - t_px, half * 2.0, t_px, line);

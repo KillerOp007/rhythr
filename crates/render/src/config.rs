@@ -242,6 +242,8 @@ pub struct SkinConfig {
     pub note_skin_name: String,
     pub border_skin_name: String,
     pub cursor_skin_name: String,
+    /// `CursorTrailSkin` reference, e.g. "Textures/Game/cursors/circle.png".
+    pub trail_skin_name: String,
     pub colorset_name: String,
     pub border_color: [f32; 3],
     pub border_opacity: f32,
@@ -270,6 +272,9 @@ pub struct SkinConfig {
     pub border_texture: Option<Vec<u8>>,
     /// PNG bytes of the bundled cursor/trail texture.
     pub cursor_texture: Option<Vec<u8>>,
+    /// `CursorTrailSkin` texture — the trail's stamps use their own image,
+    /// separate from the cursor (e.g. hollow cursor over a filled trail).
+    pub trail_texture: Option<Vec<u8>>,
     /// Custom background layers from the skin's `BackgroundImages[]`,
     /// composited bottom-up behind the scene.
     pub background_images: Vec<BackgroundLayer>,
@@ -338,6 +343,7 @@ impl Default for SkinConfig {
             note_skin_name: String::new(),
             border_skin_name: String::new(),
             cursor_skin_name: String::new(),
+            trail_skin_name: String::new(),
             colorset_name: String::new(),
             border_color: [1.0, 1.0, 1.0],
             border_opacity: 1.0,
@@ -355,6 +361,7 @@ impl Default for SkinConfig {
             background_images: Vec::new(),
             border_texture: None,
             cursor_texture: None,
+            trail_texture: None,
             colorset: Vec::new(),
             hud: HudConfig::default(),
             mod_icons: Vec::new(),
@@ -486,7 +493,8 @@ impl SkinConfig {
         // entry under each known prefix.
         cfg.note_texture = first_zip_entry_under(&mut zip, "noteSkin/")?;
         cfg.border_texture = first_zip_entry_under(&mut zip, "borderSkin/")?;
-        cfg.cursor_texture = first_zip_entry_under(&mut zip, "cursorTrailSkin/")?;
+        cfg.cursor_texture = first_zip_entry_under(&mut zip, "cursorSkin/")?;
+        cfg.trail_texture = first_zip_entry_under(&mut zip, "cursorTrailSkin/")?;
         if let Some(txt) = first_zip_entry_under(&mut zip, "colorSet/")? {
             cfg.colorset = parse_colorset(&String::from_utf8_lossy(&txt));
         }
@@ -642,6 +650,7 @@ impl SkinConfig {
             note_skin_name,
             border_skin_name: text("BorderSkin"),
             cursor_skin_name: text("CursorSkin"),
+            trail_skin_name: text("CursorTrailSkin"),
             colorset_name: text("ColorSet"),
             border_color: rgb("BorderColorRed", "BorderColorGreen", "BorderColorBlue"),
             border_opacity: num("BorderOpacity", d.border_opacity),
@@ -684,6 +693,7 @@ impl SkinConfig {
             background_images,
             border_texture: None,
             cursor_texture: None,
+            trail_texture: None,
             colorset: Vec::new(),
             hud,
             background_color: [
