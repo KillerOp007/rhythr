@@ -53,8 +53,10 @@ endorsed by Rhythia or Capo Games.
   element in the preview; drag any of them wherever you like (make room
   for a handcam, stack panels, overlap things — up to you). In a ghost
   race the layout applies within each side's own half. Positions save
-  automatically and the render always matches the preview; "Reset all
-  to config" on the HUD tab puts everything back — layout included.
+  automatically and the render always matches the preview. **Reset
+  layout** next to the switch puts every element (meters included)
+  back to its standard position without touching visibility or sizes;
+  "Reset all to config" on the HUD tab resets everything.
 - **Vertical renders** — pick a vertical resolution (1080 × 1920 or
   720 × 1280) for TikTok/Shorts: gameplay keeps its full width and the
   HUD moves into bands above and below it. The results screen re-lays

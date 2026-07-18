@@ -1287,6 +1287,27 @@ fn set_meter(
     Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
 }
 
+/// Puts every draggable HUD element back where the game/config puts it:
+/// the drag-editor overrides and the meters' positions — nothing else
+/// (visibility, scale and opacity survive).
+#[tauri::command]
+fn reset_hud_layout(state: tauri::State<'_, App>) -> Result<StatusDto, String> {
+    let app = state.inner();
+    let mut inner = app.lock();
+    inner.settings.hud_positions.clear();
+    fn park(m: &mut MeterSettings, d: MeterSettings) {
+        m.x = d.x;
+        m.y = d.y;
+        m.ghost_x = None;
+        m.ghost_y = None;
+    }
+    park(&mut inner.settings.error_meter, MeterSettings::at(0.5, 0.88));
+    park(&mut inner.settings.aim_meter, MeterSettings::at(0.15, 0.32));
+    inner.settings.save();
+    invalidate_preview(&mut inner);
+    Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
+}
+
 #[tauri::command]
 fn reset_hud_overrides(state: tauri::State<'_, App>) -> Result<StatusDto, String> {
     let app = state.inner();
@@ -1924,6 +1945,7 @@ fn main() {
             load_ghost,
             clear_ghost,
             reset_hud_overrides,
+            reset_hud_layout,
             set_output,
             suggest_file_name,
             timeline,

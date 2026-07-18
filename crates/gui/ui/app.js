@@ -510,7 +510,19 @@ function initHudEdit() {
   $("btn-edit-hud").addEventListener("click", () => {
     hudEditOn = !hudEditOn;
     $("btn-edit-hud").classList.toggle("active", hudEditOn);
+    $("btn-hud-reset").hidden = !hudEditOn;
     refreshHudBoxes();
+  });
+
+  $("btn-hud-reset").addEventListener("click", async () => {
+    try {
+      const st = await invoke("reset_hud_layout");
+      await applyStatus(st);
+      schedulePreview();
+      refreshHudBoxes();
+    } catch (e) {
+      showPreviewMsg(String(e));
+    }
   });
 
   layer.addEventListener("pointerdown", (e) => {
