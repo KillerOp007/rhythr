@@ -151,6 +151,17 @@ impl SceneParams {
     }
 
     /// Visible approach window in ms (spawn_depth / approach_rate · 1000).
+    /// The game advances the note approach in REAL time while note times
+    /// live in song time: under a speed mod one real approach-window's
+    /// worth of notes covers speed× more song time. The renderer works in
+    /// song time and then compresses by the speed, so the approach rate
+    /// must shrink by the same factor for the on-screen approach DURATION
+    /// to match the game's. (User-verified: identical play, same skin —
+    /// without this the notes flew in 45% faster than in game at 1.45x.)
+    pub fn apply_speed(&mut self, speed: f32) {
+        self.approach_rate /= speed.clamp(0.25, 3.0);
+    }
+
     pub fn approach_ms(&self) -> f32 {
         self.spawn_depth / self.approach_rate * 1000.0
     }

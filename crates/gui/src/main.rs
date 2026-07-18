@@ -1455,6 +1455,7 @@ async fn preview(state: tauri::State<'_, App>, time_ms: f64) -> Result<String, S
             });
             let (main_map, main_mods) = rhythia_render::mods::map_for_replay(m, r);
             params.grid_scale = main_mods.grid_scale;
+            params.apply_speed(r.speed);
             let hud = rhythia_render::hud::HudState::new(&main_map, r);
             inner.preview = Some(PreviewCtx {
                 renderer,
@@ -1511,6 +1512,7 @@ async fn export_frame(
         let skin = renderer.prepare_skin(&cfg);
         let (m, mods) = rhythia_render::mods::map_for_replay(m, r);
         params.grid_scale = mods.grid_scale;
+        params.apply_speed(r.speed);
         let hud = rhythia_render::hud::HudState::new(&m, r);
         let pixels = renderer
             .render_still(&params, &cfg, &skin, r, &m, time_ms, Some(&hud))

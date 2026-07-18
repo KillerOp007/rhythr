@@ -139,6 +139,7 @@ pub fn render_video(
     let map = &map;
     let mut params = *params;
     params.grid_scale = main_mods.grid_scale;
+    params.apply_speed(replay.speed);
     let params = &params;
     // Resolve every note's hit/miss once; the HUD reads running stats from it.
     let hud_state = crate::hud::HudState::new(map, replay);
