@@ -110,7 +110,22 @@ pub fn render_video(
             )));
         }
     }
+    // Some wild replays store wall-clock frame times instead of song time
+    // (speed already applied); normalise so the speed pipeline below never
+    // doubles up or drops the speed. No-op for well-formed replays.
+    let mut replay_owned;
+    let replay = if rhythia_sim::timebase::time_scale(map, replay) != 1.0 {
+        replay_owned = replay.clone();
+        rhythia_sim::timebase::normalize(&mut replay_owned, map);
+        &replay_owned
+    } else {
+        replay
+    };
     let ghost_input = opts.ghost.as_ref().map(|g| {
+        let mut greplay = g.replay.clone();
+        rhythia_sim::timebase::normalize(&mut greplay, map);
+        let g = crate::video::GhostOptions { replay: greplay, color: g.color };
+        let g = &g;
         let (gmap, gmods) = crate::mods::map_for_replay(map, &g.replay);
         crate::hud::GhostInput {
             state: crate::hud::HudState::new(&gmap, &g.replay),

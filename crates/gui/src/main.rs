@@ -724,6 +724,25 @@ fn try_cached_map(replay: &Replay) -> Option<(PathBuf, Map)> {
 }
 
 /// Invalidate the cached preview pipeline (config/replay/map changed).
+/// Rescales wall-clock replays (speed already applied to their frame
+/// times) into song time as soon as replay and map are paired, so every
+/// consumer — preview, timeline, verify badge, render — sees one
+/// consistent base. Idempotent; no-op for well-formed replays.
+fn normalize_time_bases(inner: &mut Inner) {
+    let Some((_, map)) = &inner.map else { return };
+    let map = map.clone();
+    let mut changed = false;
+    if let Some((_, r)) = &mut inner.replay {
+        changed |= rhythia_sim::timebase::normalize(r, &map);
+    }
+    if let Some((_, g)) = &mut inner.ghost {
+        changed |= rhythia_sim::timebase::normalize(g, &map);
+    }
+    if changed {
+        invalidate_preview(inner);
+    }
+}
+
 fn invalidate_preview(inner: &mut Inner) {
     inner.preview = None;
 }
@@ -778,6 +797,7 @@ fn load_replay(state: tauri::State<'_, App>, path: String) -> Result<StatusDto, 
     recent.truncate(8);
     inner.settings.save();
     inner.replay = Some((PathBuf::from(path), replay));
+    normalize_time_bases(&mut inner);
     invalidate_preview(&mut inner);
     Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
 }
@@ -790,6 +810,7 @@ fn load_map(state: tauri::State<'_, App>, path: String) -> Result<StatusDto, Str
     inner.map = Some((PathBuf::from(path), map));
     inner.map_source = "local".into();
     inner.map_hash_mismatch = false;
+    normalize_time_bases(&mut inner);
     invalidate_preview(&mut inner);
     Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
 }
@@ -867,6 +888,7 @@ async fn download_map(state: tauri::State<'_, App>) -> Result<StatusDto, String>
             inner.map = Some((sspm_path, map));
             inner.map_source = "downloaded".into();
             inner.map_hash_mismatch = hash_mismatch;
+            normalize_time_bases(&mut inner);
             invalidate_preview(&mut inner);
         }
         Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
@@ -1126,6 +1148,7 @@ fn load_ghost(state: tauri::State<'_, App>, path: String) -> Result<StatusDto, S
         }
     }
     inner.ghost = Some((PathBuf::from(path), ghost));
+    normalize_time_bases(&mut inner);
     invalidate_preview(&mut inner);
     Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
 }
@@ -1846,6 +1869,7 @@ fn main() {
                     inner.map_source = "cache".into();
                 }
                 inner.replay = Some((PathBuf::from(path), replay));
+                normalize_time_bases(&mut inner);
             }
         }
     }

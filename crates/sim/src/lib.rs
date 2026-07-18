@@ -4,3 +4,4 @@
 
 pub mod hitreg;
 pub mod integrity;
+pub mod timebase;

@@ -190,9 +190,12 @@ fn run() -> anyhow::Result<bool> {
             Ok(true)
         }
         Command::Verify { replay, map } => {
-            let r = Replay::from_path(&replay)
+            let mut r = Replay::from_path(&replay)
                 .with_context(|| format!("reading {}", replay.display()))?;
             let m = Map::from_path(&map).with_context(|| format!("reading {}", map.display()))?;
+            // Wall-clock replays are legitimate; don't flag them as
+            // tampered just for their time base.
+            rhythia_sim::timebase::normalize(&mut r, &m);
             let report = integrity::verify_replay(&r, &m);
             print_report(&report);
             Ok(report.consistent())
@@ -212,6 +215,8 @@ fn run() -> anyhow::Result<bool> {
             let r = Replay::from_path(&replay)
                 .with_context(|| format!("reading {}", replay.display()))?;
             let m = Map::from_path(&map).with_context(|| format!("reading {}", map.display()))?;
+            let mut r = r;
+            rhythia_sim::timebase::normalize(&mut r, &m);
             let cfg = load_config(&config, &game_assets)?;
 
             // Surface tampering before spending time rendering.
