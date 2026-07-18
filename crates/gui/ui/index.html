@@ -105,7 +105,15 @@
         </div>
         <img id="preview-img" alt="" hidden />
         <div id="preview-msg" hidden></div>
-        <button class="btn small primary" id="btn-frame" title="Save a shareable score card (PNG) of this run — perfect for Discord" hidden>Save thumbnail</button>
+        <span id="thumb-wrap" hidden>
+          <button class="btn small primary" id="btn-frame" title="Save a shareable score card (PNG) of this run">Save thumbnail ▾</button>
+          <div id="thumb-menu" hidden>
+            <button data-w="1200" data-h="630">Discord<small>1200 × 630</small></button>
+            <button data-w="1280" data-h="720">YouTube<small>1280 × 720</small></button>
+            <button data-w="1080" data-h="1920">TikTok / Shorts<small>1080 × 1920</small></button>
+            <button data-w="1080" data-h="1080">Square<small>1080 × 1080</small></button>
+          </div>
+        </span>
       </div>
 
       <div id="scrub-row" hidden>

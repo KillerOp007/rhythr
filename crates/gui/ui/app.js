@@ -539,7 +539,7 @@ async function runPreview() {
     img.src = url;
     img.hidden = false;
     $("dropzone").hidden = true;
-    $("btn-frame").hidden = false;
+    $("thumb-wrap").hidden = false;
     $("preview-msg").hidden = true;
   } catch (e) {
     showPreviewMsg(String(e));
@@ -688,7 +688,7 @@ async function applyStatus(st) {
   } else if (!hasPair) {
     timelineData = null;
     $("preview-img").hidden = true;
-    $("btn-frame").hidden = true;
+    $("thumb-wrap").hidden = true;
     $("dropzone").hidden = false;
   }
 }
@@ -844,7 +844,20 @@ function initControls() {
     }
   });
 
-  $("btn-frame").addEventListener("click", async () => {
+  // The thumbnail button opens a platform-format menu; picking an entry
+  // renders the card in that size.
+  $("btn-frame").addEventListener("click", () => {
+    $("thumb-menu").hidden = !$("thumb-menu").hidden;
+  });
+  document.addEventListener("click", (e) => {
+    if (!$("thumb-wrap").contains(e.target)) $("thumb-menu").hidden = true;
+  });
+  $("thumb-menu").addEventListener("click", async (e) => {
+    const item = e.target.closest("button[data-w]");
+    if (!item) return;
+    $("thumb-menu").hidden = true;
+    const w = Number(item.dataset.w);
+    const h = Number(item.dataset.h);
     const raw = status?.replay
       ? `${status.replay.player} - ${status?.map?.song_name || "run"} - card`
       : "score-card";
@@ -856,10 +869,10 @@ function initControls() {
     if (!p) return;
     $("btn-frame").disabled = true;
     try {
-      await invoke("export_card", { path: p });
+      await invoke("export_card", { path: p, width: w, height: h });
       $("render-text").textContent = `Score card saved — ${p}`;
-    } catch (e) {
-      showPreviewMsg(String(e));
+    } catch (e2) {
+      showPreviewMsg(String(e2));
     } finally {
       $("btn-frame").disabled = false;
     }

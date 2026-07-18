@@ -1482,10 +1482,28 @@ pub fn build_results(
     b.verts
 }
 
+/// Where the score card places its cover (x0, y0, size): top-left on
+/// landscape cards, centred up top on square/portrait ones. Shared with
+/// the renderer, which draws the cover quad itself.
+pub fn card_cover_rect(width: u32, height: u32) -> (f32, f32, f32) {
+    let (w, h) = (width as f32, height as f32);
+    let aspect = w / h;
+    if aspect > 1.4 {
+        (w * 0.033, h * 0.075, h * 0.35)
+    } else if aspect < 0.8 {
+        let size = w * 0.42;
+        ((w - size) * 0.5, h * 0.045, size)
+    } else {
+        // Square: small cover top-left, title beside it.
+        (w * 0.05, h * 0.05, h * 0.24)
+    }
+}
+
 /// Builds the shareable score-card overlay (title block, grade and a
-/// roomy stat spread) for a small landscape canvas — the Discord-embed
-/// companion to a full video. The cover quad and background are drawn by
-/// the renderer.
+/// roomy stat spread) — the Discord-embed companion to a full video, in
+/// several aspect ratios: landscape reads left-to-right, square and
+/// portrait (Shorts/TikTok) stack everything centred. The cover quad and
+/// background are drawn by the renderer.
 pub fn build_card(
     atlas: &FontAtlas,
     replay: &Replay,
@@ -1501,12 +1519,6 @@ pub fn build_card(
     let muted = srgb8_to_linear(cfg.interface_text_color, 0.55);
     let green = srgb8_to_linear([60, 220, 90], 1.0);
 
-    // --- Title block, right of the cover --------------------------------
-    let tx = w * 0.25;
-    let title_px = h * 0.073;
-    let max_w = w * 0.53;
-    let fit = (max_w / atlas.measure(&map.meta.song_name, title_px)).min(1.0);
-    b.text(&map.meta.song_name, tx, h * 0.155, title_px * fit, Align::Left, ink);
     let diff = if !map.meta.custom_difficulty_name.is_empty() {
         map.meta.custom_difficulty_name.clone()
     } else {
@@ -1520,46 +1532,17 @@ pub fn build_card(
         }
         .to_string()
     };
-    b.text(&format!("< {diff} >"), tx, h * 0.235, h * 0.045, Align::Left, green);
-    if !map.meta.mappers.is_empty() {
-        b.text(
-            &format!("by {}", map.meta.mappers.join(", ")),
-            tx,
-            h * 0.30,
-            h * 0.038,
-            Align::Left,
-            muted,
-        );
-    }
-    b.text(&replay.player_name, tx, h * 0.40, h * 0.055, Align::Left, ink);
-
-    // --- Big grade, top right -------------------------------------------
     let failed = replay.failed();
     let (glabel, gcol) = if failed {
         ("F", [200u8, 40, 45])
     } else {
         (stats.grade.label(), stats.grade.color())
     };
-    b.text(
-        glabel,
-        w * 0.90,
-        h * 0.33,
-        h * 0.27,
-        Align::Center,
-        srgb8_to_linear(gcol, 1.0),
-    );
-
-    // --- Headline stats: accuracy and score share the wide middle -------
+    let grade_col = srgb8_to_linear(gcol, 1.0);
     let acc = {
         let s = format!("{:.2}", stats.accuracy_pct);
         format!("{}%", s.trim_end_matches('0').trim_end_matches('.'))
     };
-    b.text("ACCURACY", w * 0.06, h * 0.60, h * 0.034, Align::Left, muted);
-    b.text(&acc, w * 0.06, h * 0.725, h * 0.115, Align::Left, ink);
-    b.text("SCORE", w * 0.52, h * 0.60, h * 0.034, Align::Left, muted);
-    b.text(&thousands(stats.score), w * 0.52, h * 0.725, h * 0.115, Align::Left, ink);
-
-    // --- Secondary row, spread evenly across the width ------------------
     let mut cells: Vec<(String, String)> = vec![
         ("HITS".into(), stats.hits.to_string()),
         ("MISSES".into(), stats.misses.to_string()),
@@ -1570,15 +1553,145 @@ pub fn build_card(
     } else if replay.points > 0.0 {
         cells.push(("RP".into(), format!("{:.0}", replay.points)));
     }
-    let (left, right) = (w * 0.06, w * 0.80);
-    for (i, (label, value)) in cells.iter().enumerate() {
-        let x = left + (right - left) * i as f32 / (cells.len() - 1).max(1) as f32;
-        b.text(label, x, h * 0.845, h * 0.030, Align::Left, muted);
-        b.text(value, x, h * 0.935, h * 0.062, Align::Left, ink);
-    }
 
-    // Quiet corner branding — makes shared cards findable.
-    b.text("rhythr", w * 0.985 - atlas.measure("rhythr", h * 0.028), h * 0.09, h * 0.028, Align::Left, muted);
+    if w / h > 1.4 {
+        // --- Landscape: cover left, text beside it, stats spread wide ---
+        let tx = w * 0.25;
+        let title_px = h * 0.073;
+        let fit = (w * 0.53 / atlas.measure(&map.meta.song_name, title_px)).min(1.0);
+        b.text(&map.meta.song_name, tx, h * 0.155, title_px * fit, Align::Left, ink);
+        b.text(&format!("< {diff} >"), tx, h * 0.235, h * 0.045, Align::Left, green);
+        if !map.meta.mappers.is_empty() {
+            b.text(
+                &format!("by {}", map.meta.mappers.join(", ")),
+                tx,
+                h * 0.30,
+                h * 0.038,
+                Align::Left,
+                muted,
+            );
+        }
+        b.text(&replay.player_name, tx, h * 0.40, h * 0.055, Align::Left, ink);
+        b.text(glabel, w * 0.90, h * 0.33, h * 0.27, Align::Center, grade_col);
+
+        b.text("ACCURACY", w * 0.06, h * 0.60, h * 0.034, Align::Left, muted);
+        b.text(&acc, w * 0.06, h * 0.725, h * 0.115, Align::Left, ink);
+        b.text("SCORE", w * 0.52, h * 0.60, h * 0.034, Align::Left, muted);
+        b.text(&thousands(stats.score), w * 0.52, h * 0.725, h * 0.115, Align::Left, ink);
+
+        let (left, right) = (w * 0.06, w * 0.80);
+        for (i, (label, value)) in cells.iter().enumerate() {
+            let x = left + (right - left) * i as f32 / (cells.len() - 1).max(1) as f32;
+            b.text(label, x, h * 0.845, h * 0.030, Align::Left, muted);
+            b.text(value, x, h * 0.935, h * 0.062, Align::Left, ink);
+        }
+        b.text(
+            "rhythr",
+            w * 0.985 - atlas.measure("rhythr", h * 0.028),
+            h * 0.09,
+            h * 0.028,
+            Align::Left,
+            muted,
+        );
+    } else if w / h >= 0.8 {
+        // --- Square: landscape-style head, stats centred below ----------
+        let (cx0, _, csize) = card_cover_rect(width, height);
+        let tx = cx0 + csize + w * 0.05;
+        let title_px = w * 0.045;
+        let fit = ((w * 0.95 - tx) / atlas.measure(&map.meta.song_name, title_px)).min(1.0);
+        b.text(&map.meta.song_name, tx, h * 0.115, title_px * fit, Align::Left, ink);
+        b.text(&format!("< {diff} >"), tx, h * 0.175, w * 0.032, Align::Left, green);
+        if !map.meta.mappers.is_empty() {
+            b.text(
+                &format!("by {}", map.meta.mappers.join(", ")),
+                tx,
+                h * 0.225,
+                w * 0.027,
+                Align::Left,
+                muted,
+            );
+        }
+        b.text(&replay.player_name, tx, h * 0.29, w * 0.038, Align::Left, ink);
+
+        b.text(glabel, w * 0.5, h * 0.545, w * 0.20, Align::Center, grade_col);
+        b.text("ACCURACY", w * 0.28, h * 0.655, w * 0.026, Align::Center, muted);
+        b.text("SCORE", w * 0.72, h * 0.655, w * 0.026, Align::Center, muted);
+        b.text(&acc, w * 0.28, h * 0.735, w * 0.062, Align::Center, ink);
+        b.text(&thousands(stats.score), w * 0.72, h * 0.735, w * 0.062, Align::Center, ink);
+        for (i, (label, value)) in cells.iter().enumerate() {
+            let x = w * (0.5 + (i as f32 - (cells.len() - 1) as f32 * 0.5) * 0.26);
+            b.text(label, x, h * 0.845, w * 0.022, Align::Center, muted);
+            b.text(value, x, h * 0.905, w * 0.044, Align::Center, ink);
+        }
+        b.text(
+            "rhythr",
+            w * 0.97 - atlas.measure("rhythr", w * 0.024),
+            h * 0.97,
+            w * 0.024,
+            Align::Left,
+            muted,
+        );
+    } else {
+        // --- Portrait (Shorts/TikTok): everything stacked and centred ---
+        let portrait = true;
+        let (_, cy0, csize) = card_cover_rect(width, height);
+        let cx = w * 0.5;
+        // Text sizes hang off the WIDTH here so both 1:1 and 9:16 read well.
+        let mut y = cy0 + csize + w * 0.10;
+        let title_px = w * 0.062;
+        let fit = (w * 0.9 / atlas.measure(&map.meta.song_name, title_px)).min(1.0);
+        b.text(&map.meta.song_name, cx, y, title_px * fit, Align::Center, ink);
+        y += w * 0.055;
+        b.text(&format!("< {diff} >"), cx, y, w * 0.036, Align::Center, green);
+        if !map.meta.mappers.is_empty() {
+            y += w * 0.045;
+            b.text(
+                &format!("by {}", map.meta.mappers.join(", ")),
+                cx,
+                y,
+                w * 0.030,
+                Align::Center,
+                muted,
+            );
+        }
+        y += w * 0.075;
+        b.text(&replay.player_name, cx, y, w * 0.045, Align::Center, ink);
+
+        // Grade centred, then the headline pair side by side.
+        y += if portrait { w * 0.30 } else { w * 0.21 };
+        b.text(glabel, cx, y, if portrait { w * 0.22 } else { w * 0.17 }, Align::Center, grade_col);
+        y += if portrait { w * 0.17 } else { w * 0.12 };
+        b.text("ACCURACY", w * 0.28, y, w * 0.026, Align::Center, muted);
+        b.text("SCORE", w * 0.72, y, w * 0.026, Align::Center, muted);
+        y += w * 0.075;
+        b.text(&acc, w * 0.28, y, w * 0.068, Align::Center, ink);
+        b.text(&thousands(stats.score), w * 0.72, y, w * 0.068, Align::Center, ink);
+
+        // Secondary cells as a centred row (or 2x2 on portrait).
+        y += w * 0.115;
+        if portrait && cells.len() == 4 {
+            for (i, (label, value)) in cells.iter().enumerate() {
+                let x = if i % 2 == 0 { w * 0.28 } else { w * 0.72 };
+                let yy = y + (i / 2) as f32 * w * 0.155;
+                b.text(label, x, yy, w * 0.024, Align::Center, muted);
+                b.text(value, x, yy + w * 0.062, w * 0.048, Align::Center, ink);
+            }
+        } else {
+            for (i, (label, value)) in cells.iter().enumerate() {
+                let x = w * (0.5 + (i as f32 - (cells.len() - 1) as f32 * 0.5) * 0.28);
+                b.text(label, x, y, w * 0.024, Align::Center, muted);
+                b.text(value, x, y + w * 0.062, w * 0.048, Align::Center, ink);
+            }
+        }
+        b.text(
+            "rhythr",
+            w * 0.97 - atlas.measure("rhythr", w * 0.024),
+            h - w * 0.03,
+            w * 0.024,
+            Align::Left,
+            muted,
+        );
+    }
 
     b.verts
 }

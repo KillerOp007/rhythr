@@ -1631,7 +1631,7 @@ impl Renderer {
         hud_state: &crate::hud::HudState,
         config: &SkinConfig,
     ) -> Result<Vec<u8>, Error> {
-        let (w, h) = (self.width as f32, self.height as f32);
+        let h = self.height as f32;
         let stats_end = if replay.failed() {
             replay.fail_time_ms as f64 + rhythia_sim::hitreg::DEFAULT_WINDOW_MS + 1.0
         } else {
@@ -1700,9 +1700,9 @@ impl Renderer {
                 }
             }
         };
-        // Cover with the results screen's green frame, square, top left.
-        let size = h * 0.35;
-        let (cx0, cy0) = (w * 0.033, h * 0.075);
+        // Cover with the results screen's green frame; placement depends
+        // on the card's aspect (shared with build_card).
+        let (cx0, cy0, size) = crate::hud::card_cover_rect(self.width, self.height);
         let f = (h * 0.006).max(2.0);
         quad(
             &mut verts,

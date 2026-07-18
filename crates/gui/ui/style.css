@@ -286,3 +286,21 @@ details#advanced > div, details#advanced > label { margin-bottom: 10px; }
 ::-webkit-scrollbar { width: 9px; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
+
+#thumb-wrap { position: absolute; top: 8px; right: 8px; }
+#btn-frame { position: static; }
+#thumb-menu {
+  position: absolute; right: 0; top: calc(100% + 4px); z-index: 40;
+  background: var(--panel-2); border: 1px solid var(--border);
+  border-radius: 8px; padding: 4px; min-width: 170px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+  display: flex; flex-direction: column; gap: 2px;
+}
+#thumb-menu button {
+  font: inherit; text-align: left; color: var(--text);
+  background: transparent; border: 0; border-radius: 6px;
+  padding: 6px 10px; cursor: pointer; display: flex;
+  justify-content: space-between; align-items: baseline; gap: 12px;
+}
+#thumb-menu button:hover { background: var(--accent-soft); }
+#thumb-menu small { color: var(--muted); font-size: 11px; }
