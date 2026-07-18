@@ -986,18 +986,17 @@ async fn set_game_assets(
     .map_err(err_str)?
 }
 
-/// Steam's install path from the registry (custom install drives).
+/// Steam's install path from the registry (custom install drives). Read
+/// via the registry API, not `reg query`: reg.exe writes piped output in
+/// the legacy OEM/ANSI codepage, which mangles non-ASCII install paths
+/// (D:\Spiele\…, D:\Игры\…) into U+FFFD and breaks the whole scan.
 #[cfg(windows)]
 fn windows_steam_path() -> Option<PathBuf> {
-    use std::os::windows::process::CommandExt;
-    let out = std::process::Command::new("reg")
-        .args(["query", r"HKCU\Software\Valve\Steam", "/v", "SteamPath"])
-        .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
-        .output()
+    let key = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER)
+        .open_subkey(r"Software\Valve\Steam")
         .ok()?;
-    let text = String::from_utf8_lossy(&out.stdout);
-    let line = text.lines().find(|l| l.contains("SteamPath"))?;
-    let path = line.split("REG_SZ").nth(1)?.trim();
+    let path: String = key.get_value("SteamPath").ok()?;
+    let path = path.trim();
     (!path.is_empty()).then(|| PathBuf::from(path.replace('/', "\\")))
 }
 
@@ -1011,7 +1010,18 @@ fn windows_steam_path() -> Option<PathBuf> {
 /// installs and the native Linux build alike — the extraction is
 /// file-based and the .NET bundle layout is the same everywhere.
 #[tauri::command]
-fn detect_game() -> Option<String> {
+async fn detect_game() -> Option<String> {
+    // The scan touches every Steam library on every drive; a spun-down
+    // HDD or dead network mapping blocks for seconds, and sync commands
+    // run on the UI thread — so it goes through the blocking pool like
+    // every other filesystem-heavy command here.
+    tauri::async_runtime::spawn_blocking(detect_game_scan)
+        .await
+        .ok()
+        .flatten()
+}
+
+fn detect_game_scan() -> Option<String> {
     let mut roots: Vec<PathBuf> = Vec::new();
     if cfg!(windows) {
         // The registry knows custom install locations Steam was moved to.

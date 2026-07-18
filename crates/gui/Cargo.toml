@@ -27,6 +27,11 @@ png = "0.17"
 tempfile = "3"
 dirs = "6"
 
+[target.'cfg(windows)'.dependencies]
+# Unicode-safe registry reads (Steam install path); `reg query` output is
+# codepage-encoded and mangles non-ASCII paths.
+winreg = "0.55"
+
 [[bin]]
 name = "rhythr"
 path = "src/main.rs"
