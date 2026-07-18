@@ -272,29 +272,50 @@ function renderOutputTab() {
   $("hitvol-val").textContent = `${s.hitsound_volume}%`;
   $("set-outdir").value = s.output_dir || "";
   $("set-filename").value = s.file_name || "";
-  $("set-assets").value = s.game_assets || "";
   $("set-ffmpeg").value = s.ffmpeg || "";
   if (status?.replay && !s.file_name) {
     invoke("suggest_file_name").then((n) => { $("set-filename").placeholder = n; });
   }
 }
 
-function assetsNote(text) {
-  const el = $("assets-note");
-  el.textContent = text || "";
-  el.hidden = !text;
+function renderGameCard(note) {
+  const body = $("game-body");
+  const ok = status?.game_ok;
+  const path = status?.settings?.game_assets;
+  let html = "";
+  if (ok) {
+    html += `<span class="chip ok">game connected</span>`;
+    html += `<div class="src-meta" style="margin-top:6px" title="${esc(path || "")}">Built-in skins use the exact textures and colors.</div>`;
+  } else {
+    html += `<span class="chip warn">not connected</span>`;
+    html += `<div class="src-meta" style="margin-top:6px">Built-in skins are approximated until rhythr reads your Rhythia install. Use Detect, or Locate the game's executable.</div>`;
+  }
+  if (note) html += `<div class="src-meta" style="margin-top:6px">${esc(note)}</div>`;
+  body.innerHTML = html;
 }
 
 async function applyGameAssets(path) {
-  const fromExe = path.toLowerCase().endsWith(".exe");
-  assetsNote(fromExe ? "Extracting skin assets from the game… (a few seconds)" : "");
+  renderGameCard("Extracting assets from the game… (a few seconds)");
   try {
     await call(() => invoke("set_game_assets", { path }));
-    assetsNote(fromExe ? "Assets extracted — built-in skins now render with the real textures." : "");
+    renderGameCard();
     schedulePreview();
   } catch (e) {
-    assetsNote(String(e));
+    renderGameCard(String(e));
   }
+}
+
+// On startup, connect the game by itself: users otherwise never find the
+// button and wonder why their skin looks approximated.
+async function autoConnectGame() {
+  if (status?.game_ok) return;
+  renderGameCard("Searching your Steam libraries…");
+  const exe = await invoke("detect_game").catch(() => null);
+  if (!exe) {
+    renderGameCard("Not found automatically — if the game is installed somewhere unusual, click Locate… and pick its executable.");
+    return;
+  }
+  await applyGameAssets(exe);
 }
 
 async function pushOutput(update) {
@@ -631,6 +652,7 @@ async function applyStatus(st) {
   renderGhostCard();
   renderMapCard();
   renderConfigCard();
+  renderGameCard();
   renderRecent();
   renderHudTab();
   renderOutputTab();
@@ -792,19 +814,16 @@ function initControls() {
     const p = await dialog.open({ directory: true });
     if (p) pushOutput({ output_dir: p });
   });
-  $("btn-assets").addEventListener("click", async () => {
-    const p = await dialog.open({ directory: true });
+  $("btn-game-exe").addEventListener("click", async () => {
+    // No extension filter: the native Linux build has no .exe suffix.
+    const p = await dialog.open({ title: "Select the Rhythia executable" });
     if (p) await applyGameAssets(p);
   });
-  $("btn-assets-exe").addEventListener("click", async () => {
-    const p = await dialog.open({ filters: [{ name: "Rhythia game", extensions: ["exe"] }] });
-    if (p) await applyGameAssets(p);
-  });
-  $("btn-assets-auto").addEventListener("click", async () => {
-    assetsNote("Searching Steam installation…");
+  $("btn-game-detect").addEventListener("click", async () => {
+    renderGameCard("Searching your Steam libraries…");
     const exe = await invoke("detect_game").catch(() => null);
     if (!exe) {
-      assetsNote("Game not found in the usual Steam folders — use “From rhythia.exe…” instead.");
+      renderGameCard("Not found in any Steam library — click Locate… and pick the game's executable.");
       return;
     }
     await applyGameAssets(exe);
@@ -930,4 +949,5 @@ window.addEventListener("DOMContentLoaded", async () => {
   await applyStatus(st);
   initEncoders();
   setTimeout(initUpdater, 2500);
+  autoConnectGame();
 });

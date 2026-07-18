@@ -251,6 +251,8 @@ struct StatusDto {
     config: ConfigDto,
     settings: Settings,
     rendering: bool,
+    /// The configured game-assets folder exists and holds an extraction.
+    game_ok: bool,
 }
 
 #[derive(Serialize)]
@@ -608,6 +610,15 @@ fn assemble_status(inner: &Inner, rendering: bool) -> StatusDto {
     });
     let base_hud = hud_flags(&inner.base_config);
     let effective_hud = hud_flags(&effective_config(inner));
+    let game_ok = inner
+        .settings
+        .game_assets
+        .as_ref()
+        .map(|p| {
+            let d = Path::new(p);
+            d.join("builtin_colorsets.json").is_file() || d.join("builtin_assets").is_dir()
+        })
+        .unwrap_or(false);
     StatusDto {
         replay,
         ghost,
@@ -622,6 +633,7 @@ fn assemble_status(inner: &Inner, rendering: bool) -> StatusDto {
         },
         settings: inner.settings.clone(),
         rendering,
+        game_ok,
     }
 }
 
@@ -907,7 +919,11 @@ async fn set_game_assets(
         // temp dir first and only replaces the live cache once validated —
         // a failed/partial run must not pollute a previously good cache.
         if let Some(p) = &resolved {
-            if p.to_lowercase().ends_with(".exe") {
+            // Any file is treated as the game binary (rhythia.exe under
+            // Windows/Proton, an extensionless ELF for the native Linux
+            // build — the bundle format is the same); a directory is an
+            // already-extracted assets folder.
+            if Path::new(p).is_file() {
                 // One extraction at a time (second click while running).
                 static EXTRACTING: AtomicBool = AtomicBool::new(false);
                 if EXTRACTING.swap(true, Ordering::SeqCst) {
@@ -944,16 +960,38 @@ async fn set_game_assets(
     .map_err(err_str)?
 }
 
-/// Looks for the game's exe in the usual Steam locations (incl. extra
-/// library folders from libraryfolders.vdf). Returns the exe path.
-///
-/// On Linux the game runs through Proton, so the same `rhythia.exe` sits
-/// under the native (or Flatpak/Snap) Steam library — the file-based
-/// asset extraction works on it unchanged.
+/// Steam's install path from the registry (custom install drives).
+#[cfg(windows)]
+fn windows_steam_path() -> Option<PathBuf> {
+    use std::os::windows::process::CommandExt;
+    let out = std::process::Command::new("reg")
+        .args(["query", r"HKCU\Software\Valve\Steam", "/v", "SteamPath"])
+        .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    let line = text.lines().find(|l| l.contains("SteamPath"))?;
+    let path = line.split("REG_SZ").nth(1)?.trim();
+    (!path.is_empty()).then(|| PathBuf::from(path.replace('/', "\\")))
+}
+
+#[cfg(not(windows))]
+fn windows_steam_path() -> Option<PathBuf> {
+    None
+}
+
+/// Finds the game binary across every Steam library (registry/default
+/// roots plus libraryfolders.vdf). Works for Windows installs, Proton
+/// installs and the native Linux build alike — the extraction is
+/// file-based and the .NET bundle layout is the same everywhere.
 #[tauri::command]
 fn detect_game() -> Option<String> {
     let mut roots: Vec<PathBuf> = Vec::new();
     if cfg!(windows) {
+        // The registry knows custom install locations Steam was moved to.
+        if let Some(p) = windows_steam_path() {
+            roots.push(p);
+        }
         for base in [
             "C:\\Program Files (x86)\\Steam",
             "C:\\Program Files\\Steam",
@@ -986,19 +1024,59 @@ fn detect_game() -> Option<String> {
         }
     }
     roots.extend(libs);
+    // Scan every library's steamapps/common for a folder that mentions
+    // the game, then take the largest plausible game binary inside it:
+    // rhythia.exe under Windows/Proton, an extensionless ELF for the
+    // native Linux build. Names are matched case-insensitively — installs
+    // exist as "Rhythia", "rhythia" and "SoundSpacePlus".
+    let mut best: Option<(u64, PathBuf)> = None;
     for root in roots {
-        for game_dir in ["Rhythia", "SoundSpacePlus", "Sound Space Plus"] {
-            let exe = root
-                .join("steamapps")
-                .join("common")
-                .join(game_dir)
-                .join("rhythia.exe");
-            if exe.exists() {
-                return Some(exe.to_string_lossy().into_owned());
+        let common = root.join("steamapps").join("common");
+        let Ok(entries) = std::fs::read_dir(&common) else {
+            continue;
+        };
+        for e in entries.flatten() {
+            let dir_name = e.file_name().to_string_lossy().to_lowercase();
+            if !(dir_name.contains("rhythia") || dir_name.contains("sound space") || dir_name.contains("soundspace")) {
+                continue;
+            }
+            if let Some((size, p)) = game_binary_in(&e.path()) {
+                if best.as_ref().is_none_or(|(sz, _)| size > *sz) {
+                    best = Some((size, p));
+                }
             }
         }
     }
-    None
+    best.map(|(_, p)| p.to_string_lossy().into_owned())
+}
+
+/// The largest plausibly-the-game binary directly inside `dir`: name
+/// starts with the game's, is an .exe / extensionless / .x86_64 file, and
+/// is big enough to be the ~280 MB single-file bundle.
+fn game_binary_in(dir: &Path) -> Option<(u64, PathBuf)> {
+    let mut best: Option<(u64, PathBuf)> = None;
+    for e in std::fs::read_dir(dir).ok()?.flatten() {
+        let path = e.path();
+        if !path.is_file() {
+            continue;
+        }
+        let name = e.file_name().to_string_lossy().to_lowercase();
+        let looks_like = name.starts_with("rhythia") || name.starts_with("sound space") || name.starts_with("soundspace");
+        let ext_ok = name.ends_with(".exe") || name.ends_with(".x86_64") || !name.contains('.');
+        if !looks_like || !ext_ok {
+            continue;
+        }
+        // fs::metadata (not DirEntry::metadata) so symlinked game files —
+        // common in hand-built Steam libraries — report their real size.
+        let Ok(meta) = std::fs::metadata(&path) else { continue };
+        if meta.len() < 20_000_000 {
+            continue;
+        }
+        if best.as_ref().is_none_or(|(sz, _)| meta.len() > *sz) {
+            best = Some((meta.len(), path));
+        }
+    }
+    best
 }
 
 #[tauri::command]

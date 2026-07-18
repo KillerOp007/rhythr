@@ -17,14 +17,15 @@ endorsed by Rhythia or Capo Games.
      ffmpeg, is inside. On Debian/Ubuntu/Mint you can install the
      `.deb` instead (`sudo apt install ./rhythr_*.deb`), on
      Fedora/openSUSE the `.rpm`, on Arch the AUR package `rhythr-bin`.
-2. **Connect your game (recommended, once)** — open the app, go to
-   **Output → Advanced → Detect game**. The app finds your Steam
-   installation and reads the built-in skin textures and color sets
-   directly from your own `rhythia.exe`. Without this step, built-in
-   skins are only approximated. If Steam lives somewhere unusual, use
-   **From rhythia.exe…** and pick the exe yourself. On Linux the game
-   runs through Proton — detection covers native, Flatpak and Snap
-   Steam installs, and the extraction works on the same `rhythia.exe`.
+2. **Your game connects automatically** — on startup the app searches
+   every Steam library (Windows and Linux, Proton or the native build)
+   and reads the built-in skin textures and color sets directly from
+   your own game. The **Game card** on the left shows "game connected"
+   when it worked. If the game is installed somewhere unusual, click
+   **Locate…** on that card and pick the game's executable
+   (`rhythia.exe`, or the extensionless binary of the native Linux
+   build). Without a connected game, built-in skins are only
+   approximated.
 3. **Export a replay from the game** — in Rhythia, go to the map you
    played, **right-click it and choose Export** to save the replay as a
    `.rhr` file.
@@ -70,8 +71,9 @@ endorsed by Rhythia or Capo Games.
 - **"Map missing"** — the automatic download needs the map to exist on
   rhythia.com. For local/unpublished maps, use Browse next to Map and
   pick the `.sspm` file yourself.
-- **Built-in skin looks slightly off** — run **Detect game** (step 2).
-  Re-run it after game updates.
+- **Built-in skin looks slightly off** — check the Game card says
+  "game connected"; click **Detect** after game updates to re-read the
+  assets.
 - **Linux: AppImage won't start** — some distros lack FUSE2. Install
   `libfuse2` (Ubuntu/Debian) / `fuse2` (Arch), or run the file with
   `./rhythr_*.AppImage --appimage-extract-and-run`.

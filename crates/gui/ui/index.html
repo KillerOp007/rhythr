@@ -58,6 +58,19 @@
         </div>
       </section>
 
+      <section class="card" id="card-game">
+        <div class="card-head">
+          <h2>Game</h2>
+          <span class="head-actions">
+            <button class="btn small" id="btn-game-detect" title="Search your Steam libraries and read the built-in assets from the game">Detect</button>
+            <button class="btn small ghost" id="btn-game-exe" title="Pick the Rhythia executable yourself">Locate…</button>
+          </span>
+        </div>
+        <div class="card-body" id="game-body">
+          <p class="hint">Connect your Rhythia install so built-in skins use the exact textures and colors.</p>
+        </div>
+      </section>
+
       <section class="card" id="card-ghost">
         <div class="card-head">
           <h2>Ghost race</h2>
@@ -164,7 +177,7 @@
         <label class="field">
           <span>Hit sounds <em id="hitvol-val" class="mono">50%</em></span>
           <input type="range" id="set-hitvol" min="0" max="150" step="5" value="50" />
-          <span class="sub">The game's hit/miss sounds at the exact hit times. Needs game assets (Advanced). 0% = off.</span>
+          <span class="sub">The game's hit/miss sounds at the exact hit times. Needs the game connected (Game card). 0% = off.</span>
         </label>
         <label class="field">
           <span>Results screen</span>
@@ -188,18 +201,6 @@
         </label>
         <details id="advanced">
           <summary>Advanced</summary>
-          <div class="field">
-            <span>Game assets <em class="sub">for built-in skins (exact textures/colors)</em></span>
-            <div class="row">
-              <input type="text" id="set-assets" placeholder="not set" readonly />
-              <button class="btn small" id="btn-assets" title="Choose an extracted assets folder">…</button>
-            </div>
-            <div class="row">
-              <button class="btn small" id="btn-assets-auto" title="Find the Steam installation and extract from rhythia.exe">Detect game</button>
-              <button class="btn small ghost" id="btn-assets-exe" title="Pick rhythia.exe manually and extract from it">From rhythia.exe…</button>
-            </div>
-            <span class="sub" id="assets-note" hidden></span>
-          </div>
           <label class="field">
             <span>ffmpeg path</span>
             <input type="text" id="set-ffmpeg" placeholder="bundled / PATH" />
