@@ -3,6 +3,48 @@
 rhythr is an unofficial community tool and is not affiliated with or
 endorsed by Rhythia or Capo Games.
 
+## v0.3.3 — 2026-07-18
+
+Score cards, a drag-anywhere HUD editor, vertical renders for Shorts,
+and the game now connects itself.
+
+### Added
+
+- **Score cards**: the *Save frame* button is now **Save thumbnail** —
+  a shareable result card with cover, grade, stats and mods instead of
+  a raw frame grab. A dropdown picks the platform format: **Discord**
+  (1200×630), **YouTube** (1280×720), **TikTok/Shorts** (1080×1920) or
+  **Square** (1080×1080), each with its own layout.
+- **HUD editor**: flip the new **Edit HUD** switch and every HUD
+  element gets a handle — drag it anywhere on the preview (overlapping
+  is allowed), per side in ghost races. Positions save automatically
+  and the render always matches the preview. *Reset HUD overrides*
+  also restores the layout.
+- **Vertical rendering**: new **1080×1920** and **720×1280** output
+  sizes for Shorts/TikTok — gameplay keeps its full width and the HUD
+  moves into bands above and below it. The results screen re-lays out
+  in portrait too, with the cover kept exactly square.
+- **The game connects itself.** A visible **Game** card on the main
+  screen replaces the buried Advanced entry, and the app searches for
+  the game on startup: every Steam library on every drive (Windows
+  registry + defaults; native Linux, Flatpak and Snap), folder names
+  matched case-insensitively, native Linux builds included — no more
+  manual path picking.
+
+### Fixed
+
+- **Speed-mod renders no longer look too fast.** The game keeps the
+  note approach constant in *real* time — at 1.45x there are simply
+  more, tighter-packed notes in the air, approaching at the same
+  on-screen pace. Renders compressed the approach along with the
+  timeline, so notes flew in 45% faster than in-game. The approach now
+  matches the game exactly at any speed.
+- Replays that store wall-clock frame times (instead of song time) are
+  detected and rescaled by checking the recorded hits against the
+  map's note times, so a speed mod can never apply twice or get lost.
+- The results screen shows the **difficulty** between the `< >`
+  brackets (it repeated the map title).
+
 ## v0.3.2 — 2026-07-17
 
 The custom-skin release: renders now match the game on ANY skin, not
