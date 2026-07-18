@@ -60,6 +60,12 @@ pub struct SceneParams {
     /// [`crate::mods::HARDROCK_GRID_SCALE`]). Note positions are already
     /// transformed in the map; this only widens the border.
     pub grid_scale: f32,
+    /// Replay speed already folded into `approach_rate` by [`apply_speed`]
+    /// (1.0 until then). Depth thresholds that are real-world constants in
+    /// the game — the HalfGhost fade zone — multiply it back out.
+    ///
+    /// [`apply_speed`]: SceneParams::apply_speed
+    pub speed: f32,
     /// near/far clip planes (raylib defaults).
     pub near: f32,
     pub far: f32,
@@ -86,6 +92,7 @@ impl Default for SceneParams {
             note_opacity: 1.0,
             half_ghost: false,
             grid_scale: 1.0,
+            speed: 1.0,
             near: 0.01,
             far: 1000.0,
         }
@@ -163,7 +170,9 @@ impl SceneParams {
     /// to match the game's. (User-verified: identical play, same skin —
     /// without this the notes flew in 45% faster than in game at 1.45x.)
     pub fn apply_speed(&mut self, speed: f32) {
-        self.approach_rate /= speed.clamp(0.25, 3.0);
+        let s = speed.clamp(0.25, 3.0);
+        self.approach_rate /= s;
+        self.speed = s;
     }
 
     pub fn approach_ms(&self) -> f32 {
@@ -224,8 +233,13 @@ impl SceneParams {
             .powf(1.3);
         let mut alpha = fade_in;
         if self.half_ghost {
-            let start = 12.0 / 50.0 * self.approach_rate;
-            let end = 3.0 / 50.0 * self.approach_rate;
+            // The fade zone is a fixed pair of world depths derived from the
+            // CONFIG approach rate — the game's thresholds don't move under a
+            // speed mod (apply_speed only slows the approach motion), so undo
+            // its division here.
+            let config_ar = self.approach_rate * self.speed;
+            let start = 12.0 / 50.0 * config_ar;
+            let end = 3.0 / 50.0 * config_ar;
             let t = ((depth - end) / (start - end))
                 .clamp(0.0, 1.0)
                 .powf(HALFGHOST_CURVE);
@@ -359,5 +373,25 @@ mod tests {
         let mid = (far + near) / 2.0;
         assert!(p.note_opacity(far) > p.note_opacity(mid));
         assert!(p.note_opacity(mid) > p.note_opacity(near));
+    }
+
+    #[test]
+    fn speed_mods_keep_the_halfghost_fade_zone_in_place() {
+        // The fade zone is a fixed pair of world depths in the game;
+        // apply_speed slows the approach MOTION but must not pull the
+        // fade thresholds toward the plane with it.
+        let base = SceneParams {
+            fade_length: 0.1,
+            half_ghost: true,
+            ..SceneParams::default()
+        };
+        let mut fast = base;
+        fast.apply_speed(1.45);
+        for depth in [0.5_f32, 1.47, 3.0, 5.88, 7.0] {
+            assert!(
+                (base.note_opacity(depth) - fast.note_opacity(depth)).abs() < 1e-5,
+                "fade moved at depth {depth}"
+            );
+        }
     }
 }
