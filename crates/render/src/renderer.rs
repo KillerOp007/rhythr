@@ -1642,27 +1642,6 @@ impl Renderer {
             stats.score = replay.total_score;
         }
 
-        // The cursor path across the whole run (or up to the fail), plus
-        // where the cursor sat when each miss happened.
-        let run_end = if replay.failed() {
-            replay.fail_time_ms as f64
-        } else {
-            replay.length_ms()
-        }
-        .max(1.0);
-        let samples = 700;
-        let path: Vec<(f32, f32)> = (0..=samples)
-            .map(|i| replay.cursor_at(run_end * i as f64 / samples as f64))
-            .collect();
-        let miss_points: Vec<(f32, f32)> = hud_state
-            .results()
-            .iter()
-            .filter(|r| !r.hit)
-            .filter_map(|r| map.notes.get(r.note_index))
-            .filter(|n| (n.time_ms as f64) <= run_end)
-            .map(|n| replay.cursor_at(n.time_ms as f64))
-            .collect();
-
         // Cover texture (sharp only; the card background is a flat colour).
         let cover_rgba = map
             .cover
@@ -1743,8 +1722,6 @@ impl Renderer {
             config,
             self.width,
             self.height,
-            &path,
-            &miss_points,
         ));
 
         let vbuf = self

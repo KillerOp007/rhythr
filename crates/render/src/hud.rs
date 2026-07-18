@@ -1482,12 +1482,10 @@ pub fn build_results(
     b.verts
 }
 
-/// Builds the shareable score-card overlay (title block, grade, stats,
-/// cursor-path trace) for a small landscape canvas — the Discord-embed
+/// Builds the shareable score-card overlay (title block, grade and a
+/// roomy stat spread) for a small landscape canvas — the Discord-embed
 /// companion to a full video. The cover quad and background are drawn by
-/// the renderer; `path` is the pre-sampled cursor path in world space and
-/// `miss_points` the cursor positions at each missed note's time.
-#[allow(clippy::too_many_arguments)]
+/// the renderer.
 pub fn build_card(
     atlas: &FontAtlas,
     replay: &Replay,
@@ -1496,8 +1494,6 @@ pub fn build_card(
     cfg: &crate::config::SkinConfig,
     width: u32,
     height: u32,
-    path: &[(f32, f32)],
-    miss_points: &[(f32, f32)],
 ) -> Vec<HudVertex> {
     let mut b = HudBuilder::new(atlas);
     let (w, h) = (width as f32, height as f32);
@@ -1535,7 +1531,7 @@ pub fn build_card(
             muted,
         );
     }
-    b.text(&replay.player_name, tx, h * 0.395, h * 0.055, Align::Left, ink);
+    b.text(&replay.player_name, tx, h * 0.40, h * 0.055, Align::Left, ink);
 
     // --- Big grade, top right -------------------------------------------
     let failed = replay.failed();
@@ -1547,57 +1543,42 @@ pub fn build_card(
     b.text(
         glabel,
         w * 0.90,
-        h * 0.32,
-        h * 0.26,
+        h * 0.33,
+        h * 0.27,
         Align::Center,
         srgb8_to_linear(gcol, 1.0),
     );
 
-    // --- Stat block, lower left -----------------------------------------
-    b.text("ACCURACY", w * 0.05, h * 0.56, h * 0.032, Align::Left, muted);
+    // --- Headline stats: accuracy and score share the wide middle -------
     let acc = {
         let s = format!("{:.2}", stats.accuracy_pct);
         format!("{}%", s.trim_end_matches('0').trim_end_matches('.'))
     };
-    b.text(&acc, w * 0.05, h * 0.665, h * 0.10, Align::Left, ink);
-    b.text("SCORE", w * 0.05, h * 0.745, h * 0.032, Align::Left, muted);
-    b.text(&thousands(stats.score), w * 0.05, h * 0.845, h * 0.075, Align::Left, ink);
-    let mut line = format!("{} hits · {} misses", stats.hits, stats.misses);
-    if (replay.speed - 1.0).abs() >= 0.005 {
-        line += &format!(" · {:.2}x", replay.speed);
-    }
-    if failed {
-        line += " · failed";
-    }
-    b.text(&line, w * 0.05, h * 0.93, h * 0.038, Align::Left, muted);
+    b.text("ACCURACY", w * 0.06, h * 0.60, h * 0.034, Align::Left, muted);
+    b.text(&acc, w * 0.06, h * 0.725, h * 0.115, Align::Left, ink);
+    b.text("SCORE", w * 0.52, h * 0.60, h * 0.034, Align::Left, muted);
+    b.text(&thousands(stats.score), w * 0.52, h * 0.725, h * 0.115, Align::Left, ink);
 
-    // --- Cursor-path trace, lower right ---------------------------------
-    // World is a square (cursor clamps at ±~1.37/±1.52 under hardrock);
-    // keep it square on the card so the shape stays honest.
-    let (pcx, pcy) = (w * 0.80, h * 0.70);
-    let scale = h * 0.21 / 1.55;
-    let to_card = |p: (f32, f32)| [pcx + p.0 * scale, pcy - p.1 * scale];
-    let trail = srgb8_to_linear(
-        [
-            (cfg.cursor_color[0] * 255.0) as u8,
-            (cfg.cursor_color[1] * 255.0) as u8,
-            (cfg.cursor_color[2] * 255.0) as u8,
-        ],
-        0.42,
-    );
-    // Thin and translucent: long maps build up density instead of mush.
-    for pair in path.windows(2) {
-        b.line(to_card(pair[0]), to_card(pair[1]), (h * 0.0028).max(1.2), trail);
+    // --- Secondary row, spread evenly across the width ------------------
+    let mut cells: Vec<(String, String)> = vec![
+        ("HITS".into(), stats.hits.to_string()),
+        ("MISSES".into(), stats.misses.to_string()),
+        ("SPEED".into(), format!("{:.2}x", replay.speed)),
+    ];
+    if failed {
+        cells.push(("FAILED AT".into(), clock(replay.fail_time_ms as f64)));
+    } else if replay.points > 0.0 {
+        cells.push(("RP".into(), format!("{:.0}", replay.points)));
     }
-    let miss_col = srgb8_to_linear([232, 48, 64], 0.95);
-    for &mp in miss_points {
-        let [x, y] = to_card(mp);
-        let r = (h * 0.008).max(3.0);
-        b.rect(x - r, y - r, r * 2.0, r * 2.0, miss_col);
+    let (left, right) = (w * 0.06, w * 0.80);
+    for (i, (label, value)) in cells.iter().enumerate() {
+        let x = left + (right - left) * i as f32 / (cells.len() - 1).max(1) as f32;
+        b.text(label, x, h * 0.845, h * 0.030, Align::Left, muted);
+        b.text(value, x, h * 0.935, h * 0.062, Align::Left, ink);
     }
 
     // Quiet corner branding — makes shared cards findable.
-    b.text("rhythr", w * 0.985 - atlas.measure("rhythr", h * 0.028), h * 0.965, h * 0.028, Align::Left, muted);
+    b.text("rhythr", w * 0.985 - atlas.measure("rhythr", h * 0.028), h * 0.09, h * 0.028, Align::Left, muted);
 
     b.verts
 }
