@@ -122,11 +122,15 @@ pub fn grid_to_world(gx: f32, gy: f32) -> (f32, f32) {
 impl SceneParams {
     /// View·projection matrix for a frame of the given pixel aspect ratio,
     /// with the camera swayed by the cursor position (parallax).
-    pub fn view_proj(&self, aspect: f32, cursor: (f32, f32)) -> Mat4 {
+    ///
+    /// `portrait` is decided by the caller from the OUTPUT frame, not this
+    /// viewport: a ghost-split half of a 16:9 render is narrower than tall
+    /// too, but must keep the landscape camera it always had.
+    pub fn view_proj(&self, aspect: f32, portrait: bool, cursor: (f32, f32)) -> Mat4 {
         // Portrait frames keep the HORIZONTAL field of view of the usual
         // landscape render (fov_y is widened so fov_x stays put) — the
         // square playfield then fills the width instead of vanishing.
-        let fov_y = if aspect < 1.0 {
+        let fov_y = if portrait && aspect < 1.0 {
             2.0 * ((self.fov_y_deg.to_radians() * 0.5).tan() / aspect).atan()
         } else {
             self.fov_y_deg.to_radians()
@@ -263,7 +267,7 @@ mod tests {
         // Every cell of the 3×3 grid must project inside the frustum on the
         // hit plane — the playfield fits the camera.
         let p = SceneParams::default();
-        let vp = p.view_proj(16.0 / 9.0, (0.0, 0.0));
+        let vp = p.view_proj(16.0 / 9.0, false, (0.0, 0.0));
         for gy in 0..3 {
             for gx in 0..3 {
                 let (x, y) = grid_to_world(gx as f32, gy as f32);
@@ -282,7 +286,7 @@ mod tests {
         // A fixed-size note should subtend less screen space as depth grows
         // — the essence of the perspective look.
         let p = SceneParams::default();
-        let vp = p.view_proj(1.0, (0.0, 0.0));
+        let vp = p.view_proj(1.0, false, (0.0, 0.0));
         let screen_half = |depth: f32| {
             let c = vp * glam::Vec4::new(GRID_SPACING, 0.0, -depth, 1.0);
             (c.x / c.w).abs()
@@ -324,7 +328,7 @@ mod tests {
             ..SceneParams::default()
         };
         for cursor in [(0.0, 0.0), (-1.0, 0.55), (1.3, -0.9)] {
-            let vp = p.view_proj(16.0 / 9.0, cursor);
+            let vp = p.view_proj(16.0 / 9.0, false, cursor);
             let c = vp * glam::Vec4::new(cursor.0, cursor.1, 0.0, 1.0);
             let ndc = (c.x / c.w, c.y / c.w);
             assert!(

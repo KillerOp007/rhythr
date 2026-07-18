@@ -160,6 +160,14 @@ impl Renderer {
         pollster::block_on(Self::new_async(width, height, hud_font))
     }
 
+    /// Whether the OUTPUT frame is portrait (Shorts/TikTok). Layout and
+    /// camera decisions key off this, never off a viewport slice: a
+    /// ghost-split half of a 16:9 frame is 8:9 — narrower than tall — but
+    /// must keep the landscape look it always had.
+    fn portrait_output(&self) -> bool {
+        (self.width as f32) < 0.9 * self.height as f32
+    }
+
     async fn new_async(
         width: u32,
         height: u32,
@@ -905,7 +913,7 @@ impl Renderer {
         let (vp_x, vp_w) = viewport;
         let aspect = vp_w as f32 / self.height as f32;
         let cursor = replay.cursor_at(song_time_ms);
-        let view_proj = params.view_proj(aspect, cursor);
+        let view_proj = params.view_proj(aspect, self.portrait_output(), cursor);
 
         let (corner, outline) = config.note_shape.sdf_params();
         let globals = Globals {
@@ -1294,6 +1302,7 @@ impl Renderer {
                 &miss_marks,
                 vp_w,
                 self.height,
+                self.portrait_output(),
             )
         });
         if let Some(mut verts) = hud_verts.map(|v| v.0).filter(|v| !v.is_empty()) {
@@ -1541,6 +1550,7 @@ impl Renderer {
                 self.height,
                 true,
                 crate::hud::ResultsPart::Header,
+                self.portrait_output(),
             ));
         }
         for (side_replay, side_stats, x_off, w_eff) in &sides {
@@ -1560,6 +1570,7 @@ impl Renderer {
                 self.height,
                 !icons.is_empty(),
                 part,
+                self.portrait_output(),
             );
             verts.extend(side_verts.into_iter().map(|mut v| {
                 v.pos[0] += x_off;
@@ -1829,7 +1840,7 @@ impl Renderer {
         let vp_w = if half_width { self.width / 2 } else { self.width };
         let aspect = vp_w as f32 / self.height as f32;
         let cursor = replay.cursor_at(song_time_ms);
-        let view_proj = params.view_proj(aspect, cursor);
+        let view_proj = params.view_proj(aspect, self.portrait_output(), cursor);
         let field = self.playfield_screen(&view_proj, params.playfield_half(), vp_w);
         let stats = hud_state.stats_at(map, replay, song_time_ms);
         crate::hud::build_hud(
@@ -1844,6 +1855,7 @@ impl Renderer {
             &[],
             vp_w,
             self.height,
+            self.portrait_output(),
         )
         .1
     }
@@ -2091,7 +2103,7 @@ fn compose_background(config: &SkinConfig, width: u32, height: u32) -> Option<(V
     let (fw, fh) = (width as f32, height as f32);
     let mut out = vec![0u8; (width * height * 4) as usize];
     let params = crate::scene::SceneParams::from(config);
-    let view_proj = params.view_proj(fw / fh, (0.0, 0.0));
+    let view_proj = params.view_proj(fw / fh, fw < 0.9 * fh, (0.0, 0.0));
     let project = |x: f32, y: f32| -> (f32, f32) {
         let p = view_proj * glam::Vec4::new(x, y, 0.0, 1.0);
         let ndc = p / p.w.max(1e-6);

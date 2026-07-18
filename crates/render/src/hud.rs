@@ -639,6 +639,11 @@ pub fn build_hud(
     miss_marks: &[(f32, f32, f64)],
     width: u32,
     height: u32,
+    // Portrait frames (Shorts/TikTok) re-home the stat columns into rows
+    // above and below the field — the drag editor can rearrange from there.
+    // The caller decides from the OUTPUT frame, not this viewport (a
+    // ghost-split half is 8:9 but keeps the landscape layout).
+    portrait: bool,
 ) -> (Vec<HudVertex>, Vec<HudBox>) {
     let hud = &cfg.hud;
     let positions = &cfg.hud.positions;
@@ -646,9 +651,6 @@ pub fn build_hud(
     let mut b = HudBuilder::new(atlas);
     let (w, _h) = (width as f32, height as f32);
     let refd = w.min(_h);
-    // Portrait frames (Shorts/TikTok) re-home the stat columns into rows
-    // above and below the field — the drag editor can rearrange from there.
-    let portrait = w / _h < 0.9;
     // Sizes measured against a same-moment game/render pair at the user's
     // settings (ratios of the playfield bracket span).
     let label_px = refd * 0.0163;
@@ -1373,13 +1375,14 @@ pub fn build_results(
     height: u32,
     icons_shown: bool,
     part: ResultsPart,
+    // Portrait frames stack the blocks under a smaller (always square)
+    // cover; fonts and strides reference the short edge so they match the
+    // landscape look at the same output width. Decided by the caller from
+    // the OUTPUT frame, never from a ghost-split half.
+    portrait: bool,
 ) -> Vec<HudVertex> {
     let mut b = HudBuilder::new(atlas);
     let (w, h) = (width as f32, height as f32);
-    // Portrait frames stack the blocks under a smaller (always square)
-    // cover; fonts and strides reference the short edge so they match the
-    // landscape look at the same output width.
-    let portrait = w / h < 0.9;
     let fr = w.min(h);
     let white = srgb8_to_linear([240, 240, 245], 1.0);
     let green = srgb8_to_linear([60, 220, 90], 1.0);
