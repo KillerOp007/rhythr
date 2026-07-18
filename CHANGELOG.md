@@ -3,6 +3,15 @@
 rhythr is an unofficial community tool and is not affiliated with or
 endorsed by Rhythia or Capo Games.
 
+## v0.3.4 — 2026-07-18
+
+### Added
+
+- **Reset layout**: a button next to the *Edit HUD* switch puts every
+  dragged HUD element — meters included — back to its standard
+  position, without touching visibility or sizes ("Reset all to
+  config" on the HUD tab still resets everything).
+
 ## v0.3.3 — 2026-07-18
 
 Score cards, a drag-anywhere HUD editor, vertical renders for Shorts,
