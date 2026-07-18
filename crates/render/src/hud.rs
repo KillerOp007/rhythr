@@ -1296,16 +1296,29 @@ pub fn build_results(
             Align::Left,
             white,
         );
-        if !map.meta.title.is_empty() {
-            b.text(
-                &format!("< {} >", map.meta.title),
-                tx,
-                h * 0.117,
-                h * 0.026,
-                Align::Left,
-                green,
-            );
-        }
+        // The green line under the song is the DIFFICULTY, not the title:
+        // the map's custom name when set, else the standard tier name.
+        let diff = if !map.meta.custom_difficulty_name.is_empty() {
+            map.meta.custom_difficulty_name.clone()
+        } else {
+            match map.meta.difficulty {
+                1 => "Easy",
+                2 => "Medium",
+                3 => "Hard",
+                4 => "LOGIC?",
+                5 => "Tasukete",
+                _ => "N/A",
+            }
+            .to_string()
+        };
+        b.text(
+            &format!("< {diff} >"),
+            tx,
+            h * 0.117,
+            h * 0.026,
+            Align::Left,
+            green,
+        );
         if !map.meta.mappers.is_empty() {
             b.text(
                 &format!("by {}", map.meta.mappers.join(", ")),
@@ -1465,6 +1478,126 @@ pub fn build_results(
         let mx = if part == ResultsPart::Side { w * 0.63 } else { w * 0.58 };
         b.text(&mods, mx, my, h * 0.026, Align::Left, white);
     }
+
+    b.verts
+}
+
+/// Builds the shareable score-card overlay (title block, grade, stats,
+/// cursor-path trace) for a small landscape canvas — the Discord-embed
+/// companion to a full video. The cover quad and background are drawn by
+/// the renderer; `path` is the pre-sampled cursor path in world space and
+/// `miss_points` the cursor positions at each missed note's time.
+#[allow(clippy::too_many_arguments)]
+pub fn build_card(
+    atlas: &FontAtlas,
+    replay: &Replay,
+    map: &Map,
+    stats: &HudStats,
+    cfg: &crate::config::SkinConfig,
+    width: u32,
+    height: u32,
+    path: &[(f32, f32)],
+    miss_points: &[(f32, f32)],
+) -> Vec<HudVertex> {
+    let mut b = HudBuilder::new(atlas);
+    let (w, h) = (width as f32, height as f32);
+    let ink = srgb8_to_linear(cfg.interface_text_color, 1.0);
+    let muted = srgb8_to_linear(cfg.interface_text_color, 0.55);
+    let green = srgb8_to_linear([60, 220, 90], 1.0);
+
+    // --- Title block, right of the cover --------------------------------
+    let tx = w * 0.25;
+    let title_px = h * 0.073;
+    let max_w = w * 0.53;
+    let fit = (max_w / atlas.measure(&map.meta.song_name, title_px)).min(1.0);
+    b.text(&map.meta.song_name, tx, h * 0.155, title_px * fit, Align::Left, ink);
+    let diff = if !map.meta.custom_difficulty_name.is_empty() {
+        map.meta.custom_difficulty_name.clone()
+    } else {
+        match map.meta.difficulty {
+            1 => "Easy",
+            2 => "Medium",
+            3 => "Hard",
+            4 => "LOGIC?",
+            5 => "Tasukete",
+            _ => "N/A",
+        }
+        .to_string()
+    };
+    b.text(&format!("< {diff} >"), tx, h * 0.235, h * 0.045, Align::Left, green);
+    if !map.meta.mappers.is_empty() {
+        b.text(
+            &format!("by {}", map.meta.mappers.join(", ")),
+            tx,
+            h * 0.30,
+            h * 0.038,
+            Align::Left,
+            muted,
+        );
+    }
+    b.text(&replay.player_name, tx, h * 0.395, h * 0.055, Align::Left, ink);
+
+    // --- Big grade, top right -------------------------------------------
+    let failed = replay.failed();
+    let (glabel, gcol) = if failed {
+        ("F", [200u8, 40, 45])
+    } else {
+        (stats.grade.label(), stats.grade.color())
+    };
+    b.text(
+        glabel,
+        w * 0.90,
+        h * 0.32,
+        h * 0.26,
+        Align::Center,
+        srgb8_to_linear(gcol, 1.0),
+    );
+
+    // --- Stat block, lower left -----------------------------------------
+    b.text("ACCURACY", w * 0.05, h * 0.56, h * 0.032, Align::Left, muted);
+    let acc = {
+        let s = format!("{:.2}", stats.accuracy_pct);
+        format!("{}%", s.trim_end_matches('0').trim_end_matches('.'))
+    };
+    b.text(&acc, w * 0.05, h * 0.665, h * 0.10, Align::Left, ink);
+    b.text("SCORE", w * 0.05, h * 0.745, h * 0.032, Align::Left, muted);
+    b.text(&thousands(stats.score), w * 0.05, h * 0.845, h * 0.075, Align::Left, ink);
+    let mut line = format!("{} hits · {} misses", stats.hits, stats.misses);
+    if (replay.speed - 1.0).abs() >= 0.005 {
+        line += &format!(" · {:.2}x", replay.speed);
+    }
+    if failed {
+        line += " · failed";
+    }
+    b.text(&line, w * 0.05, h * 0.93, h * 0.038, Align::Left, muted);
+
+    // --- Cursor-path trace, lower right ---------------------------------
+    // World is a square (cursor clamps at ±~1.37/±1.52 under hardrock);
+    // keep it square on the card so the shape stays honest.
+    let (pcx, pcy) = (w * 0.80, h * 0.70);
+    let scale = h * 0.21 / 1.55;
+    let to_card = |p: (f32, f32)| [pcx + p.0 * scale, pcy - p.1 * scale];
+    let trail = srgb8_to_linear(
+        [
+            (cfg.cursor_color[0] * 255.0) as u8,
+            (cfg.cursor_color[1] * 255.0) as u8,
+            (cfg.cursor_color[2] * 255.0) as u8,
+        ],
+        0.42,
+    );
+    // Thin and translucent: long maps build up density instead of mush.
+    for pair in path.windows(2) {
+        b.line(to_card(pair[0]), to_card(pair[1]), (h * 0.0028).max(1.2), trail);
+    }
+    let miss_col = srgb8_to_linear([232, 48, 64], 0.95);
+    for &mp in miss_points {
+        let [x, y] = to_card(mp);
+        let r = (h * 0.008).max(3.0);
+        b.rect(x - r, y - r, r * 2.0, r * 2.0, miss_col);
+    }
+
+    // Quiet corner branding — makes shared cards findable.
+    b.text("rhythr", w * 0.985 - atlas.measure("rhythr", h * 0.028), h * 0.965, h * 0.028, Align::Left, muted);
 
     b.verts
 }
