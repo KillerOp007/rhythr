@@ -294,6 +294,7 @@ details#advanced > div, details#advanced > label { margin-bottom: 10px; }
 #hud-edit-layer { position: absolute; inset: 0; z-index: 25; pointer-events: none; }
 .hud-edit-box {
   position: absolute; pointer-events: auto; cursor: grab;
+  touch-action: none; /* else the browser pans and cancels touch drags */
   border: 1.5px dashed rgba(47, 214, 208, 0.75); border-radius: 4px;
   background: rgba(47, 214, 208, 0.06);
 }

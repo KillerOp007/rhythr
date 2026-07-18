@@ -278,10 +278,20 @@ function renderOutputTab() {
   }
 }
 
+// In-flight connect progress; status refreshes re-render the card with no
+// note, which must not wipe it.
+let gameNote = null;
+
+function setGameNote(note) {
+  gameNote = note;
+  renderGameCard();
+}
+
 function renderGameCard(note) {
   const body = $("game-body");
   const ok = status?.game_ok;
   const path = status?.settings?.game_assets;
+  note = note ?? gameNote;
   let html = "";
   if (ok) {
     html += `<span class="chip ok">game connected</span>`;
@@ -295,12 +305,13 @@ function renderGameCard(note) {
 }
 
 async function applyGameAssets(path) {
-  renderGameCard("Extracting assets from the game… (a few seconds)");
+  setGameNote("Extracting assets from the game… (a few seconds)");
   try {
     await call(() => invoke("set_game_assets", { path }));
-    renderGameCard();
+    setGameNote(null);
     schedulePreview();
   } catch (e) {
+    setGameNote(null);
     renderGameCard(String(e));
   }
 }
@@ -309,9 +320,10 @@ async function applyGameAssets(path) {
 // button and wonder why their skin looks approximated.
 async function autoConnectGame() {
   if (status?.game_ok) return;
-  renderGameCard("Searching your Steam libraries…");
+  setGameNote("Searching your Steam libraries…");
   const exe = await invoke("detect_game").catch(() => null);
   if (!exe) {
+    setGameNote(null);
     renderGameCard("Not found automatically — if the game is installed somewhere unusual, click Locate… and pick its executable.");
     return;
   }
@@ -443,8 +455,21 @@ function dragGhostBox(show, box) {
 // the live preview, whether the switch stays on or not.
 let hudEditOn = false;
 let hudDrag = null;
+let hudRefreshQueued = false;
+
+function flushHudRefresh() {
+  if (!hudRefreshQueued) return;
+  hudRefreshQueued = false;
+  refreshHudBoxes();
+}
 
 async function refreshHudBoxes() {
+  // A preview can land mid-drag; rebuilding the layer then would remove
+  // the captured box and kill the drag. Defer until the drag ends.
+  if (hudDrag) {
+    hudRefreshQueued = true;
+    return;
+  }
   const layer = $("hud-edit-layer");
   if (!hudEditOn || !status?.replay || !status?.map) {
     layer.innerHTML = "";
@@ -534,7 +559,18 @@ function initHudEdit() {
     } catch (err) {
       showPreviewMsg(String(err));
     }
+    flushHudRefresh();
   });
+  // Touch panning or a lost capture cancels the gesture: abandon the drag
+  // without saving a position.
+  const abortDrag = () => {
+    if (!hudDrag) return;
+    hudDrag.box.classList.remove("dragging");
+    hudDrag = null;
+    flushHudRefresh();
+  };
+  layer.addEventListener("pointercancel", abortDrag);
+  layer.addEventListener("lostpointercapture", abortDrag);
 }
 
 function initMeterDrag() {
@@ -794,6 +830,9 @@ async function applyStatus(st) {
     $("preview-img").hidden = true;
     $("preview-tools").hidden = true;
     $("dropzone").hidden = false;
+    // Boxes from the previous pair would float interactively over the
+    // dropzone otherwise (the no-pair path clears the layer).
+    refreshHudBoxes();
   }
 }
 
@@ -924,9 +963,10 @@ function initControls() {
     if (p) await applyGameAssets(p);
   });
   $("btn-game-detect").addEventListener("click", async () => {
-    renderGameCard("Searching your Steam libraries…");
+    setGameNote("Searching your Steam libraries…");
     const exe = await invoke("detect_game").catch(() => null);
     if (!exe) {
+      setGameNote(null);
       renderGameCard("Not found in any Steam library — click Locate… and pick the game's executable.");
       return;
     }
