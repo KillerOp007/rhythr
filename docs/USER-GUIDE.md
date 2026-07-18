@@ -44,16 +44,22 @@ endorsed by Rhythia or Capo Games.
 ## The app, in detail
 
 - **Preview & timeline** — drag the timeline to scrub through the run.
-  The green graph is your health, red ticks are misses. **Save frame**
-  exports the current preview as a PNG at full output resolution.
+  The green graph is your health, red ticks are misses.
+- **Save thumbnail** — saves a shareable score card of the run (cover
+  art, grade, stats and mods) as a PNG. The dropdown picks the platform
+  format: **Discord** (1200 × 630), **YouTube** (1280 × 720),
+  **TikTok / Shorts** (1080 × 1920) or **Square** (1080 × 1080).
 - **Edit HUD** — the switch next to *Save thumbnail* outlines every HUD
   element in the preview; drag any of them wherever you like (make room
-  for a handcam, stack panels, overlap things — up to you). Positions
-  save instantly and apply to every render; "Reset all to config" on
-  the HUD tab puts everything back.
-- **Vertical renders** — pick a vertical resolution (1080 × 1920) for
-  TikTok/Shorts: the playfield fills the width and the stats move into
-  rows above and below it. Rearrange them with Edit HUD as you like.
+  for a handcam, stack panels, overlap things — up to you). In a ghost
+  race the layout applies within each side's own half. Positions save
+  automatically and the render always matches the preview; "Reset all
+  to config" on the HUD tab puts everything back — layout included.
+- **Vertical renders** — pick a vertical resolution (1080 × 1920 or
+  720 × 1280) for TikTok/Shorts: gameplay keeps its full width and the
+  HUD moves into bands above and below it. The results screen re-lays
+  out in portrait too, with a square cover. Rearrange the HUD with
+  Edit HUD as you like.
 - **HUD tab** — toggle any HUD element (combo ring, accuracy, score,
   miss markers, …) on or off. Your choices are saved and apply to every
   future render; the yellow dot marks elements that differ from the
