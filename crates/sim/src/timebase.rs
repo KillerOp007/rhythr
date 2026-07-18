@@ -28,9 +28,14 @@ pub fn time_scale(map: &Map, replay: &Replay) -> f64 {
         f.ms *= speed;
     }
     let rescaled = match_hits(&map.notes, &scaled.frames, DEFAULT_WINDOW_MS).derived_hits();
-    // Only switch on a clear win — a dense map still scores coincidental
-    // matches in the wrong base.
-    if rescaled as f64 > as_is as f64 * 1.05 {
+    // Only switch on a clear win backed by real evidence. The ratio guards
+    // against coincidental matches on a dense map; the absolute floor
+    // guards against a WRONG map (hash-mismatch download, user-picked
+    // file), where both counts are pure noise and e.g. 1-vs-0 must not
+    // rescale the replay. A genuine wall-clock replay recovers essentially
+    // every recorded hit in the right base, so demand at least half.
+    let floor = (replay.hits.max(0) as u32 / 2).max(4);
+    if rescaled >= floor && rescaled as f64 > as_is as f64 * 1.05 {
         speed
     } else {
         1.0
@@ -133,5 +138,17 @@ mod tests {
         // Idempotent: a second pass changes nothing.
         assert!(!normalize(&mut r, &map));
         assert!((r.frames[3].ms - 5800.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn coincidental_matches_on_a_wrong_map_do_not_rescale() {
+        // A non-matching map (wrong version / user-picked file): neither
+        // base really lines up, but one rescaled hit lands inside the
+        // window by luck. 1-vs-0 must not mutate the replay.
+        let map = map_with(&[1450, 8000, 16000]);
+        let mut r = replay_with(1.45, &[1010.0, 2000.0, 3000.0, 4000.0]);
+        assert_eq!(time_scale(&map, &r), 1.0);
+        assert!(!normalize(&mut r, &map));
+        assert_eq!(r.frames[0].ms, 1010.0);
     }
 }

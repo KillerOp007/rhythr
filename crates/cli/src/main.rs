@@ -290,6 +290,12 @@ fn run() -> anyhow::Result<bool> {
             }
             let cfg = load_config(&config, &game_assets)?;
 
+            // Normalize BEFORE deriving the range: a wall-clock replay's raw
+            // fail time / length is 1/speed of the song and would truncate
+            // the render (render_video normalizes again — idempotent).
+            let mut r = r;
+            rhythia_sim::timebase::normalize(&mut r, &m);
+
             let report = integrity::verify_replay(&r, &m);
             if !report.consistent() {
                 eprintln!("warning: replay data is inconsistent — possibly manipulated");
