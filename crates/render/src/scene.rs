@@ -123,7 +123,15 @@ impl SceneParams {
     /// View·projection matrix for a frame of the given pixel aspect ratio,
     /// with the camera swayed by the cursor position (parallax).
     pub fn view_proj(&self, aspect: f32, cursor: (f32, f32)) -> Mat4 {
-        let proj = Mat4::perspective_rh(self.fov_y_deg.to_radians(), aspect, self.near, self.far);
+        // Portrait frames keep the HORIZONTAL field of view of the usual
+        // landscape render (fov_y is widened so fov_x stays put) — the
+        // square playfield then fills the width instead of vanishing.
+        let fov_y = if aspect < 1.0 {
+            2.0 * ((self.fov_y_deg.to_radians() * 0.5).tan() / aspect).atan()
+        } else {
+            self.fov_y_deg.to_radians()
+        };
+        let proj = Mat4::perspective_rh(fov_y, aspect, self.near, self.far);
         let view = if self.spin {
             // SpinCamera: the camera rotates to keep the cursor dead centre —
             // the world pans around it like looking through a VR headset.

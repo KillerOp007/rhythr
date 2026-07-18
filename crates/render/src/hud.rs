@@ -570,6 +570,54 @@ fn clock(ms: f64) -> String {
     format!("{:02}:{:02}", total / 60, total % 60)
 }
 
+/// A movable HUD element's on-screen bounds in frame pixels, as actually
+/// drawn — the drag editor's hitboxes come straight from these, so hitbox
+/// and pixels can never drift apart.
+#[derive(Debug, Clone)]
+pub struct HudBox {
+    pub key: &'static str,
+    pub x0: f32,
+    pub y0: f32,
+    pub x1: f32,
+    pub y1: f32,
+}
+
+/// Closes out one movable element: applies the user's position override
+/// (normalised centre → pixel translate of everything drawn since `start`)
+/// and records the resulting bounds.
+fn finish_element(
+    b: &mut HudBuilder,
+    start: usize,
+    key: &'static str,
+    positions: &std::collections::BTreeMap<String, [f32; 2]>,
+    w: f32,
+    h: f32,
+    boxes: &mut Vec<HudBox>,
+) {
+    if b.verts.len() == start {
+        return;
+    }
+    let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+    for v in &b.verts[start..] {
+        x0 = x0.min(v.pos[0]);
+        y0 = y0.min(v.pos[1]);
+        x1 = x1.max(v.pos[0]);
+        y1 = y1.max(v.pos[1]);
+    }
+    if let Some(p) = positions.get(key) {
+        let (dx, dy) = (p[0] * w - (x0 + x1) * 0.5, p[1] * h - (y0 + y1) * 0.5);
+        for v in &mut b.verts[start..] {
+            v.pos[0] += dx;
+            v.pos[1] += dy;
+        }
+        x0 += dx;
+        x1 += dx;
+        y0 += dy;
+        y1 += dy;
+    }
+    boxes.push(HudBox { key, x0, y0, x1, y1 });
+}
+
 /// Playfield geometry the HUD anchors to, in pixels.
 pub struct Playfield {
     pub cx: f32,
@@ -591,11 +639,16 @@ pub fn build_hud(
     miss_marks: &[(f32, f32, f64)],
     width: u32,
     height: u32,
-) -> Vec<HudVertex> {
+) -> (Vec<HudVertex>, Vec<HudBox>) {
     let hud = &cfg.hud;
+    let positions = &cfg.hud.positions;
+    let mut boxes: Vec<HudBox> = Vec::new();
     let mut b = HudBuilder::new(atlas);
     let (w, _h) = (width as f32, height as f32);
     let refd = w.min(_h);
+    // Portrait frames (Shorts/TikTok) re-home the stat columns into rows
+    // above and below the field — the drag editor can rearrange from there.
+    let portrait = w / _h < 0.9;
     // Sizes measured against a same-moment game/render pair at the user's
     // settings (ratios of the playfield bracket span).
     let label_px = refd * 0.0163;
@@ -606,6 +659,7 @@ pub fn build_hud(
 
     // Big faint centre combo number.
     if hud.playfield_combo_text && stats.combo > 0 {
+        let el = b.verts.len();
         let cy = field.cy - field.half + field.half * 2.0 * (hud.combo_text_vpos_pct / 100.0);
         // The config font size maps to ~0.44px em per unit at 1440p (190 →
         // "185" 155px wide, measured against the game; DejaVu runs a bit
@@ -620,6 +674,7 @@ pub fn build_hud(
             Align::Center,
             col,
         );
+        finish_element(&mut b, el, "combo_text", positions, w, _h, &mut boxes);
     }
 
     // Column centre just past the box; PanelGap pushes it further out.
@@ -628,8 +683,9 @@ pub fn build_hud(
     let right_x = field.cx + col_dx;
     let row = refd * 0.132; // vertical stride between stat entries
 
-    // Optional panel background cards behind the stat columns.
-    if cfg.panel_background_opacity > 0.0 {
+    // Optional panel background cards behind the stat columns (the
+    // portrait rows have no card equivalent).
+    if cfg.panel_background_opacity > 0.0 && !portrait {
         let card = srgb8_to_linear(cfg.panel_color, cfg.panel_background_opacity);
         let (cw, ch2) = (refd * 0.16, field.half * 1.9);
         for x in [left_x, right_x] {
@@ -705,50 +761,69 @@ pub fn build_hud(
         }
     };
 
-    // Left column: combo ring, Pauses, Grade (bare colour letter), Accuracy.
+    // Left group: combo ring, Pauses, Grade, Accuracy — a column beside
+    // the field on landscape, a row underneath it on portrait.
     let ln = [hud.combo_ring, hud.pauses, hud.grade, hud.accuracy]
         .iter()
         .filter(|&&e| e)
         .count();
+    let row_spread = |i: usize, n: usize| -> f32 {
+        w * 0.5 + (i as f32 - (n as f32 - 1.0) * 0.5) * w * 0.22
+    };
+    let bottom_row_y = field.cy + field.half + refd * 0.135;
+    let top_row_y = field.cy - field.half - refd * 0.135;
     let mut li = 0usize;
-    let next_left = |i: &mut usize| {
-        let y = slot_y(ln, *i, top_l);
+    let next_left = |i: &mut usize| -> (f32, f32) {
+        let out = if portrait {
+            (row_spread(*i, ln), bottom_row_y)
+        } else {
+            (left_x, slot_y(ln, *i, top_l))
+        };
         *i += 1;
-        y
+        out
     };
     if hud.combo_ring {
-        let y = next_left(&mut li);
+        let el = b.verts.len();
+        let (x, y) = next_left(&mut li);
         combo_ring(
             &mut b,
-            left_x,
+            x,
             y - refd * 0.016,
             refd * 0.048,
             stats,
             srgb8_to_linear(hud.combo_ring_color, hud.combo_ring_opacity),
         );
+        finish_element(&mut b, el, "combo_ring", positions, w, _h, &mut boxes);
     }
     if hud.pauses {
-        let y = next_left(&mut li);
-        let from = b.verts.len();
-        entry(&mut b, left_x, y, "PAUSES", "0", value_col);
-        fan_tilt(&mut b, from, left_x, y + value_px * 0.6);
+        let el = b.verts.len();
+        let (x, y) = next_left(&mut li);
+        entry(&mut b, x, y, "PAUSES", "0", value_col);
+        if !portrait {
+            fan_tilt(&mut b, el, x, y + value_px * 0.6);
+        }
+        finish_element(&mut b, el, "pauses", positions, w, _h, &mut boxes);
     }
     if hud.grade {
-        let y = next_left(&mut li);
+        let el = b.verts.len();
+        let (x, y) = next_left(&mut li);
         let g = stats.grade;
-        let from = b.verts.len();
         b.text(
             g.label(),
-            left_x,
+            x,
             y + value_px * 0.9,
             value_px * 1.5,
             Align::Center,
             srgb8_to_linear(g.color(), 1.0),
         );
-        fan_tilt(&mut b, from, left_x, y + value_px * 0.6);
+        if !portrait {
+            fan_tilt(&mut b, el, x, y + value_px * 0.6);
+        }
+        finish_element(&mut b, el, "grade", positions, w, _h, &mut boxes);
     }
     if hud.accuracy {
-        let y = next_left(&mut li);
+        let el = b.verts.len();
+        let (x, y) = next_left(&mut li);
         // "--" until the first note resolves; then two decimals, trailing
         // zeros stripped ("92.31%", "100%") — as the game formats it.
         let acc = if stats.resolved == 0 {
@@ -757,26 +832,32 @@ pub fn build_hud(
             let s = format!("{:.2}", stats.accuracy_pct);
             format!("{}%", s.trim_end_matches('0').trim_end_matches('.'))
         };
-        let from = b.verts.len();
-        entry(&mut b, left_x, y, "ACCURACY", &acc, value_col);
-        fan_tilt(&mut b, from, left_x, y + value_px * 0.6);
+        entry(&mut b, x, y, "ACCURACY", &acc, value_col);
+        if !portrait {
+            fan_tilt(&mut b, el, x, y + value_px * 0.6);
+        }
+        finish_element(&mut b, el, "accuracy", positions, w, _h, &mut boxes);
     }
 
-    // Right column: Score, Points, Misses, Notes.
+    // Right group: Score, Points, Misses, Notes — column on landscape, a
+    // row above the field on portrait.
     let rn = [hud.score, hud.points, hud.misses, hud.notes]
         .iter()
         .filter(|&&e| e)
         .count();
     let mut ri = 0usize;
-    let mut right_entry = |b: &mut HudBuilder, label: &str, value: &str| {
-        let y = slot_y(rn, ri, top_r);
-        ri += 1;
-        let from = b.verts.len();
-        entry(b, right_x, y, label, value, value_col);
-        fan_tilt(b, from, right_x, y + value_px * 0.6);
+    let right_slot = |i: &mut usize| -> (f32, f32) {
+        let out = if portrait {
+            (row_spread(*i, rn), top_row_y)
+        } else {
+            (right_x, slot_y(rn, *i, top_r))
+        };
+        *i += 1;
+        out
     };
+    let mut right_cells: Vec<(&'static str, &'static str, String)> = Vec::new();
     if hud.score {
-        right_entry(&mut b, "SCORE", &thousands(stats.score));
+        right_cells.push(("score", "SCORE", thousands(stats.score)));
     }
     if hud.points {
         // RP (Rhythia Points) — "--" until a note resolves.
@@ -785,17 +866,27 @@ pub fn build_hud(
         } else {
             format!("{:.0}", stats.points)
         };
-        right_entry(&mut b, "POINTS", &pts);
+        right_cells.push(("points", "POINTS", pts));
     }
     if hud.misses {
-        right_entry(&mut b, "MISSES", &stats.misses.to_string());
+        right_cells.push(("misses", "MISSES", stats.misses.to_string()));
     }
     if hud.notes {
-        right_entry(&mut b, "NOTES", &format!("{}/{}", stats.hits, stats.resolved));
+        right_cells.push(("notes", "NOTES", format!("{}/{}", stats.hits, stats.resolved)));
+    }
+    for (key, label, value) in right_cells {
+        let el = b.verts.len();
+        let (x, y) = right_slot(&mut ri);
+        entry(&mut b, x, y, label, &value, value_col);
+        if !portrait {
+            fan_tilt(&mut b, el, x, y + value_px * 0.6);
+        }
+        finish_element(&mut b, el, key, positions, w, _h, &mut boxes);
     }
 
     // Health bar just below the playfield.
     if hud.health_bar {
+        let el = b.verts.len();
         let bw = field.half * 2.0;
         let bx = field.cx - field.half;
         let by = field.cy + field.half + refd * 0.014;
@@ -810,10 +901,15 @@ pub fn build_hud(
             bh,
             srgb8_to_linear(hud.health_bar_color, hud.health_bar_alpha),
         );
+        finish_element(&mut b, el, "health_bar", positions, w, _h, &mut boxes);
     }
 
-    // Song progress bar just above the playfield.
+    // Song progress bar just above the playfield, with its elapsed/total
+    // clock — one movable element (the clock belongs to the bar, not the
+    // title; user report 16.07.).
+    let ty = field.cy - field.half - refd * 0.053;
     if hud.song_progress_bar {
+        let el = b.verts.len();
         let dur = replay.length_ms().max(map.meta.duration_ms as f64).max(1.0);
         let frac = (song_time_ms / dur).clamp(0.0, 1.0) as f32;
         let bw = field.half * 2.0;
@@ -830,6 +926,16 @@ pub fn build_hud(
             bh,
             srgb8_to_linear([225, 225, 230], hud.song_progress_alpha),
         );
+        let time = format!("{} / {}", clock(song_time_ms), clock(dur.max(replay.length_ms())));
+        b.text(
+            &time,
+            field.cx,
+            ty + refd * 0.024,
+            refd * 0.0149,
+            Align::Center,
+            label_col,
+        );
+        finish_element(&mut b, el, "song_progress", positions, w, _h, &mut boxes);
     }
 
     // Speed notation under the health bar: "S" plus coloured step dots and a
@@ -838,13 +944,15 @@ pub fn build_hud(
     // two above 1x, single dots below; green→orange→red). Anything else is
     // unranked and shows a slashed circle.
     if hud.speed_label {
+        let el = b.verts.len();
         let sy = field.cy + field.half + refd * 0.014 + refd * 0.0088 + refd * 0.020;
         speed_label(&mut b, field.cx, sy, refd, replay.speed, value_col);
+        finish_element(&mut b, el, "speed_label", positions, w, _h, &mut boxes);
     }
 
     // Title header, sitting just above the playfield (as the game).
-    let ty = field.cy - field.half - refd * 0.053;
     if hud.song_info {
+        let el = b.verts.len();
         let title = if replay.player_name.is_empty() {
             map.meta.song_name.clone()
         } else {
@@ -861,20 +969,7 @@ pub fn build_hud(
             Align::Center,
             value_col,
         );
-    }
-    // The elapsed/total clock belongs to the song progress bar, not the
-    // title — hiding the title must keep the clock (user report 16.07.).
-    if hud.song_progress_bar {
-        let dur = replay.length_ms().max(map.meta.duration_ms as f64);
-        let time = format!("{} / {}", clock(song_time_ms), clock(dur));
-        b.text(
-            &time,
-            field.cx,
-            ty + refd * 0.024,
-            refd * 0.0149,
-            Align::Center,
-            label_col,
-        );
+        finish_element(&mut b, el, "song_info", positions, w, _h, &mut boxes);
     }
 
     // Fail vignette — the game's own formula (vignette.fs): a fullscreen
@@ -905,7 +1000,7 @@ pub fn build_hud(
     // --- Optional renderer extras (not game elements) --------------------
     draw_error_meters(&mut b, cfg, state, song_time_ms, w, _h);
 
-    b.verts
+    (b.verts, boxes)
 }
 
 #[cfg(test)]

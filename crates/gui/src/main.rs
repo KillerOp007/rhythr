@@ -69,6 +69,8 @@ struct Settings {
     hitsound_volume: u32,
     /// HUD element key -> forced on/off. Absent key = follow the config.
     hud_overrides: BTreeMap<String, bool>,
+    /// Drag-editor positions per HUD element (normalised frame centre).
+    hud_positions: BTreeMap<String, [f32; 2]>,
     /// Optional overlay meters (renderer extras, not game elements).
     error_meter: MeterSettings,
     aim_meter: MeterSettings,
@@ -96,6 +98,7 @@ impl Default for Settings {
             music_volume: 100,
             hitsound_volume: 50,
             hud_overrides: BTreeMap::new(),
+            hud_positions: BTreeMap::new(),
             error_meter: MeterSettings::at(0.5, 0.88),
             aim_meter: MeterSettings::at(0.15, 0.32),
             recent_replays: Vec::new(),
@@ -393,6 +396,7 @@ impl Default for MeterSettings {
 fn effective_config(inner: &Inner) -> SkinConfig {
     let mut cfg = inner.base_config.clone();
     apply_overrides(&mut cfg, &inner.settings.hud_overrides);
+    cfg.hud.positions = inner.settings.hud_positions.clone();
     inner.settings.error_meter.apply(&mut cfg.hud.error_meter);
     inner.settings.aim_meter.apply(&mut cfg.hud.aim_meter);
     cfg
@@ -1135,6 +1139,70 @@ fn clear_ghost(state: tauri::State<'_, App>) -> Result<StatusDto, String> {
     Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
 }
 
+/// Stores a dragged HUD element's new centre (normalised to the frame —
+/// or to one half in a ghost split) and refreshes the preview. Saved
+/// immediately: the render always matches the live preview.
+#[tauri::command]
+fn set_hud_position(
+    state: tauri::State<'_, App>,
+    key: String,
+    x: f32,
+    y: f32,
+) -> Result<StatusDto, String> {
+    let app = state.inner();
+    let mut inner = app.lock();
+    inner
+        .settings
+        .hud_positions
+        .insert(key, [x.clamp(0.0, 1.0), y.clamp(0.0, 1.0)]);
+    inner.settings.save();
+    invalidate_preview(&mut inner);
+    Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
+}
+
+#[derive(Serialize, Clone)]
+struct HudBoxDto {
+    key: String,
+    x0: f32,
+    y0: f32,
+    x1: f32,
+    y1: f32,
+}
+
+/// The drag editor's hitboxes at the given song time, in preview-frame
+/// pixels — computed by the renderer from the very vertices it draws, so
+/// box and pixels cannot drift apart.
+#[tauri::command]
+async fn hud_layout(state: tauri::State<'_, App>, time_ms: f64) -> Result<Vec<HudBoxDto>, String> {
+    let app = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let inner = app.lock();
+        let ctx = inner.preview.as_ref().ok_or("no preview yet")?;
+        let (_, r) = inner.replay.as_ref().ok_or("no replay loaded")?;
+        let boxes = ctx.renderer.hud_boxes(
+            &ctx.params,
+            &ctx.cfg,
+            r,
+            &ctx.map,
+            time_ms,
+            &ctx.hud,
+            ctx.ghost.is_some(),
+        );
+        Ok(boxes
+            .into_iter()
+            .map(|b| HudBoxDto {
+                key: b.key.to_string(),
+                x0: b.x0,
+                y0: b.y0,
+                x1: b.x1,
+                y1: b.y1,
+            })
+            .collect())
+    })
+    .await
+    .map_err(err_str)?
+}
+
 #[derive(Deserialize, Default)]
 #[serde(default)]
 struct MeterPatch {
@@ -1191,6 +1259,7 @@ fn reset_hud_overrides(state: tauri::State<'_, App>) -> Result<StatusDto, String
     let app = state.inner();
     let mut inner = app.lock();
     inner.settings.hud_overrides.clear();
+    inner.settings.hud_positions.clear();
     inner.settings.save();
     invalidate_preview(&mut inner);
     Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
@@ -1218,6 +1287,7 @@ struct OutputUpdate {
 fn set_output(state: tauri::State<'_, App>, update: OutputUpdate) -> Result<StatusDto, String> {
     let app = state.inner();
     let mut inner = app.lock();
+    let was_portrait = inner.settings.height > inner.settings.width;
     let s = &mut inner.settings;
     if let Some(v) = update.width {
         s.width = v.clamp(320, 7680);
@@ -1259,6 +1329,10 @@ fn set_output(state: tauri::State<'_, App>, update: OutputUpdate) -> Result<Stat
         s.ffmpeg = if v.trim().is_empty() { None } else { Some(v) };
     }
     s.save();
+    // Orientation flips rebuild the preview at the new aspect.
+    if (inner.settings.height > inner.settings.width) != was_portrait {
+        invalidate_preview(&mut inner);
+    }
     Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
 }
 
@@ -1331,9 +1405,15 @@ async fn preview(state: tauri::State<'_, App>, time_ms: f64) -> Result<String, S
         }
         if inner.preview.is_none() {
             let cfg = effective_config(&inner);
-            let renderer =
-                rhythia_render::Renderer::new(PREVIEW_W, PREVIEW_H, cfg.hud_font.as_deref())
-                    .map_err(err_str)?;
+            // The preview mirrors the OUTPUT's orientation: editing a
+            // vertical (Shorts) render needs a vertical live preview.
+            let (pw, ph) = if inner.settings.height > inner.settings.width {
+                (PREVIEW_H * inner.settings.width / inner.settings.height, PREVIEW_H)
+            } else {
+                (PREVIEW_W, PREVIEW_H)
+            };
+            let renderer = rhythia_render::Renderer::new(pw.max(64), ph, cfg.hud_font.as_deref())
+                .map_err(err_str)?;
             let mut params = SceneParams::from(&cfg);
             let skin = renderer.prepare_skin(&cfg);
             let (_, r) = inner.replay.as_ref().unwrap();
@@ -1379,7 +1459,8 @@ async fn preview(state: tauri::State<'_, App>, time_ms: f64) -> Result<String, S
                 ctx.ghost.as_ref(),
             )
             .map_err(err_str)?;
-        png_data_url(&pixels, PREVIEW_W, PREVIEW_H)
+        let (pw, ph) = ctx.renderer.dimensions();
+        png_data_url(&pixels, pw, ph)
     })
     .await
     .map_err(err_str)?
@@ -1801,6 +1882,8 @@ fn main() {
             set_game_assets,
             detect_game,
             set_hud_override,
+            set_hud_position,
+            hud_layout,
             set_meter,
             load_ghost,
             clear_ghost,

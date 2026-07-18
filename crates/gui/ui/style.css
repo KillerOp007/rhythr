@@ -287,8 +287,18 @@ details#advanced > div, details#advanced > label { margin-bottom: 10px; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
 
-#thumb-wrap { position: absolute; top: 8px; right: 8px; }
+#preview-tools { position: absolute; top: 8px; right: 8px; display: flex; gap: 6px; align-items: flex-start; }
+#thumb-wrap { position: relative; }
 #btn-frame { position: static; }
+#btn-edit-hud.active { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+#hud-edit-layer { position: absolute; inset: 0; z-index: 25; pointer-events: none; }
+.hud-edit-box {
+  position: absolute; pointer-events: auto; cursor: grab;
+  border: 1.5px dashed rgba(47, 214, 208, 0.75); border-radius: 4px;
+  background: rgba(47, 214, 208, 0.06);
+}
+.hud-edit-box:hover { background: rgba(47, 214, 208, 0.14); }
+.hud-edit-box.dragging { cursor: grabbing; border-style: solid; }
 #thumb-menu {
   position: absolute; right: 0; top: calc(100% + 4px); z-index: 40;
   background: var(--panel-2); border: 1px solid var(--border);

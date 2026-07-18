@@ -46,6 +46,14 @@ endorsed by Rhythia or Capo Games.
 - **Preview & timeline** — drag the timeline to scrub through the run.
   The green graph is your health, red ticks are misses. **Save frame**
   exports the current preview as a PNG at full output resolution.
+- **Edit HUD** — the switch next to *Save thumbnail* outlines every HUD
+  element in the preview; drag any of them wherever you like (make room
+  for a handcam, stack panels, overlap things — up to you). Positions
+  save instantly and apply to every render; "Reset all to config" on
+  the HUD tab puts everything back.
+- **Vertical renders** — pick a vertical resolution (1080 × 1920) for
+  TikTok/Shorts: the playfield fills the width and the stats move into
+  rows above and below it. Rearrange them with Edit HUD as you like.
 - **HUD tab** — toggle any HUD element (combo ring, accuracy, score,
   miss markers, …) on or off. Your choices are saved and apply to every
   future render; the yellow dot marks elements that differ from the

@@ -72,6 +72,10 @@ pub fn srgb8_to_linear(rgb: [u8; 3], a: f32) -> [f32; 4] {
 /// toggle, so an element turned off in-game is skipped in the render too.
 #[derive(Debug, Clone)]
 pub struct HudConfig {
+    /// User-set element positions (normalised frame centre per element
+    /// key), applied on top of the standard layout by the drag editor.
+    /// Not part of the game's config — filled in by the app's settings.
+    pub positions: std::collections::BTreeMap<String, [f32; 2]>,
     pub accuracy: bool,
     pub combo_ring: bool,
     pub grade: bool,
@@ -138,6 +142,7 @@ impl ErrorMeter {
 impl Default for HudConfig {
     fn default() -> Self {
         HudConfig {
+            positions: Default::default(),
             accuracy: true,
             combo_ring: true,
             grade: true,
@@ -535,6 +540,7 @@ impl SkinConfig {
         let d = SkinConfig::default();
         let hd = HudConfig::default();
         let hud = HudConfig {
+            positions: Default::default(),
             accuracy: boolean("LeftPanelAccuracyEnabled", hd.accuracy),
             combo_ring: boolean("LeftPanelComboRingEnabled", hd.combo_ring),
             grade: boolean("LeftPanelGradeEnabled", hd.grade),

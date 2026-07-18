@@ -435,6 +435,108 @@ function dragGhostBox(show, box) {
   }
 }
 
+// ------------------------------------------------ HUD drag editor
+// The hitboxes come from the RENDERER (bounds of the vertices it actually
+// draws), so box and pixels can never drift apart — the lesson from the
+// old meter-drag offset bug. The frontend only maps frame pixels onto the
+// displayed image. Positions save immediately; the render always matches
+// the live preview, whether the switch stays on or not.
+let hudEditOn = false;
+let hudDrag = null;
+
+async function refreshHudBoxes() {
+  const layer = $("hud-edit-layer");
+  if (!hudEditOn || !status?.replay || !status?.map) {
+    layer.innerHTML = "";
+    return;
+  }
+  let boxes;
+  try {
+    boxes = await invoke("hud_layout", { timeMs: currentMs });
+  } catch {
+    return;
+  }
+  const img = $("preview-img");
+  const r = img.getBoundingClientRect();
+  const wr = $("preview-wrap").getBoundingClientRect();
+  const sx = r.width / (img.naturalWidth || 1);
+  const sy = r.height / (img.naturalHeight || 1);
+  layer.innerHTML = "";
+  for (const b of boxes) {
+    const el = document.createElement("div");
+    el.className = "hud-edit-box";
+    el.dataset.key = b.key;
+    const pad = 3;
+    el.style.left = `${r.left - wr.left + b.x0 * sx - pad}px`;
+    el.style.top = `${r.top - wr.top + b.y0 * sy - pad}px`;
+    el.style.width = `${(b.x1 - b.x0) * sx + pad * 2}px`;
+    el.style.height = `${(b.y1 - b.y0) * sy + pad * 2}px`;
+    el.title = b.key.replace("_", " ");
+    layer.appendChild(el);
+  }
+}
+
+function initHudEdit() {
+  const wrap = $("preview-wrap");
+  const layer = document.createElement("div");
+  layer.id = "hud-edit-layer";
+  wrap.appendChild(layer);
+
+  $("btn-edit-hud").addEventListener("click", () => {
+    hudEditOn = !hudEditOn;
+    $("btn-edit-hud").classList.toggle("active", hudEditOn);
+    refreshHudBoxes();
+  });
+
+  layer.addEventListener("pointerdown", (e) => {
+    const box = e.target.closest(".hud-edit-box");
+    if (!box) return;
+    e.preventDefault();
+    box.setPointerCapture(e.pointerId);
+    box.classList.add("dragging");
+    hudDrag = {
+      box,
+      key: box.dataset.key,
+      startX: e.clientX,
+      startY: e.clientY,
+      origLeft: parseFloat(box.style.left),
+      origTop: parseFloat(box.style.top),
+    };
+  });
+  layer.addEventListener("pointermove", (e) => {
+    if (!hudDrag) return;
+    hudDrag.box.style.left = `${hudDrag.origLeft + e.clientX - hudDrag.startX}px`;
+    hudDrag.box.style.top = `${hudDrag.origTop + e.clientY - hudDrag.startY}px`;
+  });
+  layer.addEventListener("pointerup", async (e) => {
+    if (!hudDrag) return;
+    const d = hudDrag;
+    hudDrag = null;
+    d.box.classList.remove("dragging");
+    // Box centre (wrap px) → frame px → normalised to the HUD's frame,
+    // which is HALF the preview in a ghost split.
+    const img = $("preview-img");
+    const r = img.getBoundingClientRect();
+    const wr = $("preview-wrap").getBoundingClientRect();
+    const bx = parseFloat(d.box.style.left) + d.box.offsetWidth / 2;
+    const by = parseFloat(d.box.style.top) + d.box.offsetHeight / 2;
+    const fx = ((bx + wr.left - r.left) / r.width) * (img.naturalWidth || 1);
+    const fy = ((by + wr.top - r.top) / r.height) * (img.naturalHeight || 1);
+    const vpW = status?.ghost ? (img.naturalWidth || 1) / 2 : img.naturalWidth || 1;
+    try {
+      const st = await invoke("set_hud_position", {
+        key: d.key,
+        x: fx / vpW,
+        y: fy / (img.naturalHeight || 1),
+      });
+      await applyStatus(st);
+      schedulePreview();
+    } catch (err) {
+      showPreviewMsg(String(err));
+    }
+  });
+}
+
 function initMeterDrag() {
   const img = $("preview-img");
   const wrap = $("preview-wrap");
@@ -539,8 +641,10 @@ async function runPreview() {
     img.src = url;
     img.hidden = false;
     $("dropzone").hidden = true;
-    $("thumb-wrap").hidden = false;
+    $("preview-tools").hidden = false;
     $("preview-msg").hidden = true;
+    // Wait for layout before measuring the img rect for the edit boxes.
+    requestAnimationFrame(() => refreshHudBoxes());
   } catch (e) {
     showPreviewMsg(String(e));
   } finally {
@@ -688,7 +792,7 @@ async function applyStatus(st) {
   } else if (!hasPair) {
     timelineData = null;
     $("preview-img").hidden = true;
-    $("thumb-wrap").hidden = true;
+    $("preview-tools").hidden = true;
     $("dropzone").hidden = false;
   }
 }
@@ -959,6 +1063,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   initControls();
   initScrubber();
   initMeterDrag();
+  initHudEdit();
   initDragDrop();
   initRenderEvents();
   const st = await invoke("get_status");

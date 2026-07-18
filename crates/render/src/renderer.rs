@@ -1296,7 +1296,7 @@ impl Renderer {
                 self.height,
             )
         });
-        if let Some(mut verts) = hud_verts.filter(|v| !v.is_empty()) {
+        if let Some(mut verts) = hud_verts.map(|v| v.0).filter(|v| !v.is_empty()) {
             if vp_x > 0 {
                 for v in &mut verts {
                     v.pos[0] += vp_x as f32;
@@ -1798,6 +1798,43 @@ impl Renderer {
             },
         );
         tex
+    }
+
+    /// The movable HUD elements' hitboxes for the drag editor, computed by
+    /// building the same HUD geometry a frame render would draw (CPU only,
+    /// no GPU pass) — hitbox and pixels share one source of truth. In a
+    /// ghost split the HUD lives per half; `half_width` mirrors that.
+    #[allow(clippy::too_many_arguments)]
+    pub fn hud_boxes(
+        &self,
+        params: &SceneParams,
+        config: &SkinConfig,
+        replay: &Replay,
+        map: &Map,
+        song_time_ms: f64,
+        hud_state: &crate::hud::HudState,
+        half_width: bool,
+    ) -> Vec<crate::hud::HudBox> {
+        let vp_w = if half_width { self.width / 2 } else { self.width };
+        let aspect = vp_w as f32 / self.height as f32;
+        let cursor = replay.cursor_at(song_time_ms);
+        let view_proj = params.view_proj(aspect, cursor);
+        let field = self.playfield_screen(&view_proj, params.playfield_half(), vp_w);
+        let stats = hud_state.stats_at(map, replay, song_time_ms);
+        crate::hud::build_hud(
+            &self.hud_atlas,
+            config,
+            hud_state,
+            &stats,
+            replay,
+            map,
+            song_time_ms,
+            &field,
+            &[],
+            vp_w,
+            self.height,
+        )
+        .1
     }
 
     /// Screen-space (pixel) box of the playfield border at the hit plane,
