@@ -845,16 +845,19 @@ function initControls() {
   });
 
   $("btn-frame").addEventListener("click", async () => {
-    const suggested = `frame-${fmtTime(currentMs).replace(":", "m")}s.png`;
+    const raw = status?.replay
+      ? `${status.replay.player} - ${status?.map?.song_name || "run"} - card`
+      : "score-card";
+    const base = raw.replace(/[\\/:*?"<>|]/g, "-");
     const p = await dialog.save({
-      defaultPath: suggested,
+      defaultPath: `${base}.png`,
       filters: [{ name: "PNG image", extensions: ["png"] }],
     });
     if (!p) return;
     $("btn-frame").disabled = true;
     try {
-      await invoke("export_frame", { timeMs: currentMs, path: p });
-      $("render-text").textContent = `Frame saved — ${p}`;
+      await invoke("export_card", { path: p });
+      $("render-text").textContent = `Score card saved — ${p}`;
     } catch (e) {
       showPreviewMsg(String(e));
     } finally {

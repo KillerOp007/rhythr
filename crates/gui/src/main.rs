@@ -1417,6 +1417,28 @@ async fn export_frame(
     .map_err(err_str)?
 }
 
+/// Renders the shareable score card (1200x630 PNG) for the loaded run.
+#[tauri::command]
+async fn export_card(state: tauri::State<'_, App>, path: String) -> Result<(), String> {
+    let app = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        if app.rendering.load(Ordering::SeqCst) {
+            return Err("rendering in progress".to_string());
+        }
+        let inner = app.lock();
+        let (_, r) = inner.replay.as_ref().ok_or("no replay loaded")?;
+        let (_, m) = inner.map.as_ref().ok_or("no map loaded")?;
+        let cfg = effective_config(&inner);
+        let renderer =
+            rhythia_render::Renderer::new(1200, 630, cfg.hud_font.as_deref()).map_err(err_str)?;
+        let hud = rhythia_render::hud::HudState::new(m, r);
+        let pixels = renderer.render_card(r, m, &hud, &cfg).map_err(err_str)?;
+        rhythia_render::write_png(Path::new(&path), &pixels, 1200, 630).map_err(err_str)
+    })
+    .await
+    .map_err(err_str)?
+}
+
 #[derive(Serialize, Clone)]
 struct RenderProgress {
     done: u64,
@@ -1781,6 +1803,7 @@ fn main() {
             timeline,
             preview,
             export_frame,
+            export_card,
             start_render,
             cancel_render,
             probe_encoders,

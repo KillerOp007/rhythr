@@ -1620,6 +1620,176 @@ impl Renderer {
         Ok(pixels)
     }
 
+    /// Renders the shareable score card (Discord-embed sized landscape):
+    /// cover, title/difficulty/mapper, player, big grade, headline stats
+    /// and a trace of the actual cursor path with misses marked — in the
+    /// skin's own background and text colours.
+    pub fn render_card(
+        &self,
+        replay: &Replay,
+        map: &Map,
+        hud_state: &crate::hud::HudState,
+        config: &SkinConfig,
+    ) -> Result<Vec<u8>, Error> {
+        let (w, h) = (self.width as f32, self.height as f32);
+        let stats_end = if replay.failed() {
+            replay.fail_time_ms as f64 + rhythia_sim::hitreg::DEFAULT_WINDOW_MS + 1.0
+        } else {
+            f64::MAX
+        };
+        let mut stats = hud_state.stats_at(map, replay, stats_end);
+        if !replay.failed() {
+            stats.score = replay.total_score;
+        }
+
+        // The cursor path across the whole run (or up to the fail), plus
+        // where the cursor sat when each miss happened.
+        let run_end = if replay.failed() {
+            replay.fail_time_ms as f64
+        } else {
+            replay.length_ms()
+        }
+        .max(1.0);
+        let samples = 700;
+        let path: Vec<(f32, f32)> = (0..=samples)
+            .map(|i| replay.cursor_at(run_end * i as f64 / samples as f64))
+            .collect();
+        let miss_points: Vec<(f32, f32)> = hud_state
+            .results()
+            .iter()
+            .filter(|r| !r.hit)
+            .filter_map(|r| map.notes.get(r.note_index))
+            .filter(|n| (n.time_ms as f64) <= run_end)
+            .map(|n| replay.cursor_at(n.time_ms as f64))
+            .collect();
+
+        // Cover texture (sharp only; the card background is a flat colour).
+        let cover_rgba = map
+            .cover
+            .as_deref()
+            .and_then(decode_image_rgba)
+            .unwrap_or((vec![28, 28, 32, 255], 1, 1));
+        let (pixels, cw, ch) = cover_rgba;
+        let cover_tex = self.upload_rgba(&pixels, cw, ch);
+        let cover_view = cover_tex.create_view(&Default::default());
+        let bind = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("card-bind"),
+            layout: &self.hud_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.hud_screen_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&self.hud_atlas_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&self.hud_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&cover_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(&cover_view),
+                },
+            ],
+        });
+
+        let mut verts: Vec<crate::hud::HudVertex> = Vec::new();
+        let quad = |verts: &mut Vec<crate::hud::HudVertex>,
+                    x0: f32,
+                    y0: f32,
+                    x1: f32,
+                    y1: f32,
+                    color: [f32; 4],
+                    mode: f32| {
+            let uv = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
+            let p = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+            for &[i, j, k] in &[[0usize, 1, 2], [0, 2, 3]] {
+                for idx in [i, j, k] {
+                    verts.push(crate::hud::HudVertex {
+                        pos: p[idx],
+                        uv: uv[idx],
+                        color,
+                        mode,
+                        _pad: 0.0,
+                    });
+                }
+            }
+        };
+        // Cover with the results screen's green frame, square, top left.
+        let size = h * 0.35;
+        let (cx0, cy0) = (w * 0.033, h * 0.075);
+        let f = (h * 0.006).max(2.0);
+        quad(
+            &mut verts,
+            cx0 - f,
+            cy0 - f,
+            cx0 + size + f,
+            cy0 + size + f,
+            crate::config::srgb8_to_linear([34, 197, 94], 1.0),
+            0.0,
+        );
+        quad(&mut verts, cx0, cy0, cx0 + size, cy0 + size, [1.0, 1.0, 1.0, 1.0], 2.0);
+        verts.extend(crate::hud::build_card(
+            &self.hud_atlas,
+            replay,
+            map,
+            &stats,
+            config,
+            self.width,
+            self.height,
+            &path,
+            &miss_points,
+        ));
+
+        let vbuf = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("card-verts"),
+                contents: bytemuck::cast_slice(&verts),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+        let bg = config.background_color;
+        let view = self.color_tex.create_view(&Default::default());
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("card"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: bg[0] as f64,
+                            g: bg[1] as f64,
+                            b: bg[2] as f64,
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.hud_pipeline);
+            pass.set_bind_group(0, &bind, &[]);
+            pass.set_vertex_buffer(0, vbuf.slice(..));
+            pass.draw(0..verts.len() as u32, 0..1);
+        }
+        self.queue.submit(Some(encoder.finish()));
+        self.read_pixels()
+    }
+
     /// Uploads an RGBA8 image as an sRGB texture.
     fn upload_rgba(&self, pixels: &[u8], w: u32, h: u32) -> wgpu::Texture {
         let tex = self.device.create_texture(&wgpu::TextureDescriptor {
