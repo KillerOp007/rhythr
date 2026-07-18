@@ -1509,8 +1509,17 @@ impl Renderer {
         quad(&mut verts, 0.0, 0.0, w, h, [0.055, 0.055, 0.06, 1.0], 3.0);
         // Cover with a green frame, top-left as in the game. One map, one
         // cover — a ghost race shares it (with the title block) at full
-        // size instead of duplicating it per side.
-        let (cx0, cy0, cx1, cy1) = (w * 0.044, h * 0.062, w * 0.214, h * 0.365);
+        // size instead of duplicating it per side. The art stays EXACTLY
+        // square whatever the frame: portrait renders shrink it and give
+        // the freed space to the blocks below.
+        let portrait = w / h < 0.9;
+        let size = if portrait { w * 0.28 } else { h * 0.303 };
+        let (cx0, cy0) = if portrait {
+            (w * 0.05, h * 0.035)
+        } else {
+            (w * 0.044, h * 0.062)
+        };
+        let (cx1, cy1) = (cx0 + size, cy0 + size);
         let f = (h * 0.004).max(2.0);
         quad(
             &mut verts,
@@ -1603,12 +1612,14 @@ impl Renderer {
             if icons.is_empty() {
                 continue;
             }
-            let icon_h = (h * 0.052) as u32;
+            let icon_h = ((w.min(h)) * 0.052) as u32;
             // Clear the speed notation, which sits proportionally wider on
-            // a half-width side.
+            // a half-width side; portrait moves the mods box up with the
+            // stacked layout.
             let frac = if ghost.is_some() { 0.63 } else { 0.58 };
             let mut x = (x_off + w_eff * frac) as u32;
-            let y = (h * 0.775) as u32 - icon_h / 2;
+            let my = if portrait { h * 0.565 } else { h * 0.775 };
+            let y = my as u32 - icon_h / 2;
             for (_, png) in icons {
                 if let Some((rgba, iw, ih)) = decode_image_rgba(png) {
                     let (small, sw, sh) = downscale_icon(&rgba, iw, ih, icon_h.max(8));

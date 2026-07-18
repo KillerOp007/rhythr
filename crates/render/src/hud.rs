@@ -1376,21 +1376,22 @@ pub fn build_results(
 ) -> Vec<HudVertex> {
     let mut b = HudBuilder::new(atlas);
     let (w, h) = (width as f32, height as f32);
+    // Portrait frames stack the blocks under a smaller (always square)
+    // cover; fonts and strides reference the short edge so they match the
+    // landscape look at the same output width.
+    let portrait = w / h < 0.9;
+    let fr = w.min(h);
     let white = srgb8_to_linear([240, 240, 245], 1.0);
     let green = srgb8_to_linear([60, 220, 90], 1.0);
     let line_col = srgb8_to_linear([120, 120, 126], 0.55);
 
     // --- Title block (right of the cover, drawn by the renderer) ---------
     if part != ResultsPart::Side {
-        let tx = w * 0.227;
-        b.text(
-            &map.meta.song_name,
-            tx,
-            h * 0.082,
-            h * 0.037,
-            Align::Left,
-            white,
-        );
+        let tx = if portrait { w * 0.38 } else { w * 0.227 };
+        let title_y = if portrait { h * 0.075 } else { h * 0.082 };
+        let title_px = fr * 0.037;
+        let fit = ((w * 0.95 - tx) / atlas.measure(&map.meta.song_name, title_px)).min(1.0);
+        b.text(&map.meta.song_name, tx, title_y, title_px * fit, Align::Left, white);
         // The green line under the song is the DIFFICULTY, not the title:
         // the map's custom name when set, else the standard tier name.
         let diff = if !map.meta.custom_difficulty_name.is_empty() {
@@ -1409,8 +1410,8 @@ pub fn build_results(
         b.text(
             &format!("< {diff} >"),
             tx,
-            h * 0.117,
-            h * 0.026,
+            if portrait { h * 0.105 } else { h * 0.117 },
+            fr * 0.026,
             Align::Left,
             green,
         );
@@ -1418,8 +1419,8 @@ pub fn build_results(
             b.text(
                 &format!("by {}", map.meta.mappers.join(", ")),
                 tx,
-                h * 0.152,
-                h * 0.024,
+                if portrait { h * 0.130 } else { h * 0.152 },
+                fr * 0.024,
                 Align::Left,
                 white,
             );
@@ -1442,16 +1443,29 @@ pub fn build_results(
     };
     match part {
         ResultsPart::Full => {
-            b.text(&played, w * 0.227, h * 0.34, h * 0.026, Align::Left, white);
-            // Big grade, top right.
-            b.text(
-                glabel,
-                w * 0.895,
-                h * 0.26,
-                h * 0.13,
-                Align::Center,
-                srgb8_to_linear(gcol, 1.0),
-            );
+            if portrait {
+                // Under the cover block, full width — no clipping.
+                b.text(&played, w * 0.05, h * 0.225, fr * 0.026, Align::Left, white);
+                b.text(
+                    glabel,
+                    w * 0.85,
+                    h * 0.185,
+                    fr * 0.13,
+                    Align::Center,
+                    srgb8_to_linear(gcol, 1.0),
+                );
+            } else {
+                b.text(&played, w * 0.227, h * 0.34, fr * 0.026, Align::Left, white);
+                // Big grade, top right.
+                b.text(
+                    glabel,
+                    w * 0.895,
+                    h * 0.26,
+                    fr * 0.13,
+                    Align::Center,
+                    srgb8_to_linear(gcol, 1.0),
+                );
+            }
         }
         ResultsPart::Side => {
             // Compact strip between the shared header and the statistics.
@@ -1469,15 +1483,16 @@ pub fn build_results(
     }
 
     // --- Statistics with dotted leaders ----------------------------------
+    let stats_title_y = if portrait { h * 0.29 } else { h * 0.43 };
     b.text(
         "Statistics",
         w * 0.032,
-        h * 0.43,
-        h * 0.028,
+        stats_title_y,
+        fr * 0.028,
         Align::Left,
         white,
     );
-    let label_px = h * 0.0225;
+    let label_px = fr * 0.0225;
     let mut rows: Vec<(String, String)> = vec![
         ("Score".into(), thousands(stats.score)),
         ("Accuracy".into(), format!("{:.2}%", stats.accuracy_pct)),
@@ -1489,7 +1504,7 @@ pub fn build_results(
         rows.push(("Fail Time".into(), clock(replay.fail_time_ms as f64)));
     }
     let (lx, rx) = (w * 0.038, w * 0.475);
-    let mut y = h * 0.492;
+    let mut y = if portrait { h * 0.325 } else { h * 0.492 };
     for (label, value) in &rows {
         b.text(label, lx, y, label_px, Align::Left, white);
         b.text(value, rx, y, label_px, Align::Right, white);
@@ -1499,36 +1514,40 @@ pub fn build_results(
             b.line(
                 [line_a, y - label_px * 0.30],
                 [line_b, y - label_px * 0.30],
-                (h * 0.0022).max(1.0),
+                (fr * 0.0022).max(1.0),
                 line_col,
             );
         }
-        y += h * 0.063;
+        y += fr * 0.063;
     }
 
     // --- Health graph ------------------------------------------------------
     b.text(
         "Health Graph",
         w * 0.515,
-        h * 0.43,
-        h * 0.028,
+        stats_title_y,
+        fr * 0.028,
         Align::Left,
         white,
     );
     let (gx0, gx1) = (w * 0.53, w * 0.965);
-    let (gy0, gy1) = (h * 0.50, h * 0.645);
+    let (gy0, gy1) = if portrait {
+        (h * 0.325, h * 0.325 + fr * 0.145)
+    } else {
+        (h * 0.50, h * 0.645)
+    };
     let end_ms = if failed {
         replay.fail_time_ms as f64
     } else {
         replay.length_ms()
     }
     .max(1.0);
-    b.text("00:00", gx0, gy0 - h * 0.014, h * 0.02, Align::Left, white);
+    b.text("00:00", gx0, gy0 - fr * 0.014, fr * 0.02, Align::Left, white);
     b.text(
         &clock(end_ms),
         gx1,
-        gy0 - h * 0.014,
-        h * 0.02,
+        gy0 - fr * 0.014,
+        fr * 0.02,
         Align::Right,
         white,
     );
@@ -1545,7 +1564,7 @@ pub fn build_results(
             b.line(
                 q,
                 p,
-                (h * 0.0022).max(1.0),
+                (fr * 0.0022).max(1.0),
                 srgb8_to_linear(health_color(qhp.min(hp)), 1.0),
             );
         }
@@ -1553,13 +1572,14 @@ pub fn build_results(
     }
 
     // --- Mods box -----------------------------------------------------------
-    b.text("Mods", w * 0.515, h * 0.70, h * 0.028, Align::Left, white);
-    let my = h * 0.775;
+    let mods_title_y = if portrait { h * 0.52 } else { h * 0.70 };
+    let my = if portrait { h * 0.565 } else { h * 0.775 };
+    b.text("Mods", w * 0.515, mods_title_y, fr * 0.028, Align::Left, white);
     // The results screen shows the speed letter even at 1.0x.
     if (replay.speed - 1.0).abs() < 0.005 {
-        b.text("S", w * 0.545, my, h * 0.032, Align::Center, white);
+        b.text("S", w * 0.545, my, fr * 0.032, Align::Center, white);
     } else {
-        speed_label(&mut b, w * 0.545, my, h * 1.6, replay.speed, white);
+        speed_label(&mut b, w * 0.545, my, fr * 1.6, replay.speed, white);
     }
     if !icons_shown && !replay.mods.is_empty() && replay.mods != "[]" {
         let mods = replay
@@ -1571,7 +1591,7 @@ pub fn build_results(
             .to_uppercase();
         // At half width the speed notation reaches further into the box.
         let mx = if part == ResultsPart::Side { w * 0.63 } else { w * 0.58 };
-        b.text(&mods, mx, my, h * 0.026, Align::Left, white);
+        b.text(&mods, mx, my, fr * 0.026, Align::Left, white);
     }
 
     b.verts
