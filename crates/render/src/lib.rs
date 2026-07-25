@@ -10,6 +10,7 @@ pub mod exe_assets;
 pub mod hud;
 pub mod mesh;
 pub mod mods;
+pub mod race;
 pub mod renderer;
 pub mod scene;
 pub mod video;
