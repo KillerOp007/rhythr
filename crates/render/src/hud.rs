@@ -2278,7 +2278,9 @@ pub fn build_race_rail(
         }
     }
 
-    let miss_col = srgb8_to_linear([225, 90, 60], a);
+    // Kept quiet on purpose: dense miss clusters must read as a shaded
+    // region, not a red wall over the curves.
+    let miss_col = srgb8_to_linear([225, 90, 60], 0.45 * a);
     let tick = rh * 0.22;
     for &t in &series.miss_times[0] {
         b.rect(x_of(t) - thick * 0.5, y0, thick, tick, miss_col);
@@ -2409,17 +2411,24 @@ pub fn build_race_graph(
         } else {
             (px + fr * 0.008, Align::Left)
         };
+        let below = py + px_size + fr * 0.006;
         let ty = if peak.score_delta >= 0 {
             (py - fr * 0.010).max(gy0 + px_size)
+        } else if below <= gy1 - fr * 0.002 {
+            below
         } else {
-            (py + px_size + fr * 0.006).min(gy1 - fr * 0.004)
+            // Valley touches the band's bottom: label above the point,
+            // over the fill, clear of the 'played by' line underneath.
+            py - fr * 0.010
         };
         b.text(&label, tx, ty, px_size, align, col);
     }
 
-    // Who owns which half of the band.
+    // Who owns which half of the band. Anchored left of the grade column
+    // that starts right below the band's bottom-right corner.
     let name_px = fr * 0.017;
     let max_name_w = (gx1 - gx0) * 0.34;
+    let name_x = gx1 - fr * 0.055;
     for (i, name) in names.iter().enumerate() {
         let label = format!("{name} ahead");
         let mut px_size = name_px;
@@ -2428,7 +2437,7 @@ pub fn build_race_graph(
             px_size *= max_name_w / tw;
         }
         let ty = if i == 0 { gy0 + px_size } else { gy1 - fr * 0.004 };
-        b.text(&label, gx1, ty, px_size, Align::Right, cursor_col(colors[i], 0.95));
+        b.text(&label, name_x, ty, px_size, Align::Right, cursor_col(colors[i], 0.95));
     }
 
     b.verts
