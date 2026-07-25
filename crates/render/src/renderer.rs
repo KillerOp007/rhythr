@@ -866,26 +866,43 @@ impl Renderer {
                 // both sides) and drawn by the second side's HUD pass,
                 // whose pass covers the whole frame.
                 let race_verts = match hud_state {
-                    Some(state)
-                        if config.hud.race_delta.enabled && !config.disable_gui =>
-                    {
-                        let ends = [
-                            crate::race::side_end(replay),
-                            crate::race::side_end(&g.replay),
-                        ];
-                        let input = crate::hud::RaceDeltaInput {
-                            main: state.stats_at(map, replay, song_time_ms.min(ends[0])),
-                            ghost: g.state.stats_at(&g.map, &g.replay, song_time_ms.min(ends[1])),
-                            colors: [config.cursor_color, g.color],
-                            failed: [song_time_ms >= ends[0], song_time_ms >= ends[1]],
-                        };
-                        crate::hud::build_race_delta(
-                            &self.hud_atlas,
-                            config,
-                            &input,
-                            self.width,
-                            self.height,
-                        )
+                    Some(state) if !config.disable_gui => {
+                        let mut verts = Vec::new();
+                        if config.hud.race_delta.enabled {
+                            let ends = [
+                                crate::race::side_end(replay),
+                                crate::race::side_end(&g.replay),
+                            ];
+                            let input = crate::hud::RaceDeltaInput {
+                                main: state.stats_at(map, replay, song_time_ms.min(ends[0])),
+                                ghost: g.state.stats_at(
+                                    &g.map,
+                                    &g.replay,
+                                    song_time_ms.min(ends[1]),
+                                ),
+                                colors: [config.cursor_color, g.color],
+                                failed: [song_time_ms >= ends[0], song_time_ms >= ends[1]],
+                            };
+                            verts.extend(crate::hud::build_race_delta(
+                                &self.hud_atlas,
+                                config,
+                                &input,
+                                self.width,
+                                self.height,
+                            ));
+                        }
+                        if let Some(series) = g.race.as_ref().filter(|_| config.hud.race_rail.enabled) {
+                            verts.extend(crate::hud::build_race_rail(
+                                &self.hud_atlas,
+                                config,
+                                series,
+                                [config.cursor_color, g.color],
+                                song_time_ms,
+                                self.width,
+                                self.height,
+                            ));
+                        }
+                        verts
                     }
                     _ => Vec::new(),
                 };

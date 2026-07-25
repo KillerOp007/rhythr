@@ -45,6 +45,16 @@ pub struct RaceSeries {
     pub lead_changes: Vec<f64>,
 }
 
+/// The momentum rail's lower accuracy bound: the worst sampled accuracy of
+/// either run, capped at 99 so a perfect race still spans a visible band.
+pub fn rail_acc_floor(series: &RaceSeries) -> f32 {
+    series
+        .samples
+        .iter()
+        .flat_map(|p| p.acc)
+        .fold(99.0f32, f32::min)
+}
+
 /// Song time past which a run's stats stop moving. Matches the results
 /// screen: a failed run is read at fail time + hit window.
 pub fn side_end(replay: &Replay) -> f64 {
@@ -56,6 +66,18 @@ pub fn side_end(replay: &Replay) -> f64 {
 }
 
 impl RaceSeries {
+    /// The standard whole-map series: 240 samples from song start to just
+    /// past the last note (scores cannot move later).
+    pub fn for_race(main: &RaceSide, ghost: &RaceSide) -> RaceSeries {
+        let end = main
+            .map
+            .notes
+            .last()
+            .map(|n| n.time_ms as f64 + 1000.0)
+            .unwrap_or(1000.0);
+        RaceSeries::build(main, ghost, 0.0, end, 240)
+    }
+
     /// Samples both runs at `samples` evenly spaced times over
     /// `start_ms..=end_ms` (at least 2).
     pub fn build(
@@ -228,6 +250,42 @@ mod tests {
         assert_eq!(last.score_delta, 1000 - 300);
         assert!((last.acc[1] - 100.0).abs() < 1e-4);
         assert!(s.miss_times[1].is_empty());
+    }
+
+    #[test]
+    fn whole_map_series_spans_start_to_just_past_the_last_note() {
+        let map = map_with(&NOTES);
+        let (mr, gr) = (
+            replay_with(&[1005.0, 2005.0, 3005.0, 4005.0]),
+            replay_with(&[1005.0]),
+        );
+        let (ms, gs) = (HudState::new(&map, &mr), HudState::new(&map, &gr));
+        let s = RaceSeries::for_race(
+            &RaceSide { map: &map, replay: &mr, state: &ms },
+            &RaceSide { map: &map, replay: &gr, state: &gs },
+        );
+        assert_eq!(s.samples.len(), 240);
+        assert_eq!(s.samples[0].t_ms, 0.0);
+        assert_eq!(s.samples.last().unwrap().t_ms, 5000.0);
+    }
+
+    #[test]
+    fn rail_floor_tracks_the_worst_accuracy_but_keeps_a_span() {
+        let mk = |acc: [f32; 2]| RaceSample {
+            t_ms: 0.0,
+            score_delta: 0,
+            acc,
+        };
+        let rough = RaceSeries {
+            samples: vec![mk([100.0, 97.5]), mk([99.2, 98.0])],
+            ..Default::default()
+        };
+        assert_eq!(rail_acc_floor(&rough), 97.5);
+        let perfect = RaceSeries {
+            samples: vec![mk([100.0, 100.0])],
+            ..Default::default()
+        };
+        assert_eq!(rail_acc_floor(&perfect), 99.0);
     }
 
     #[test]

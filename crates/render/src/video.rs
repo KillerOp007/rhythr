@@ -121,7 +121,7 @@ pub fn render_video(
     } else {
         replay
     };
-    let ghost_input = opts.ghost.as_ref().map(|g| {
+    let mut ghost_input = opts.ghost.as_ref().map(|g| {
         let mut greplay = g.replay.clone();
         rhythia_sim::timebase::normalize(&mut greplay, map);
         let g = crate::video::GhostOptions { replay: greplay, color: g.color };
@@ -133,6 +133,7 @@ pub fn render_video(
             color: g.color,
             map: gmap,
             grid_scale: gmods.grid_scale,
+            race: None,
         }
     });
     let (map, main_mods) = crate::mods::map_for_replay(map, replay);
@@ -143,6 +144,15 @@ pub fn render_video(
     let params = &params;
     // Resolve every note's hit/miss once; the HUD reads running stats from it.
     let hud_state = crate::hud::HudState::new(map, replay);
+    // With both sides resolved, the whole-map race series (delta graph,
+    // momentum rail) is fixed — build it once.
+    if let Some(g) = ghost_input.as_mut() {
+        g.race = Some(crate::race::RaceSeries::for_race(
+            &crate::race::RaceSide { map, replay, state: &hud_state },
+            &crate::race::RaceSide { map: &g.map, replay: &g.replay, state: &g.state },
+        ));
+    }
+    let ghost_input = ghost_input;
     // Replay frame times are song time — speed mods are baked in when the
     // .rhr is recorded (the hit registration matching note times proves
     // it). The VIDEO however runs at the modded speed, like the game did:

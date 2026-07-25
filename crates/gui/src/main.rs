@@ -1474,7 +1474,7 @@ async fn preview(state: tauri::State<'_, App>, time_ms: f64) -> Result<String, S
             let (_, m) = inner.map.as_ref().unwrap();
             // Each side plays on its own field: its replay's mirror/hardrock
             // applied to its own copy of the notes.
-            let ghost = inner.ghost.as_ref().map(|(_, g)| {
+            let mut ghost = inner.ghost.as_ref().map(|(_, g)| {
                 let (gmap, gmods) = rhythia_render::mods::map_for_replay(m, g);
                 rhythia_render::hud::GhostInput {
                     state: rhythia_render::hud::HudState::new(&gmap, g),
@@ -1482,12 +1482,19 @@ async fn preview(state: tauri::State<'_, App>, time_ms: f64) -> Result<String, S
                     color: GHOST_COLOR,
                     map: gmap,
                     grid_scale: gmods.grid_scale,
+                    race: None,
                 }
             });
             let (main_map, main_mods) = rhythia_render::mods::map_for_replay(m, r);
             params.grid_scale = main_mods.grid_scale;
             params.apply_speed(r.speed);
             let hud = rhythia_render::hud::HudState::new(&main_map, r);
+            if let Some(g) = ghost.as_mut() {
+                g.race = Some(rhythia_render::race::RaceSeries::for_race(
+                    &rhythia_render::race::RaceSide { map: &main_map, replay: r, state: &hud },
+                    &rhythia_render::race::RaceSide { map: &g.map, replay: &g.replay, state: &g.state },
+                ));
+            }
             inner.preview = Some(PreviewCtx {
                 renderer,
                 skin,

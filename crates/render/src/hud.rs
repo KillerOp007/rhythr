@@ -350,6 +350,9 @@ pub struct GhostInput {
     /// Grid half-extent of this side's playfield (1.0, or wider under
     /// hardrock); the border follows it.
     pub grid_scale: f32,
+    /// Whole-map race series (delta graph, momentum rail), built once per
+    /// render after both sides' hit states exist.
+    pub race: Option<crate::race::RaceSeries>,
 }
 
 pub struct HudState {
@@ -2208,6 +2211,91 @@ pub fn build_race_delta(
     if input.failed[1] {
         b.text("FAILED", cx + fail_dx, cy, sub_px, Align::Left, fail_col);
     }
+
+    b.verts
+}
+
+/// Converts a side's cursor colour (0..1 sRGB) to a vertex colour.
+fn cursor_col(c: [f32; 3], alpha: f32) -> [f32; 4] {
+    srgb8_to_linear(
+        [
+            (c[0] * 255.0) as u8,
+            (c[1] * 255.0) as u8,
+            (c[2] * 255.0) as u8,
+        ],
+        alpha,
+    )
+}
+
+/// Builds the momentum rail in FULL-frame pixels: a thin synchronized
+/// strip with both runs' accuracy curves in their cursor colours, miss
+/// ticks (main from the top edge, ghost from the bottom), lead-change dots
+/// on the centre line and a playhead.
+pub fn build_race_rail(
+    atlas: &FontAtlas,
+    cfg: &crate::config::SkinConfig,
+    series: &crate::race::RaceSeries,
+    colors: [[f32; 3]; 2],
+    song_time_ms: f64,
+    width: u32,
+    height: u32,
+) -> Vec<HudVertex> {
+    let em = cfg.hud.race_rail;
+    let n = series.samples.len();
+    if !em.enabled || n < 2 {
+        return Vec::new();
+    }
+    let mut b = HudBuilder::new(atlas);
+    let (w, h) = (width as f32, height as f32);
+    let refd = w.min(h);
+    let a = em.alpha;
+
+    let rh = refd * 0.042 * em.scale;
+    let (x0, x1) = (w * 0.06, w * 0.94);
+    let (y0, y1) = (em.y * h - rh * 0.5, em.y * h + rh * 0.5);
+
+    // Quiet backdrop so the curves read over gameplay on any skin.
+    b.rect(x0, y0, x1 - x0, rh, srgb8_to_linear([10, 11, 14], 0.55 * a));
+
+    let t0 = series.samples[0].t_ms;
+    let span_t = (series.samples[n - 1].t_ms - t0).max(1.0);
+    let x_of = |t: f64| x0 + (((t - t0) / span_t) as f32) * (x1 - x0);
+    let floor = crate::race::rail_acc_floor(series);
+    let span_acc = (100.0 - floor).max(0.01);
+    let pad = rh * 0.16;
+    let y_of = |acc: f32| y0 + pad + (100.0 - acc) / span_acc * (rh - pad * 2.0);
+
+    let thick = (refd * 0.0016 * em.scale).max(1.0);
+    for side in 0..2 {
+        let col = cursor_col(colors[side], 0.9 * a);
+        let mut prev: Option<[f32; 2]> = None;
+        for p in &series.samples {
+            let q = [x_of(p.t_ms), y_of(p.acc[side])];
+            if let Some(o) = prev {
+                b.line(o, q, thick, col);
+            }
+            prev = Some(q);
+        }
+    }
+
+    let miss_col = srgb8_to_linear([225, 90, 60], a);
+    let tick = rh * 0.22;
+    for &t in &series.miss_times[0] {
+        b.rect(x_of(t) - thick * 0.5, y0, thick, tick, miss_col);
+    }
+    for &t in &series.miss_times[1] {
+        b.rect(x_of(t) - thick * 0.5, y1 - tick, thick, tick, miss_col);
+    }
+
+    let dot = (refd * 0.003 * em.scale).max(2.0);
+    let white = [1.0, 1.0, 1.0, 0.9 * a];
+    for &t in &series.lead_changes {
+        b.rect(x_of(t) - dot * 0.5, (y0 + y1 - dot) * 0.5, dot, dot, white);
+    }
+
+    // Playhead, slightly taller than the strip.
+    let px = x_of(song_time_ms.clamp(t0, t0 + span_t));
+    b.rect(px - thick * 0.5, y0 - rh * 0.1, thick, rh * 1.2, white);
 
     b.verts
 }
