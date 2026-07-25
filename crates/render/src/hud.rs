@@ -1108,6 +1108,15 @@ mod tests {
     }
 
     #[test]
+    fn race_delta_text_shows_sign_and_leader() {
+        // Positive = main (left) leads, negative = ghost leads; zero is a
+        // dead heat with no leader to colour.
+        assert_eq!(race_delta_text(12410), ("+12,410".to_string(), 1));
+        assert_eq!(race_delta_text(-300), ("-300".to_string(), -1));
+        assert_eq!(race_delta_text(0), ("0".to_string(), 0));
+    }
+
+    #[test]
     fn clock_is_mm_ss() {
         assert_eq!(clock(0.0), "00:00");
         assert_eq!(clock(24_751.0), "00:24");
@@ -2074,4 +2083,131 @@ fn combo_ring(
         Align::Center,
         [1.0, 1.0, 1.0, 1.0],
     );
+}
+
+// ---------------------------------------------------------------------------
+// Racing delta (ghost races): the live score gap at the split seam.
+
+/// Everything the live racing-delta widget needs for one frame. Stats must
+/// come from the same `stats_at` calls that feed the two side HUDs so the
+/// gap always equals the difference of the numbers on screen.
+pub struct RaceDeltaInput {
+    pub main: HudStats,
+    pub ghost: HudStats,
+    /// Cursor colours per side (`[main, ghost]`, 0..1 sRGB) — the leader's
+    /// colour tints the number and arrow.
+    pub colors: [[f32; 3]; 2],
+    /// Side is past its fail time: its number froze, badge it.
+    pub failed: [bool; 2],
+}
+
+/// Formats the score gap and names the leader: `1` main (left), `-1` ghost,
+/// `0` dead heat.
+fn race_delta_text(delta: i64) -> (String, i8) {
+    let text = if delta > 0 {
+        format!("+{}", thousands(delta))
+    } else {
+        thousands(delta)
+    };
+    (text, delta.signum() as i8)
+}
+
+/// Builds the live racing-delta widget in FULL-frame pixels (it sits at the
+/// split seam, not inside one side's viewport). Styled like the game's stat
+/// panels: grey uppercase label, big value in the interface font — with the
+/// value and lead arrow tinted in the leading player's cursor colour.
+pub fn build_race_delta(
+    atlas: &FontAtlas,
+    cfg: &crate::config::SkinConfig,
+    input: &RaceDeltaInput,
+    width: u32,
+    height: u32,
+) -> Vec<HudVertex> {
+    let em = cfg.hud.race_delta;
+    if !em.enabled {
+        return Vec::new();
+    }
+    let mut b = HudBuilder::new(atlas);
+    let (w, h) = (width as f32, height as f32);
+    let refd = w.min(h);
+    let (cx, cy) = (em.x * w, em.y * h);
+    let a = em.alpha;
+
+    let delta = input.main.score - input.ghost.score;
+    let (text, leader) = race_delta_text(delta);
+    let side_col = |i: usize| {
+        srgb8_to_linear(
+            [
+                (input.colors[i][0] * 255.0) as u8,
+                (input.colors[i][1] * 255.0) as u8,
+                (input.colors[i][2] * 255.0) as u8,
+            ],
+            a,
+        )
+    };
+    let label_col = srgb8_to_linear([138, 138, 146], a);
+    let value_col = match leader {
+        1 => side_col(0),
+        -1 => side_col(1),
+        _ => srgb8_to_linear(cfg.interface_text_color, a),
+    };
+
+    let label_px = refd * 0.0163 * em.scale;
+    let value_px = refd * 0.034 * em.scale;
+    let sub_px = refd * 0.0155 * em.scale;
+
+    // Grey uppercase label, exactly like the game's panel captions.
+    b.text("SCORE LEAD", cx, cy - value_px * 0.95, label_px, Align::Center, label_col);
+    b.text(&text, cx, cy, value_px, Align::Center, value_col);
+
+    // Accuracy gap as the quiet second line.
+    let acc_gap = input.main.accuracy_pct - input.ghost.accuracy_pct;
+    b.text(
+        &format!("{acc_gap:+.2}% ACC"),
+        cx,
+        cy + sub_px * 1.55,
+        sub_px,
+        Align::Center,
+        label_col,
+    );
+
+    // Solid arrow pointing at the leading side (none in a dead heat).
+    if leader != 0 {
+        let tw = atlas.measure(&text, value_px);
+        let ah = value_px * 0.42;
+        let ymid = cy - value_px * 0.33;
+        let gap = refd * 0.012 * em.scale;
+        let (base_x, tip_x) = if leader > 0 {
+            let x = cx - tw * 0.5 - gap;
+            (x, x - ah * 0.9)
+        } else {
+            let x = cx + tw * 0.5 + gap;
+            (x, x + ah * 0.9)
+        };
+        for pos in [
+            [tip_x, ymid],
+            [base_x, ymid - ah * 0.5],
+            [base_x, ymid + ah * 0.5],
+        ] {
+            b.verts.push(HudVertex {
+                pos,
+                uv: [0.0, 0.0],
+                color: value_col,
+                mode: 0.0,
+                _pad: 0.0,
+            });
+        }
+    }
+
+    // A dead run's number froze — say so on its side of the widget.
+    let fail_col = srgb8_to_linear([225, 90, 60], a);
+    let fail_dx = refd * 0.085 * em.scale;
+    if input.failed[0] {
+        b.text("FAILED", cx - fail_dx, cy, sub_px, Align::Right, fail_col);
+    }
+    if input.failed[1] {
+        b.text("FAILED", cx + fail_dx, cy, sub_px, Align::Left, fail_col);
+    }
+
+    b.verts
 }

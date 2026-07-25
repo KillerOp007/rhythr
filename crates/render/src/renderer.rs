@@ -844,6 +844,7 @@ impl Renderer {
                 (0, self.width),
                 true,
                 Some(slot),
+                &[],
             ),
             Some(g) => {
                 let half = self.width / 2;
@@ -858,7 +859,36 @@ impl Renderer {
                     (0, half),
                     true,
                     None,
+                    &[],
                 )?;
+                // The racing delta sits at the split seam and needs both
+                // runs' stats — built here (the only per-frame scope with
+                // both sides) and drawn by the second side's HUD pass,
+                // whose pass covers the whole frame.
+                let race_verts = match hud_state {
+                    Some(state)
+                        if config.hud.race_delta.enabled && !config.disable_gui =>
+                    {
+                        let ends = [
+                            crate::race::side_end(replay),
+                            crate::race::side_end(&g.replay),
+                        ];
+                        let input = crate::hud::RaceDeltaInput {
+                            main: state.stats_at(map, replay, song_time_ms.min(ends[0])),
+                            ghost: g.state.stats_at(&g.map, &g.replay, song_time_ms.min(ends[1])),
+                            colors: [config.cursor_color, g.color],
+                            failed: [song_time_ms >= ends[0], song_time_ms >= ends[1]],
+                        };
+                        crate::hud::build_race_delta(
+                            &self.hud_atlas,
+                            config,
+                            &input,
+                            self.width,
+                            self.height,
+                        )
+                    }
+                    _ => Vec::new(),
+                };
                 let mut ghost_cfg = config.clone();
                 ghost_cfg.cursor_color = g.color;
                 ghost_cfg.cursor_trail_color = g.color;
@@ -888,6 +918,7 @@ impl Renderer {
                     (half, self.width - half),
                     false,
                     Some(slot),
+                    &race_verts,
                 )
             }
         }
@@ -909,6 +940,10 @@ impl Renderer {
         viewport: (u32, u32),
         clear: bool,
         readback_slot: Option<usize>,
+        // Pre-built overlay in FULL-frame pixels (racing delta, momentum
+        // rail): appended after this side's HUD is shifted into frame
+        // space, so it must not be offset again.
+        extra_hud: &[crate::hud::HudVertex],
     ) -> Result<(), Error> {
         let (vp_x, vp_w) = viewport;
         let aspect = vp_w as f32 / self.height as f32;
@@ -1273,12 +1308,18 @@ impl Renderer {
         // HUD overlay: a second pass that loads the rendered scene and draws
         // the flat 2D stat panels/bars/ring/title on top (no depth).
         let hud_verts = hud_state.filter(|_| !config.disable_gui).map(|state| {
-            let stats = state.stats_at(map, replay, song_time_ms);
+            // A failed run's stats freeze at its fail time (the results
+            // screen's convention): the game never resolved the later
+            // notes. Only a ghost-race side can outlive its own run — the
+            // single-replay frame loop already stops at the fail.
+            let stats_end = crate::race::side_end(replay);
+            let stats = state.stats_at(map, replay, song_time_ms.min(stats_end));
             let field = self.playfield_screen(&view_proj, params.playfield_half(), vp_w);
             // Project freshly missed notes' cells to screen for the X marks.
             let miss_marks: Vec<(f32, f32, f64)> = state
                 .recent_misses(map, song_time_ms)
                 .into_iter()
+                .filter(|&(_, _, age)| song_time_ms - age <= stats_end)
                 .map(|(gx, gy, age)| {
                     let (wx, wy) = crate::scene::grid_to_world(gx, gy);
                     let c = view_proj * glam::Vec4::new(wx, wy, 0.0, 1.0);
@@ -1305,12 +1346,16 @@ impl Renderer {
                 self.portrait_output(),
             )
         });
-        if let Some(mut verts) = hud_verts.map(|v| v.0).filter(|v| !v.is_empty()) {
-            if vp_x > 0 {
-                for v in &mut verts {
-                    v.pos[0] += vp_x as f32;
-                }
+        let mut verts = hud_verts.map(|v| v.0).unwrap_or_default();
+        if vp_x > 0 {
+            for v in &mut verts {
+                v.pos[0] += vp_x as f32;
             }
+        }
+        // Full-frame extras join after the viewport shift — they are
+        // already in frame space.
+        verts.extend_from_slice(extra_hud);
+        if !verts.is_empty() {
             verts.truncate(HUD_VERT_CAP - HUD_VERT_CAP % 3);
             self.queue
                 .write_buffer(&self.hud_vbuf, 0, bytemuck::cast_slice(&verts));

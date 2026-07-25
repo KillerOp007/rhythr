@@ -109,6 +109,13 @@ pub struct HudConfig {
     /// Optional renderer extra: aim scatter showing where the cursor sat
     /// relative to each hit note's centre.
     pub aim_meter: ErrorMeter,
+    /// Ghost races only: live score/accuracy gap at the split seam plus
+    /// the race delta graph on the results screen. `ghost_x`/`ghost_y`
+    /// are unused — the widget spans the full frame, not one side.
+    pub race_delta: ErrorMeter,
+    /// Ghost races only: full-width strip with both runs' accuracy curves,
+    /// miss ticks and lead changes. Only `y`, `scale` and `alpha` matter.
+    pub race_rail: ErrorMeter,
 }
 
 /// Placement/looks of an optional overlay meter. Positions are normalised
@@ -136,6 +143,11 @@ impl ErrorMeter {
             scale: 1.0,
             alpha: 0.9,
         }
+    }
+
+    fn on(mut self) -> ErrorMeter {
+        self.enabled = true;
+        self
     }
 }
 
@@ -171,6 +183,10 @@ impl Default for HudConfig {
             // notation, the aim scatter left of the combo ring; both off.
             error_meter: ErrorMeter::at(0.5, 0.88),
             aim_meter: ErrorMeter::at(0.15, 0.32),
+            // The race widgets only ever appear in ghost races, which are
+            // deliberate — so unlike the meters they default to on.
+            race_delta: ErrorMeter::at(0.5, 0.115).on(),
+            race_rail: ErrorMeter::at(0.5, 0.945).on(),
         }
     }
 }
@@ -592,6 +608,8 @@ impl SkinConfig {
             speed_label: hd.speed_label,
             error_meter: hd.error_meter,
             aim_meter: hd.aim_meter,
+            race_delta: hd.race_delta,
+            race_rail: hd.race_rail,
         };
         // BackgroundImages[]: rich per-layer placement; bytes come from the
         // .rhs archive afterwards (a bare config.json can't carry them).
