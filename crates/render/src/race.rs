@@ -45,13 +45,32 @@ pub struct RaceSeries {
     pub lead_changes: Vec<f64>,
 }
 
-/// The momentum rail's lower accuracy bound: the worst sampled accuracy of
-/// either run, capped at 99 so a perfect race still spans a visible band.
-pub fn rail_acc_floor(series: &RaceSeries) -> f32 {
-    series
-        .samples
+/// The momentum rail's drawing curves: accuracy per side, box-smoothed
+/// over ±3 samples. Early-song accuracy is a fast sawtooth (every miss
+/// swings it hard while few notes are resolved) that aliases against the
+/// coarse sample grid into scribble; the rail tells momentum, not exact
+/// values, so it draws the smoothed shape.
+pub fn rail_curves(series: &RaceSeries) -> [Vec<f32>; 2] {
+    let n = series.samples.len();
+    let mut out = [Vec::with_capacity(n), Vec::with_capacity(n)];
+    for (side, curve) in out.iter_mut().enumerate() {
+        for i in 0..n {
+            let (lo, hi) = (i.saturating_sub(3), (i + 3).min(n - 1));
+            let sum: f32 = series.samples[lo..=hi].iter().map(|p| p.acc[side]).sum();
+            curve.push(sum / (hi - lo + 1) as f32);
+        }
+    }
+    out
+}
+
+/// The momentum rail's lower accuracy bound: the worst smoothed accuracy
+/// of either curve, capped at 99 so a perfect race still spans a visible
+/// band.
+pub fn rail_acc_floor(curves: &[Vec<f32>; 2]) -> f32 {
+    curves
         .iter()
-        .flat_map(|p| p.acc)
+        .flatten()
+        .copied()
         .fold(99.0f32, f32::min)
 }
 
@@ -295,21 +314,33 @@ mod tests {
 
     #[test]
     fn rail_floor_tracks_the_worst_accuracy_but_keeps_a_span() {
-        let mk = |acc: [f32; 2]| RaceSample {
+        let rough = [vec![100.0, 99.2], vec![97.5, 98.0]];
+        assert_eq!(rail_acc_floor(&rough), 97.5);
+        let perfect = [vec![100.0], vec![100.0]];
+        assert_eq!(rail_acc_floor(&perfect), 99.0);
+    }
+
+    #[test]
+    fn rail_curves_flatten_the_aliasing_sawtooth() {
+        // A 90/100 zigzag (early-song accuracy against the coarse sample
+        // grid) must hug its mean instead of drawing scribble; a constant
+        // side stays exactly constant and lengths are preserved.
+        let mk = |a: f32| RaceSample {
             t_ms: 0.0,
             score_delta: 0,
-            acc,
+            acc: [a, 100.0],
         };
-        let rough = RaceSeries {
-            samples: vec![mk([100.0, 97.5]), mk([99.2, 98.0])],
+        let s = RaceSeries {
+            samples: (0..40)
+                .map(|i| mk(if i % 2 == 0 { 90.0 } else { 100.0 }))
+                .collect(),
             ..Default::default()
         };
-        assert_eq!(rail_acc_floor(&rough), 97.5);
-        let perfect = RaceSeries {
-            samples: vec![mk([100.0, 100.0])],
-            ..Default::default()
-        };
-        assert_eq!(rail_acc_floor(&perfect), 99.0);
+        let c = rail_curves(&s);
+        assert_eq!(c[0].len(), 40);
+        assert!(c[0][10..30].iter().all(|v| (v - 95.0).abs() <= 1.5));
+        assert!(c[1].iter().all(|&v| v == 100.0));
+        assert!(rail_curves(&RaceSeries::default())[0].is_empty());
     }
 
     #[test]

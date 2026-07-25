@@ -2277,21 +2277,32 @@ pub fn build_race_rail(
     let t0 = series.samples[0].t_ms;
     let span_t = (series.samples[n - 1].t_ms - t0).max(1.0);
     let x_of = |t: f64| x0 + (((t - t0) / span_t) as f32) * (x1 - x0);
-    let floor = crate::race::rail_acc_floor(series);
+    let curves = crate::race::rail_curves(series);
+    let floor = crate::race::rail_acc_floor(&curves);
     let span_acc = (100.0 - floor).max(0.01);
     let pad = rh * 0.16;
     let y_of = |acc: f32| y0 + pad + (100.0 - acc) / span_acc * (rh - pad * 2.0);
 
-    let thick = (refd * 0.0016 * em.scale).max(1.0);
+    // Segments get extended by half their thickness so a steep polyline
+    // reads as one continuous curve instead of cracked strokes.
+    let joined = |p: [f32; 2], q: [f32; 2], by: f32| {
+        let (dx, dy) = (q[0] - p[0], q[1] - p[1]);
+        let len = (dx * dx + dy * dy).sqrt().max(1e-3);
+        let (ex, ey) = (dx / len * by, dy / len * by);
+        ([p[0] - ex, p[1] - ey], [q[0] + ex, q[1] + ey])
+    };
+    let thick = (refd * 0.0021 * em.scale).max(1.6);
     for side in 0..2 {
         let col = cursor_col(colors[side], 0.9 * a);
-        let mut prev: Option<[f32; 2]> = None;
-        for p in &series.samples {
-            let q = [x_of(p.t_ms), y_of(p.acc[side])];
-            if let Some(o) = prev {
-                b.line(o, q, thick, col);
-            }
-            prev = Some(q);
+        let pts: Vec<[f32; 2]> = series
+            .samples
+            .iter()
+            .enumerate()
+            .map(|(i, p)| [x_of(p.t_ms), y_of(curves[side][i])])
+            .collect();
+        for w in pts.windows(2) {
+            let (p, q) = joined(w[0], w[1], thick * 0.5);
+            b.line(p, q, thick, col);
         }
     }
 
@@ -2340,14 +2351,37 @@ pub fn build_race_graph(
     let (w, h) = (width as f32, height as f32);
     let fr = w.min(h);
 
+    // The band ends well above the 'played by' lines and the grade
+    // letters (tops ≈ 0.363 h) — nothing of the graph may reach into the
+    // per-side text zone below.
     let (gx0, gx1, gy0, gy1) = if portrait {
-        (w * 0.06, w * 0.94, h * 0.215, h * 0.37)
+        (w * 0.06, w * 0.94, h * 0.215, h * 0.345)
     } else {
-        (w * 0.227, w * 0.965, h * 0.19, h * 0.37)
+        (w * 0.227, w * 0.965, h * 0.19, h * 0.345)
     };
 
     let label_col = srgb8_to_linear([138, 138, 146], 1.0);
-    b.text("Race Delta", gx0, gy0 - fr * 0.010, fr * 0.021, Align::Left, label_col);
+
+    // One legend line, right-aligned above the band and clear of the
+    // header text column: RACE DELTA · <main> vs <ghost>, each name in
+    // its side's colour — the key to reading the fills below.
+    let segs = [
+        ("RACE DELTA".to_string(), label_col),
+        ("   ".to_string(), label_col),
+        (names[0].to_string(), cursor_col(colors[0], 0.95)),
+        ("  vs  ".to_string(), label_col),
+        (names[1].to_string(), cursor_col(colors[1], 0.95)),
+    ];
+    let mut leg_px = fr * 0.0185;
+    let width_at = |px: f32| segs.iter().map(|(t, _)| atlas.measure(t, px)).sum::<f32>();
+    let max_leg = (gx1 - gx0) * 0.62;
+    if width_at(leg_px) > max_leg {
+        leg_px *= max_leg / width_at(leg_px);
+    }
+    let mut lx = gx1 - width_at(leg_px);
+    for (t, c) in &segs {
+        lx = b.text(t, lx, gy0 - fr * 0.012, leg_px, Align::Left, *c);
+    }
 
     let t0 = series.samples[0].t_ms;
     let span_t = (series.samples[n - 1].t_ms - t0).max(1.0);
@@ -2438,23 +2472,18 @@ pub fn build_race_graph(
             // over the fill, clear of the 'played by' line underneath.
             py - fr * 0.010
         };
-        b.text(&label, tx, ty, px_size, align, col);
-    }
-
-    // Who owns which half of the band. Anchored left of the grade column
-    // that starts right below the band's bottom-right corner.
-    let name_px = fr * 0.017;
-    let max_name_w = (gx1 - gx0) * 0.34;
-    let name_x = gx1 - fr * 0.055;
-    for (i, name) in names.iter().enumerate() {
-        let label = format!("{name} ahead");
-        let mut px_size = name_px;
+        // A quiet backdrop keeps the annotation readable where it crosses
+        // the curve or a fill.
         let tw = atlas.measure(&label, px_size);
-        if tw > max_name_w {
-            px_size *= max_name_w / tw;
-        }
-        let ty = if i == 0 { gy0 + px_size } else { gy1 - fr * 0.004 };
-        b.text(&label, name_x, ty, px_size, Align::Right, cursor_col(colors[i], 0.95));
+        let bx0 = if align == Align::Right { tx - tw } else { tx };
+        b.rect(
+            bx0 - fr * 0.005,
+            ty - px_size,
+            tw + fr * 0.010,
+            px_size * 1.4,
+            srgb8_to_linear([10, 11, 14], 0.75),
+        );
+        b.text(&label, tx, ty, px_size, align, col);
     }
 
     b.verts
