@@ -120,7 +120,9 @@ impl RaceSeries {
                 .iter()
                 .filter(|r| !r.hit)
                 .map(|r| side.map.notes[r.note_index].time_ms as f64 + DEFAULT_WINDOW_MS)
-                .filter(|&t| t <= ends[i])
+                // Strict, like stats_at's miss condition — a miss whose
+                // registration coincides with the freeze is never counted.
+                .filter(|&t| t < ends[i])
                 .collect();
         }
 
@@ -308,6 +310,28 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(rail_acc_floor(&perfect), 99.0);
+    }
+
+    #[test]
+    fn a_miss_registering_exactly_at_the_freeze_is_no_tick() {
+        // Fail at 2500 → freeze at 2581. A note at 2501 registers at
+        // exactly 2581; stats_at counts misses strictly BEFORE the freeze
+        // (hud.rs), so the rail must not show a tick that no frozen
+        // counter contains.
+        let map = map_with(&[1000, 2501]);
+        let mr = replay_with(&[1005.0, 2505.0]);
+        let mut gr = replay_with(&[1005.0]);
+        gr.fail_time_ms = 2500;
+        gr.passed = false;
+        let (ms, gs) = (HudState::new(&map, &mr), HudState::new(&map, &gr));
+        let s = RaceSeries::build(
+            &RaceSide { map: &map, replay: &mr, state: &ms },
+            &RaceSide { map: &map, replay: &gr, state: &gs },
+            0.0,
+            5000.0,
+            5,
+        );
+        assert!(s.miss_times[1].is_empty());
     }
 
     #[test]

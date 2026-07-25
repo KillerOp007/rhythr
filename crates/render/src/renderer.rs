@@ -1330,13 +1330,26 @@ impl Renderer {
             // notes. Only a ghost-race side can outlive its own run — the
             // single-replay frame loop already stops at the fail.
             let stats_end = crate::race::side_end(replay);
-            let stats = state.stats_at(map, replay, song_time_ms.min(stats_end));
+            let mut stats = state.stats_at(map, replay, song_time_ms.min(stats_end));
+            // The freeze pins the numbers, not the clock: keep the ring
+            // drain and tick fades running on real time instead of hanging
+            // mid-animation forever on a dead race side.
+            let overtime = (song_time_ms - stats_end).max(0.0);
+            stats.ms_since_hit += overtime;
+            stats.ms_since_miss += overtime;
+            let stats = stats;
             let field = self.playfield_screen(&view_proj, params.playfield_half(), vp_w);
-            // Project freshly missed notes' cells to screen for the X marks.
+            // Project freshly missed notes' cells to screen for the X
+            // marks. `age` counts from the NOTE time, so add the hit
+            // window to compare registration against the freeze — same
+            // strict condition as stats_at, so an X only ever flashes for
+            // a miss the frozen counters actually contain.
             let miss_marks: Vec<(f32, f32, f64)> = state
                 .recent_misses(map, song_time_ms)
                 .into_iter()
-                .filter(|&(_, _, age)| song_time_ms - age <= stats_end)
+                .filter(|&(_, _, age)| {
+                    song_time_ms - age + rhythia_sim::hitreg::DEFAULT_WINDOW_MS < stats_end
+                })
                 .map(|(gx, gy, age)| {
                     let (wx, wy) = crate::scene::grid_to_world(gx, gy);
                     let c = view_proj * glam::Vec4::new(wx, wy, 0.0, 1.0);

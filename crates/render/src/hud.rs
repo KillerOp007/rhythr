@@ -1111,6 +1111,15 @@ mod tests {
     }
 
     #[test]
+    fn widget_acc_gap_matches_the_two_rounded_side_displays() {
+        // Each side HUD shows its accuracy rounded to 2dp; the widget's
+        // gap must be the difference of those DISPLAYED values (93.33 vs
+        // 99.11 → -5.78), not the rounded raw difference (-5.772 → -5.77).
+        assert!((race_acc_gap(93.334, 99.106) - (-5.78)).abs() < 1e-9);
+        assert!((race_acc_gap(100.0, 75.0) - 25.0).abs() < 1e-9);
+    }
+
+    #[test]
     fn race_delta_text_shows_sign_and_leader() {
         // Positive = main (left) leads, negative = ghost leads; zero is a
         // dead heat with no leader to colour.
@@ -2104,6 +2113,14 @@ pub struct RaceDeltaInput {
     pub failed: [bool; 2],
 }
 
+/// The widget's accuracy gap: difference of the two DISPLAYED (2dp)
+/// accuracies, so it can never contradict the side HUDs by a rounding
+/// step.
+fn race_acc_gap(main_pct: f32, ghost_pct: f32) -> f64 {
+    let shown = |v: f32| format!("{v:.2}").parse::<f64>().unwrap_or(f64::from(v));
+    shown(main_pct) - shown(ghost_pct)
+}
+
 /// Formats the score gap and names the leader: `1` main (left), `-1` ghost,
 /// `0` dead heat.
 fn race_delta_text(delta: i64) -> (String, i8) {
@@ -2164,7 +2181,7 @@ pub fn build_race_delta(
     b.text(&text, cx, cy, value_px, Align::Center, value_col);
 
     // Accuracy gap as the quiet second line.
-    let acc_gap = input.main.accuracy_pct - input.ghost.accuracy_pct;
+    let acc_gap = race_acc_gap(input.main.accuracy_pct, input.ghost.accuracy_pct);
     b.text(
         &format!("{acc_gap:+.2}% ACC"),
         cx,
