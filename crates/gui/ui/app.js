@@ -985,7 +985,7 @@ function initControls() {
     await applyGameAssets(exe);
   });
 
-  $("btn-hud-reset").addEventListener("click", async () => {
+  $("btn-hud-config-reset").addEventListener("click", async () => {
     await call(() => invoke("reset_hud_overrides"));
     schedulePreview();
   });
