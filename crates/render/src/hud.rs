@@ -2299,3 +2299,137 @@ pub fn build_race_rail(
 
     b.verts
 }
+
+/// Builds the race delta graph for the ghost results screen: the score gap
+/// over the whole map in the free band right of the cover, area-filled in
+/// the leading side's colour, with lead-change dots and the peak lead
+/// annotated. Tells at a glance where the race was decided.
+pub fn build_race_graph(
+    atlas: &FontAtlas,
+    series: &crate::race::RaceSeries,
+    colors: [[f32; 3]; 2],
+    names: [&str; 2],
+    width: u32,
+    height: u32,
+    portrait: bool,
+) -> Vec<HudVertex> {
+    let n = series.samples.len();
+    if n < 2 {
+        return Vec::new();
+    }
+    let mut b = HudBuilder::new(atlas);
+    let (w, h) = (width as f32, height as f32);
+    let fr = w.min(h);
+
+    let (gx0, gx1, gy0, gy1) = if portrait {
+        (w * 0.06, w * 0.94, h * 0.215, h * 0.37)
+    } else {
+        (w * 0.227, w * 0.965, h * 0.19, h * 0.37)
+    };
+
+    let label_col = srgb8_to_linear([138, 138, 146], 1.0);
+    b.text("Race Delta", gx0, gy0 - fr * 0.010, fr * 0.021, Align::Left, label_col);
+
+    let t0 = series.samples[0].t_ms;
+    let span_t = (series.samples[n - 1].t_ms - t0).max(1.0);
+    let x_of = |t: f64| gx0 + (((t - t0) / span_t) as f32) * (gx1 - gx0);
+
+    let pos_max = series.samples.iter().map(|p| p.score_delta.max(0)).max().unwrap_or(0);
+    let neg_max = series.samples.iter().map(|p| (-p.score_delta).max(0)).max().unwrap_or(0);
+    let zy = gy0 + (gy1 - gy0) * crate::race::graph_zero_share(pos_max, neg_max);
+    let scale_pos = (zy - gy0) / pos_max.max(1) as f32;
+    let scale_neg = (gy1 - zy) / neg_max.max(1) as f32;
+    let y_of = |d: i64| {
+        if d >= 0 {
+            zy - d as f32 * scale_pos
+        } else {
+            zy + (-d) as f32 * scale_neg
+        }
+    };
+
+    // Zero line across the band.
+    b.line([gx0, zy], [gx1, zy], (fr * 0.0012).max(1.0), srgb8_to_linear([70, 72, 80], 0.9));
+
+    // Area fill between curve and zero line, tinted by whoever leads that
+    // segment (raw triangles — the band is not axis-aligned).
+    let fills = [cursor_col(colors[0], 0.20), cursor_col(colors[1], 0.24)];
+    let mut tri = |p0: [f32; 2], p1: [f32; 2], p2: [f32; 2], color: [f32; 4]| {
+        for pos in [p0, p1, p2] {
+            b.verts.push(HudVertex {
+                pos,
+                uv: [0.0, 0.0],
+                color,
+                mode: 0.0,
+                _pad: 0.0,
+            });
+        }
+    };
+    for pair in series.samples.windows(2) {
+        let (pa, pb) = (&pair[0], &pair[1]);
+        let (xa, xb) = (x_of(pa.t_ms), x_of(pb.t_ms));
+        let (ya, yb) = (y_of(pa.score_delta), y_of(pb.score_delta));
+        let col = fills[usize::from(pa.score_delta + pb.score_delta < 0)];
+        tri([xa, zy], [xa, ya], [xb, yb], col);
+        tri([xa, zy], [xb, yb], [xb, zy], col);
+    }
+
+    // The delta curve itself.
+    let ink = srgb8_to_linear([225, 225, 230], 0.95);
+    let thick = (fr * 0.0022).max(1.0);
+    let mut prev: Option<[f32; 2]> = None;
+    for p in &series.samples {
+        let q = [x_of(p.t_ms), y_of(p.score_delta)];
+        if let Some(o) = prev {
+            b.line(o, q, thick, ink);
+        }
+        prev = Some(q);
+    }
+
+    // Lead changes as dots on the zero line.
+    let dot = (fr * 0.004).max(2.5);
+    for &t in &series.lead_changes {
+        b.rect(x_of(t) - dot * 0.5, zy - dot * 0.5, dot, dot, [1.0, 1.0, 1.0, 0.95]);
+    }
+
+    // Peak lead, annotated in the leader's colour and kept inside the band.
+    if let Some(peak) = series
+        .samples
+        .iter()
+        .max_by_key(|p| p.score_delta.abs())
+        .filter(|p| p.score_delta != 0)
+    {
+        let (px, py) = (x_of(peak.t_ms), y_of(peak.score_delta));
+        let col = cursor_col(colors[usize::from(peak.score_delta < 0)], 1.0);
+        b.rect(px - dot * 0.5, py - dot * 0.5, dot, dot, col);
+        let (txt, _) = race_delta_text(peak.score_delta);
+        let label = format!("{} at {}", txt, clock(peak.t_ms));
+        let px_size = fr * 0.019;
+        let (tx, align) = if px > gx0 + (gx1 - gx0) * 0.72 {
+            (px - fr * 0.008, Align::Right)
+        } else {
+            (px + fr * 0.008, Align::Left)
+        };
+        let ty = if peak.score_delta >= 0 {
+            (py - fr * 0.010).max(gy0 + px_size)
+        } else {
+            (py + px_size + fr * 0.006).min(gy1 - fr * 0.004)
+        };
+        b.text(&label, tx, ty, px_size, align, col);
+    }
+
+    // Who owns which half of the band.
+    let name_px = fr * 0.017;
+    let max_name_w = (gx1 - gx0) * 0.34;
+    for (i, name) in names.iter().enumerate() {
+        let label = format!("{name} ahead");
+        let mut px_size = name_px;
+        let tw = atlas.measure(&label, px_size);
+        if tw > max_name_w {
+            px_size *= max_name_w / tw;
+        }
+        let ty = if i == 0 { gy0 + px_size } else { gy1 - fr * 0.004 };
+        b.text(&label, gx1, ty, px_size, Align::Right, cursor_col(colors[i], 0.95));
+    }
+
+    b.verts
+}

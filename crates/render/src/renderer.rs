@@ -1602,7 +1602,7 @@ impl Renderer {
             0.0,
         );
         quad(&mut verts, cx0, cy0, cx1, cy1, [1.0, 1.0, 1.0, 1.0], 2.0);
-        if ghost.is_some() {
+        if let Some(g) = ghost {
             verts.extend(crate::hud::build_results(
                 &self.hud_atlas,
                 replay,
@@ -1614,6 +1614,19 @@ impl Renderer {
                 crate::hud::ResultsPart::Header,
                 self.portrait_output(),
             ));
+            // The race's story: the delta graph in the free band right of
+            // the cover, gated by the same toggle as the live widget.
+            if let Some(series) = g.race.as_ref().filter(|_| config.hud.race_delta.enabled) {
+                verts.extend(crate::hud::build_race_graph(
+                    &self.hud_atlas,
+                    series,
+                    [config.cursor_color, g.color],
+                    [&replay.player_name, &g.replay.player_name],
+                    self.width,
+                    self.height,
+                    self.portrait_output(),
+                ));
+            }
         }
         for (side_replay, side_stats, x_off, w_eff) in &sides {
             let (x_off, w_eff) = (*x_off, *w_eff);

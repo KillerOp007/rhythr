@@ -55,6 +55,17 @@ pub fn rail_acc_floor(series: &RaceSeries) -> f32 {
         .fold(99.0f32, f32::min)
 }
 
+/// Vertical share of the results delta graph that sits above the zero
+/// line, from the two lead extremes. Clamped so the smaller side always
+/// keeps a visible strip even in a one-sided race.
+pub fn graph_zero_share(pos_max: i64, neg_max: i64) -> f32 {
+    let total = pos_max + neg_max;
+    if total <= 0 {
+        return 0.5;
+    }
+    (pos_max as f32 / total as f32).clamp(0.12, 0.88)
+}
+
 /// Song time past which a run's stats stop moving. Matches the results
 /// screen: a failed run is read at fail time + hit window.
 pub fn side_end(replay: &Replay) -> f64 {
@@ -250,6 +261,17 @@ mod tests {
         assert_eq!(last.score_delta, 1000 - 300);
         assert!((last.acc[1] - 100.0).abs() < 1e-4);
         assert!(s.miss_times[1].is_empty());
+    }
+
+    #[test]
+    fn graph_zero_line_follows_the_lead_extremes_within_bounds() {
+        // Symmetric race: zero line centred. One-sided race: the unused
+        // half shrinks but never below 12% of the band.
+        assert_eq!(graph_zero_share(500, 500), 0.5);
+        assert_eq!(graph_zero_share(300, 100), 0.75);
+        assert_eq!(graph_zero_share(1000, 0), 0.88);
+        assert_eq!(graph_zero_share(0, 1000), 0.12);
+        assert_eq!(graph_zero_share(0, 0), 0.5);
     }
 
     #[test]
