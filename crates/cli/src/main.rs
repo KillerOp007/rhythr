@@ -131,6 +131,14 @@ enum Command {
         /// skin references (see `frame --game-assets`).
         #[arg(long)]
         game_assets: Option<PathBuf>,
+        /// Ghost races: hide the live score-gap widget and the results
+        /// delta graph.
+        #[arg(long)]
+        no_racing_delta: bool,
+        /// Ghost races: hide the momentum rail (both runs' accuracy curves
+        /// under the race).
+        #[arg(long)]
+        no_momentum_rail: bool,
     },
 }
 
@@ -269,6 +277,8 @@ fn run() -> anyhow::Result<bool> {
             ffmpeg,
             config,
             game_assets,
+            no_racing_delta,
+            no_momentum_rail,
         } => {
             let r = Replay::from_path(&replay)
                 .with_context(|| format!("reading {}", replay.display()))?;
@@ -288,7 +298,9 @@ fn run() -> anyhow::Result<bool> {
                     m.cover = Some(bytes);
                 }
             }
-            let cfg = load_config(&config, &game_assets)?;
+            let mut cfg = load_config(&config, &game_assets)?;
+            cfg.hud.race_delta.enabled = !no_racing_delta;
+            cfg.hud.race_rail.enabled = !no_momentum_rail;
 
             // Normalize BEFORE deriving the range: a wall-clock replay's raw
             // fail time / length is 1/speed of the song and would truncate
