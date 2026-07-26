@@ -58,12 +58,16 @@ endorsed by Rhythia or Capo Games.
   **TikTok / Shorts** (1080 × 1920) or **Square** (1080 × 1080).
 - **Edit HUD** — the switch next to *Save thumbnail* outlines every HUD
   element in the preview; drag any of them wherever you like (make room
-  for a handcam, stack panels, overlap things — up to you). In a ghost
-  race the layout applies within each side's own half. Positions save
-  automatically and the render always matches the preview. **Reset
-  layout** next to the switch puts every element (meters included)
-  back to its standard position without touching visibility or sizes;
-  "Reset all to config" on the HUD tab resets everything.
+  for a handcam, stack panels, overlap things — up to you). Drag the
+  round **corner handle** on a box to resize the element (0.4x–2.5x;
+  back to ~100% removes the override). The **Grid** dropdown overlays
+  a snap grid in four densities — elements and meters snap to it
+  while you drag, aligning whichever edge (or the centre) is closest
+  to a line. In a ghost race the layout applies within each side's
+  own half. Positions and sizes save automatically and the render
+  always matches the preview. **Reset layout** next to the switch
+  puts every element (meters included) back to its standard position
+  and size; "Reset all to config" on the HUD tab resets everything.
 - **Vertical renders** — pick a vertical resolution (1080 × 1920 or
   720 × 1280) for TikTok/Shorts: gameplay keeps its full width and the
   HUD moves into bands above and below it. The results screen re-lays

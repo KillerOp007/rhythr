@@ -3,6 +3,27 @@
 rhythr is an unofficial community tool and is not affiliated with or
 endorsed by Rhythia or Capo Games.
 
+## v0.4.1 — 2026-07-26
+
+### Added
+
+- **Resize in the HUD editor**: every box in Edit HUD grows a round
+  corner handle — drag it to scale the element freely (0.4x–2.5x,
+  about its centre, text included). Dragging back to ~100% removes
+  the override; *Reset layout* now restores sizes as well as
+  positions.
+- **Snap grid**: a *Grid* dropdown next to *Reset layout*
+  (Off / Fine / Small / Medium / Large) overlays a grid on the
+  preview. Dragged elements and meters snap to it live — magnetic
+  per axis: whichever of the element's real edges or its centre is
+  closest to a grid line lands on it, so resized elements align
+  their edges instead of hovering between lines. The choice is
+  remembered.
+- Arch installs (the AUR package) now get an honest update banner:
+  "update via your AUR helper (rhythr-bin)" with a release-notes
+  link, instead of a download-page button that can't update a
+  pacman-managed install anyway.
+
 ## v0.4.0 — 2026-07-26
 
 Ghost races become real races, and the playfield gets your own
