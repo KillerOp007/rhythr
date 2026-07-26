@@ -144,8 +144,8 @@ pub fn render_video(
     let params = &params;
     // Resolve every note's hit/miss once; the HUD reads running stats from it.
     let hud_state = crate::hud::HudState::new(map, replay);
-    // With both sides resolved, the whole-map race series (delta graph,
-    // momentum rail) is fixed — build it once.
+    // With both sides resolved, the whole-map race series (results delta
+    // graph) is fixed — build it once.
     if let Some(g) = ghost_input.as_mut() {
         g.race = Some(crate::race::RaceSeries::for_race(
             &crate::race::RaceSide { map, replay, state: &hud_state },

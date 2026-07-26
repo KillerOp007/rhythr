@@ -210,8 +210,7 @@ function renderHudTab() {
     + meterRow("aim", "Aim accuracy (cursor vs. note centre)", status?.settings?.aim_meter || {})
     + (status?.ghost
       ? `<div class="hud-group-title">Ghost race</div>`
-        + meterRow("race_delta", "Racing delta (live score gap + results graph)", status?.settings?.race_delta || {})
-        + meterRow("race_rail", "Momentum rail (both runs' accuracy curves)", status?.settings?.race_rail || {})
+        + meterRow("race_delta", "Racing delta (score lead, bar + results graph)", status?.settings?.race_delta || {})
       : "");
 
   wrap.querySelectorAll(".meter-toggle").forEach((row) => {
@@ -437,11 +436,7 @@ function meterBox(key, m, side, imgH) {
   const refd = Math.min(side.w, h);
   if (key === "race_delta") {
     const s = m.scale || 1;
-    return { x: cx - refd * 0.17 * s, y: cy - refd * 0.062 * s, w: refd * 0.34 * s, h: refd * 0.11 * s };
-  }
-  if (key === "race_rail") {
-    const rh = refd * 0.042 * (m.scale || 1);
-    return { x: side.off + side.w * 0.06, y: cy - rh * 0.75, w: side.w * 0.88, h: rh * 1.5 };
+    return { x: cx - refd * 0.17 * s, y: cy - refd * 0.062 * s, w: refd * 0.34 * s, h: refd * 0.125 * s };
   }
   const half = h * 0.065 * (m.scale || 1);
   return { x: cx - half, y: cy - half, w: half * 2, h: half * 2 };
@@ -653,10 +648,8 @@ function initMeterDrag() {
     // Race widgets sit above the per-side meters and span the full frame.
     if (status?.ghost) {
       const full = { off: 0, w: g.iw, gk: null };
-      for (const key of ["race_delta", "race_rail"]) {
-        const m = meterSettings(key);
-        if (m?.enabled && grab(e, g, key, m, full)) return;
-      }
+      const m = meterSettings("race_delta");
+      if (m?.enabled && grab(e, g, "race_delta", m, full)) return;
     }
     for (const side of meterSides(g.iw)) {
       for (const key of ["error", "aim"]) {
@@ -669,11 +662,9 @@ function initMeterDrag() {
     if (!meterDrag) return;
     const g = geom(e);
     const n = sideNorm(g, meterDrag.side);
-    const patched = meterDrag.key === "race_rail"
-      ? { ...meterDrag.m, y: n.y }
-      : meterDrag.side.gk
-        ? { ...meterDrag.m, ghost_x: n.x, ghost_y: n.y }
-        : { ...meterDrag.m, x: n.x, y: n.y };
+    const patched = meterDrag.side.gk
+      ? { ...meterDrag.m, ghost_x: n.x, ghost_y: n.y }
+      : { ...meterDrag.m, x: n.x, y: n.y };
     dragGhostBox(true, screenBox(meterBox(meterDrag.key, patched, meterDrag.side, g.ih), g));
   });
   img.addEventListener("pointerup", async (e) => {
@@ -683,12 +674,7 @@ function initMeterDrag() {
     meterDrag = null;
     dragGhostBox(false);
     const n = sideNorm(g, side);
-    // The rail spans the full width — only its height is yours to place.
-    const patch = key === "race_rail"
-      ? { y: n.y }
-      : side.gk
-        ? { ghost_x: n.x, ghost_y: n.y }
-        : { x: n.x, y: n.y };
+    const patch = side.gk ? { ghost_x: n.x, ghost_y: n.y } : { x: n.x, y: n.y };
     await call(() => invoke("set_meter", { key, patch }));
     schedulePreview();
   });

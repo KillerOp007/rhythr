@@ -891,17 +891,6 @@ impl Renderer {
                                 self.height,
                             ));
                         }
-                        if let Some(series) = g.race.as_ref().filter(|_| config.hud.race_rail.enabled) {
-                            verts.extend(crate::hud::build_race_rail(
-                                &self.hud_atlas,
-                                config,
-                                series,
-                                [config.cursor_color, g.color],
-                                song_time_ms,
-                                self.width,
-                                self.height,
-                            ));
-                        }
                         verts
                     }
                     _ => Vec::new(),
@@ -957,9 +946,9 @@ impl Renderer {
         viewport: (u32, u32),
         clear: bool,
         readback_slot: Option<usize>,
-        // Pre-built overlay in FULL-frame pixels (racing delta, momentum
-        // rail): appended after this side's HUD is shifted into frame
-        // space, so it must not be offset again.
+        // Pre-built overlay in FULL-frame pixels (racing delta): appended
+        // after this side's HUD is shifted into frame space, so it must
+        // not be offset again.
         extra_hud: &[crate::hud::HudVertex],
     ) -> Result<(), Error> {
         let (vp_x, vp_w) = viewport;

@@ -1,7 +1,7 @@
-//! Ghost-race analytics: the running score/accuracy gap between the two
-//! runs, sampled across the map. Feeds the racing-delta widget's results
-//! graph and the momentum rail; the live widget itself reads `stats_at`
-//! directly so its numbers always equal the per-side HUDs.
+//! Ghost-race analytics: the running score gap between the two runs,
+//! sampled across the map for the racing-delta results graph; the live
+//! widget itself reads `stats_at` directly so its numbers always equal
+//! the per-side HUDs.
 //!
 //! All sampling goes through [`crate::hud::HudState::stats_at`] — the same
 //! walk that drives the on-screen score/accuracy — so the series can never
@@ -36,42 +36,9 @@ pub struct RaceSample {
 #[derive(Debug, Clone, Default)]
 pub struct RaceSeries {
     pub samples: Vec<RaceSample>,
-    /// Miss registration times (note time + hit window) per side, capped at
-    /// the side's fail freeze — a failed run's unplayed notes are not
-    /// misses.
-    pub miss_times: [Vec<f64>; 2],
     /// Sample times where the score lead flipped to the other side. Zero is
     /// neutral: `+,0,+` is no change, `+,0,-` is one.
     pub lead_changes: Vec<f64>,
-}
-
-/// The momentum rail's drawing curves: accuracy per side, box-smoothed
-/// over ±3 samples. Early-song accuracy is a fast sawtooth (every miss
-/// swings it hard while few notes are resolved) that aliases against the
-/// coarse sample grid into scribble; the rail tells momentum, not exact
-/// values, so it draws the smoothed shape.
-pub fn rail_curves(series: &RaceSeries) -> [Vec<f32>; 2] {
-    let n = series.samples.len();
-    let mut out = [Vec::with_capacity(n), Vec::with_capacity(n)];
-    for (side, curve) in out.iter_mut().enumerate() {
-        for i in 0..n {
-            let (lo, hi) = (i.saturating_sub(3), (i + 3).min(n - 1));
-            let sum: f32 = series.samples[lo..=hi].iter().map(|p| p.acc[side]).sum();
-            curve.push(sum / (hi - lo + 1) as f32);
-        }
-    }
-    out
-}
-
-/// The momentum rail's lower accuracy bound: the worst smoothed accuracy
-/// of either curve, capped at 99 so a perfect race still spans a visible
-/// band.
-pub fn rail_acc_floor(curves: &[Vec<f32>; 2]) -> f32 {
-    curves
-        .iter()
-        .flatten()
-        .copied()
-        .fold(99.0f32, f32::min)
 }
 
 /// Vertical share of the results delta graph that sits above the zero
@@ -130,19 +97,6 @@ impl RaceSeries {
                 score_delta: m.score - g.score,
                 acc: [m.accuracy_pct, g.accuracy_pct],
             });
-        }
-
-        for (i, side) in [main, ghost].into_iter().enumerate() {
-            out.miss_times[i] = side
-                .state
-                .results()
-                .iter()
-                .filter(|r| !r.hit)
-                .map(|r| side.map.notes[r.note_index].time_ms as f64 + DEFAULT_WINDOW_MS)
-                // Strict, like stats_at's miss condition — a miss whose
-                // registration coincides with the freeze is never counted.
-                .filter(|&t| t < ends[i])
-                .collect();
         }
 
         let mut last = 0i8;
@@ -263,8 +217,7 @@ mod tests {
     #[test]
     fn failed_side_freezes_at_its_fail_time() {
         // Ghost hits notes 1+2 and fails at 2500: notes 3+4 were never
-        // played, so its stats freeze (300 points, 100% of what it saw) and
-        // the unplayed notes produce no miss ticks.
+        // played, so its stats freeze (300 points, 100% of what it saw).
         let map = map_with(&NOTES);
         let mr = replay_with(&[1005.0, 2005.0, 3005.0, 4005.0]);
         let mut gr = replay_with(&[1005.0, 2005.0]);
@@ -281,7 +234,6 @@ mod tests {
         let last = s.samples.last().unwrap();
         assert_eq!(last.score_delta, 1000 - 300);
         assert!((last.acc[1] - 100.0).abs() < 1e-4);
-        assert!(s.miss_times[1].is_empty());
     }
 
     #[test]
@@ -312,68 +264,4 @@ mod tests {
         assert_eq!(s.samples.last().unwrap().t_ms, 5000.0);
     }
 
-    #[test]
-    fn rail_floor_tracks_the_worst_accuracy_but_keeps_a_span() {
-        let rough = [vec![100.0, 99.2], vec![97.5, 98.0]];
-        assert_eq!(rail_acc_floor(&rough), 97.5);
-        let perfect = [vec![100.0], vec![100.0]];
-        assert_eq!(rail_acc_floor(&perfect), 99.0);
-    }
-
-    #[test]
-    fn rail_curves_flatten_the_aliasing_sawtooth() {
-        // A 90/100 zigzag (early-song accuracy against the coarse sample
-        // grid) must hug its mean instead of drawing scribble; a constant
-        // side stays exactly constant and lengths are preserved.
-        let mk = |a: f32| RaceSample {
-            t_ms: 0.0,
-            score_delta: 0,
-            acc: [a, 100.0],
-        };
-        let s = RaceSeries {
-            samples: (0..40)
-                .map(|i| mk(if i % 2 == 0 { 90.0 } else { 100.0 }))
-                .collect(),
-            ..Default::default()
-        };
-        let c = rail_curves(&s);
-        assert_eq!(c[0].len(), 40);
-        assert!(c[0][10..30].iter().all(|v| (v - 95.0).abs() <= 1.5));
-        assert!(c[1].iter().all(|&v| v == 100.0));
-        assert!(rail_curves(&RaceSeries::default())[0].is_empty());
-    }
-
-    #[test]
-    fn a_miss_registering_exactly_at_the_freeze_is_no_tick() {
-        // Fail at 2500 → freeze at 2581. A note at 2501 registers at
-        // exactly 2581; stats_at counts misses strictly BEFORE the freeze
-        // (hud.rs), so the rail must not show a tick that no frozen
-        // counter contains.
-        let map = map_with(&[1000, 2501]);
-        let mr = replay_with(&[1005.0, 2505.0]);
-        let mut gr = replay_with(&[1005.0]);
-        gr.fail_time_ms = 2500;
-        gr.passed = false;
-        let (ms, gs) = (HudState::new(&map, &mr), HudState::new(&map, &gr));
-        let s = RaceSeries::build(
-            &RaceSide { map: &map, replay: &mr, state: &ms },
-            &RaceSide { map: &map, replay: &gr, state: &gs },
-            0.0,
-            5000.0,
-            5,
-        );
-        assert!(s.miss_times[1].is_empty());
-    }
-
-    #[test]
-    fn miss_ticks_land_at_registration_time() {
-        // A miss shows up when the game gives up on the note: note time +
-        // the 80 ms hit window.
-        let (s, _, _) = series_for(
-            &[1005.0, 3005.0, 4005.0],
-            &[1005.0, 2005.0, 3005.0, 4005.0],
-        );
-        assert_eq!(s.miss_times[0], vec![2080.0]);
-        assert!(s.miss_times[1].is_empty());
-    }
 }

@@ -74,10 +74,9 @@ struct Settings {
     /// Optional overlay meters (renderer extras, not game elements).
     error_meter: MeterSettings,
     aim_meter: MeterSettings,
-    /// Ghost-race extras: the live score-gap widget (plus results graph)
-    /// and the momentum rail. Full-frame, so ghost_x/ghost_y stay unused.
+    /// Ghost-race extra: the score-lead widget (numbers, tournament bar,
+    /// results graph). Full-frame, so ghost_x/ghost_y stay unused.
     race_delta: MeterSettings,
-    race_rail: MeterSettings,
     recent_replays: Vec<String>,
 }
 
@@ -105,10 +104,9 @@ impl Default for Settings {
             hud_positions: BTreeMap::new(),
             error_meter: MeterSettings::at(0.5, 0.88),
             aim_meter: MeterSettings::at(0.15, 0.32),
-            // Race extras only ever show in ghost races, which are
-            // deliberate — unlike the meters they default to on.
+            // The race widget only ever shows in ghost races, which are
+            // deliberate — unlike the meters it defaults to on.
             race_delta: MeterSettings { enabled: true, ..MeterSettings::at(0.5, 0.115) },
-            race_rail: MeterSettings { enabled: true, ..MeterSettings::at(0.5, 0.945) },
             recent_replays: Vec::new(),
         }
     }
@@ -408,7 +406,6 @@ fn effective_config(inner: &Inner) -> SkinConfig {
     inner.settings.error_meter.apply(&mut cfg.hud.error_meter);
     inner.settings.aim_meter.apply(&mut cfg.hud.aim_meter);
     inner.settings.race_delta.apply(&mut cfg.hud.race_delta);
-    inner.settings.race_rail.apply(&mut cfg.hud.race_rail);
     cfg
 }
 
@@ -1270,7 +1267,6 @@ fn set_meter(
         "error" => &mut inner.settings.error_meter,
         "aim" => &mut inner.settings.aim_meter,
         "race_delta" => &mut inner.settings.race_delta,
-        "race_rail" => &mut inner.settings.race_rail,
         _ => return Err(format!("unknown meter: {key}")),
     };
     if let Some(v) = patch.enabled {
@@ -1316,7 +1312,6 @@ fn reset_hud_layout(state: tauri::State<'_, App>) -> Result<StatusDto, String> {
     park(&mut inner.settings.error_meter, MeterSettings::at(0.5, 0.88));
     park(&mut inner.settings.aim_meter, MeterSettings::at(0.15, 0.32));
     park(&mut inner.settings.race_delta, MeterSettings::at(0.5, 0.115));
-    park(&mut inner.settings.race_rail, MeterSettings::at(0.5, 0.945));
     inner.settings.save();
     invalidate_preview(&mut inner);
     Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
