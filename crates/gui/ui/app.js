@@ -855,6 +855,8 @@ function initMeterDrag() {
   img.addEventListener("pointermove", (e) => {
     if (!meterDrag) return;
     const g = geom(e);
+    // Meters ride the snap grid too — live, like the HUD elements.
+    if (hudEditOn) [g.x, g.y] = snapFrame(g.x, g.y, g.ih);
     const n = sideNorm(g, meterDrag.side);
     const patched = meterDrag.side.gk
       ? { ...meterDrag.m, ghost_x: n.x, ghost_y: n.y }
