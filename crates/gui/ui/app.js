@@ -522,11 +522,27 @@ const GRID_STEPS = [0, 1 / 48, 1 / 24, 1 / 12, 1 / 6];
 const GRID_NAMES = ["Off", "Fine", "Small", "Medium", "Large"];
 let gridStep = Number(localStorage.getItem("hud-grid")) || 0;
 
-// Snaps a point (frame pixels) to the grid; no-op with the grid off.
-function snapFrame(fx, fy, frameH) {
-  if (!gridStep || !frameH) return [fx, fy];
+// Magnet snap for one axis: whichever of the box's two edges or its
+// centre sits closest to a grid line wins. A big element aligns its edge
+// with a line instead of hovering centred between two of them.
+function snapAxisDelta(lo, hi, step) {
+  let best = 0;
+  let bestAbs = Infinity;
+  for (const v of [lo, hi, (lo + hi) / 2]) {
+    const d = Math.round(v / step) * step - v;
+    if (Math.abs(d) < bestAbs) {
+      bestAbs = Math.abs(d);
+      best = d;
+    }
+  }
+  return best;
+}
+
+// Snap displacement for a box in frame pixels; [0, 0] with the grid off.
+function snapBoxDelta(x0, y0, x1, y1, frameH) {
+  if (!gridStep || !frameH) return [0, 0];
   const s = frameH * gridStep;
-  return [Math.round(fx / s) * s, Math.round(fy / s) * s];
+  return [snapAxisDelta(x0, x1, s), snapAxisDelta(y0, y1, s)];
 }
 
 // Paints the grid over the preview image (its own child so the edit
@@ -601,6 +617,10 @@ async function refreshHudBoxes() {
     el.style.width = `${(b.x1 - b.x0) * sx + pad * 2}px`;
     el.style.height = `${(b.y1 - b.y0) * sy + pad * 2}px`;
     el.title = b.key.replace("_", " ");
+    // The element's true frame-pixel size (no editor padding) — the snap
+    // math aligns real edges with grid lines, not the dashed outline.
+    el.dataset.fw = String(b.x1 - b.x0);
+    el.dataset.fh = String(b.y1 - b.y0);
     const grip = document.createElement("div");
     grip.className = "hud-resize";
     grip.title = "Drag to resize";
@@ -732,15 +752,19 @@ function initHudEdit() {
     let nl = d.origLeft + e.clientX - d.startX;
     let nt = d.origTop + e.clientY - d.startY;
     if (gridStep) {
-      // Snap the box centre to the display-space grid, live.
+      // Magnet-snap the element's REAL edges/centre in frame space, live.
       const img = $("preview-img");
       const r = img.getBoundingClientRect();
       const wr = $("preview-wrap").getBoundingClientRect();
-      const cell = r.height * gridStep;
-      const cxImg = nl + d.box.offsetWidth / 2 + wr.left - r.left;
-      const cyImg = nt + d.box.offsetHeight / 2 + wr.top - r.top;
-      nl += Math.round(cxImg / cell) * cell - cxImg;
-      nt += Math.round(cyImg / cell) * cell - cyImg;
+      const nw = img.naturalWidth || 1;
+      const nh = img.naturalHeight || 1;
+      const cxF = ((nl + d.box.offsetWidth / 2 + wr.left - r.left) / r.width) * nw;
+      const cyF = ((nt + d.box.offsetHeight / 2 + wr.top - r.top) / r.height) * nh;
+      const bw = parseFloat(d.box.dataset.fw) || 0;
+      const bh = parseFloat(d.box.dataset.fh) || 0;
+      const [dx, dy] = snapBoxDelta(cxF - bw / 2, cyF - bh / 2, cxF + bw / 2, cyF + bh / 2, nh);
+      nl += dx * (r.width / nw);
+      nt += dy * (r.height / nh);
     }
     d.box.style.left = `${nl}px`;
     d.box.style.top = `${nt}px`;
@@ -770,7 +794,19 @@ function initHudEdit() {
     const by = parseFloat(d.box.style.top) + d.box.offsetHeight / 2;
     let fx = ((bx + wr.left - r.left) / r.width) * (img.naturalWidth || 1);
     let fy = ((by + wr.top - r.top) / r.height) * (img.naturalHeight || 1);
-    [fx, fy] = snapFrame(fx, fy, img.naturalHeight || 0);
+    {
+      const bw = parseFloat(d.box.dataset.fw) || 0;
+      const bh = parseFloat(d.box.dataset.fh) || 0;
+      const [dx, dy] = snapBoxDelta(
+        fx - bw / 2,
+        fy - bh / 2,
+        fx + bw / 2,
+        fy + bh / 2,
+        img.naturalHeight || 0,
+      );
+      fx += dx;
+      fy += dy;
+    }
     const vpW = status?.ghost ? (img.naturalWidth || 1) / 2 : img.naturalWidth || 1;
     try {
       const st = await invoke("set_hud_position", {
@@ -852,11 +888,23 @@ function initMeterDrag() {
       }
     }
   });
+  // Magnet-snaps a meter drag point so the meter's REAL box edges (or
+  // centre) land on grid lines — same feel as the HUD elements.
+  const snapMeterPoint = (g, key, m, side) => {
+    if (!hudEditOn || !gridStep) return;
+    const n = sideNorm(g, side);
+    const patched = side.gk
+      ? { ...m, ghost_x: n.x, ghost_y: n.y }
+      : { ...m, x: n.x, y: n.y };
+    const b = meterBox(key, patched, side, g.ih);
+    const [dx, dy] = snapBoxDelta(b.x, b.y, b.x + b.w, b.y + b.h, g.ih);
+    g.x += dx;
+    g.y += dy;
+  };
   img.addEventListener("pointermove", (e) => {
     if (!meterDrag) return;
     const g = geom(e);
-    // Meters ride the snap grid too — live, like the HUD elements.
-    if (hudEditOn) [g.x, g.y] = snapFrame(g.x, g.y, g.ih);
+    snapMeterPoint(g, meterDrag.key, meterDrag.m, meterDrag.side);
     const n = sideNorm(g, meterDrag.side);
     const patched = meterDrag.side.gk
       ? { ...meterDrag.m, ghost_x: n.x, ghost_y: n.y }
@@ -866,10 +914,10 @@ function initMeterDrag() {
   img.addEventListener("pointerup", async (e) => {
     if (!meterDrag) return;
     const g = geom(e);
-    const { key, side } = meterDrag;
+    const { key, m, side } = meterDrag;
     meterDrag = null;
     dragGhostBox(false);
-    if (hudEditOn) [g.x, g.y] = snapFrame(g.x, g.y, g.ih);
+    snapMeterPoint(g, key, m, side);
     const n = sideNorm(g, side);
     const patch = side.gk ? { ghost_x: n.x, ghost_y: n.y } : { x: n.x, y: n.y };
     await call(() => invoke("set_meter", { key, patch }));
