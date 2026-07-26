@@ -3,6 +3,61 @@
 rhythr is an unofficial community tool and is not affiliated with or
 endorsed by Rhythia or Capo Games.
 
+## v0.4.0 — 2026-07-26
+
+Ghost races become real races, and the playfield gets your own
+backdrop.
+
+### Added
+
+- **Racing delta** (ghost races): a score-lead widget at the split
+  seam — the live score gap, the accuracy gap and a tournament-style
+  lead bar growing from the centre toward whoever leads, in that
+  player's colour. The lead is note-synchronized: it only moves once
+  a note is answered by BOTH sides and came out differently, so an
+  even race shows a calm zero instead of flickering with every hit.
+  The number rolls like a counter and the bar glides. The results
+  screen adds a **race delta graph** — the gap over the whole map,
+  area-filled in the leader's colour, lead changes and the peak lead
+  annotated: where the race was decided, at a glance. The widget is
+  draggable in Edit HUD and lives under HUD → Ghost race
+  (`--no-racing-delta` in the CLI).
+- **Custom backgrounds**: give the play its own backdrop — an image
+  or a video shown behind the gameplay instead of the skin
+  background. Videos play muted and looped, scaled to cover the
+  frame, in any format your ffmpeg reads (animated GIFs actually
+  animate); detection is by file content, not extension. A dim
+  slider (default 60%) darkens only the background so the notes stay
+  readable — and the results screen keeps its own look. New
+  Background card in the app; `--background` / `--background-dim`
+  in the CLI.
+- **Drop targeting**: drag a file over the Ghost race or Background
+  card and it lights up — the drop lands right there. A replay
+  dropped on Ghost race becomes the ghost without the Browse detour
+  (or, with nothing loaded yet, your replay plus a hint that a race
+  needs a second one). Images and videos dropped anywhere become the
+  background. Dropping into the middle behaves as before.
+
+### Fixed
+
+- **"Reset layout" no longer wipes your HUD on/off choices.** The
+  toolbar button and the HUD tab's "Reset all to config" shared one
+  element id, so resetting the layout silently cleared every
+  override too — and the HUD-tab button did nothing at all.
+- A **failed side in a ghost race now freezes at its fail time** on
+  every surface (side HUD, widget, results, graph): its numbers
+  stop, notes it never played are not counted as misses, and a
+  FAILED badge marks the dead side. Solo renders always ended at the
+  fail, so nothing changes there.
+
+### Changed
+
+- Linux install guidance: the AppImage runtime needs your distro's
+  `fuse3` (a `fusermount` binary), not the old `libfuse2` — and on
+  Arch-based distros (Arch, CachyOS, Manjaro, EndeavourOS) the AUR
+  package `rhythr-bin` is now the explicit recommendation over the
+  AppImage.
+
 ## v0.3.4 — 2026-07-18
 
 ### Added

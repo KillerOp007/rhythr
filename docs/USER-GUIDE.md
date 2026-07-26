@@ -43,6 +43,10 @@ endorsed by Rhythia or Capo Games.
 5. **Drop both files into the app** — the map downloads automatically
    from rhythia.com (verified against the replay and cached), a live
    preview appears, and **Render video** does the rest. Done.
+   While dragging, the **Ghost race** and **Background** cards light
+   up when you hover them: drop a replay on Ghost race to load it as
+   the ghost, drop an image or video on Background (or anywhere) to
+   make it the backdrop.
 
 ## The app, in detail
 
@@ -65,6 +69,17 @@ endorsed by Rhythia or Capo Games.
   HUD moves into bands above and below it. The results screen re-lays
   out in portrait too, with a square cover. Rearrange the HUD with
   Edit HUD as you like.
+- **Ghost races** — load a second replay of the same map (Ghost race
+  card, or drop it onto the card) and the video splits into two
+  side-by-side runs. The **racing delta** at the seam shows the live
+  score gap with a tournament-style lead bar in the leader's colour;
+  the results screen adds a race delta graph over the whole map.
+  Both can be moved in Edit HUD or turned off under HUD → Ghost race.
+- **Background** — an image or video shown behind the gameplay
+  instead of the skin background (videos play muted and looped; any
+  format your ffmpeg reads, animated GIFs included). The dim slider
+  darkens only the backdrop so notes stay readable; the results
+  screen keeps its own look.
 - **HUD tab** — toggle any HUD element (combo ring, accuracy, score,
   miss markers, …) on or off. Your choices are saved and apply to every
   future render; the yellow dot marks elements that differ from the
@@ -93,13 +108,15 @@ endorsed by Rhythia or Capo Games.
 - **Built-in skin looks slightly off** — check the Game card says
   "game connected"; click **Detect** after game updates to re-read the
   assets.
-- **Linux: AppImage won't start** — the AppImage runtime needs a
-  `fusermount` binary and `/dev/fuse`: install your distro's `fuse3`
-  package (`fuse` on some), or run the file with
-  `./rhythr_*.AppImage --appimage-extract-and-run`. On Arch-based
-  distros (Arch, CachyOS, Manjaro, …) prefer the AUR package
-  `rhythr-bin` — a native install without FUSE that matches your
-  rolling-release libraries.
+- **Linux: AppImage won't start, or shows only a white window** —
+  the AppImage runtime needs a `fusermount` binary and `/dev/fuse`:
+  install your distro's `fuse3` package (`fuse` on some), or run the
+  file with `./rhythr_*.AppImage --appimage-extract-and-run`. A white
+  or empty window on a rolling release usually means the bundled
+  libraries clash with your brand-new graphics stack. Either way, on
+  Arch-based distros (Arch, CachyOS, Manjaro, …) prefer the AUR
+  package `rhythr-bin` — a native install without FUSE, built against
+  your own system libraries.
 - **Linux: "ffmpeg not found"** — the AppImage brings its own. The
   `.deb` installs the distro ffmpeg automatically; for the `.rpm` on
   Fedora, enable RPM Fusion and `sudo dnf install ffmpeg` (the stock
