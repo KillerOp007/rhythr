@@ -15,14 +15,18 @@ own skin.
 - **Linux (any distro)** — `rhythr_x.y.z_amd64.AppImage`. One
   self-contained file (ffmpeg included): `chmod +x`, run. Needs glibc
   2.35+ (Ubuntu 22.04 / Debian 12 / Fedora 36 or newer, Arch, openSUSE
-  Leap 15.6+, SteamOS 3.5+). If your distro lacks FUSE2, install
-  `libfuse2`, or run with `--appimage-extract-and-run`.
+  Leap 15.6+, SteamOS 3.5+). If it won't start, install your distro's
+  `fuse3`/`fuse` package (the runtime needs a `fusermount` binary), or
+  run with `--appimage-extract-and-run`.
 - **Debian/Ubuntu/Mint** — `rhythr_x.y.z_amd64.deb`
   (`sudo apt install ./rhythr_*.deb`; uses the system ffmpeg and
   registers the `.rhr` file type).
 - **Fedora/openSUSE** — `rhythr-x.y.z-1.x86_64.rpm`. Install ffmpeg
   separately (RPM Fusion on Fedora) or use the AppImage.
-- **Arch** — install from the AUR (`rhythr-bin`), or use the AppImage.
+- **Arch-based (Arch, CachyOS, Manjaro, EndeavourOS, …)** — install
+  from the AUR: `rhythr-bin`. Recommended over the AppImage there: a
+  native install against your rolling-release system libraries, no
+  FUSE involved.
 
 The game runs through Proton on Linux; *Detect game* finds the Steam
 (native, Flatpak or Snap) install and reads the built-in assets from it

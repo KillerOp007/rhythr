@@ -16,7 +16,10 @@ endorsed by Rhythia or Capo Games.
      (`chmod +x rhythr_*.AppImage`) and run it — everything, including
      ffmpeg, is inside. On Debian/Ubuntu/Mint you can install the
      `.deb` instead (`sudo apt install ./rhythr_*.deb`), on
-     Fedora/openSUSE the `.rpm`, on Arch the AUR package `rhythr-bin`.
+     Fedora/openSUSE the `.rpm`. On Arch-based distros (Arch, CachyOS,
+     Manjaro, EndeavourOS, …) the AUR package `rhythr-bin` is the
+     recommended install — native against your system libraries, which
+     suits a rolling release better than the AppImage.
 2. **Your game connects automatically** — on startup the app searches
    every Steam library (Windows and Linux, Proton or the native build)
    and reads the built-in skin textures and color sets directly from
@@ -90,9 +93,13 @@ endorsed by Rhythia or Capo Games.
 - **Built-in skin looks slightly off** — check the Game card says
   "game connected"; click **Detect** after game updates to re-read the
   assets.
-- **Linux: AppImage won't start** — some distros lack FUSE2. Install
-  `libfuse2` (Ubuntu/Debian) / `fuse2` (Arch), or run the file with
-  `./rhythr_*.AppImage --appimage-extract-and-run`.
+- **Linux: AppImage won't start** — the AppImage runtime needs a
+  `fusermount` binary and `/dev/fuse`: install your distro's `fuse3`
+  package (`fuse` on some), or run the file with
+  `./rhythr_*.AppImage --appimage-extract-and-run`. On Arch-based
+  distros (Arch, CachyOS, Manjaro, …) prefer the AUR package
+  `rhythr-bin` — a native install without FUSE that matches your
+  rolling-release libraries.
 - **Linux: "ffmpeg not found"** — the AppImage brings its own. The
   `.deb` installs the distro ffmpeg automatically; for the `.rpm` on
   Fedora, enable RPM Fusion and `sudo dnf install ffmpeg` (the stock
