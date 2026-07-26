@@ -91,6 +91,9 @@ pub struct SkinTextures {
     bind_group: wgpu::BindGroup,
     tex_flags: [f32; 4],
     tex_flags2: [f32; 4],
+    /// Persistent frame-sized texture a video background streams into
+    /// (bound as the background slot); None for image/skin backgrounds.
+    bg_stream: Option<wgpu::Texture>,
 }
 
 pub struct Renderer {
@@ -654,9 +657,16 @@ impl Renderer {
             .and_then(|b| self.upload_png(b));
         // Custom background layers, composited once on the CPU into a
         // frame-sized image (static under camera motion — a documented
-        // approximation for parallax/spin).
-        let background = compose_background(config, self.width, self.height)
-            .map(|(rgba, w, h)| self.upload_rgba(&rgba, w, h));
+        // approximation for parallax/spin). A video background instead
+        // gets a persistent writable texture that stream_background()
+        // refreshes once per output frame.
+        let background = if config.custom_bg_video {
+            let black = vec![0u8; (self.width * self.height * 4) as usize];
+            Some(self.upload_rgba(&black, self.width, self.height))
+        } else {
+            compose_background(config, self.width, self.height)
+                .map(|(rgba, w, h)| self.upload_rgba(&rgba, w, h))
+        };
 
         let tex_flags = [
             note.is_some() as u32 as f32,
@@ -703,7 +713,40 @@ impl Renderer {
             bind_group,
             tex_flags,
             tex_flags2: [trail.is_some() as u32 as f32, 0.0, 0.0, 0.0],
+            bg_stream: if config.custom_bg_video { background } else { None },
         }
+    }
+
+    /// Writes one RGBA frame (exactly frame-sized) into the video
+    /// background's persistent texture. The bind group built in
+    /// [`Renderer::prepare_skin`] keeps pointing at it, so no re-binding is
+    /// needed. No-op when the skin has no video background.
+    pub fn stream_background(&self, skin: &SkinTextures, rgba: &[u8]) {
+        let Some(tex) = skin.bg_stream.as_ref() else {
+            return;
+        };
+        if rgba.len() != (self.width * self.height * 4) as usize {
+            return;
+        }
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            rgba,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(self.width * 4),
+                rows_per_image: Some(self.height),
+            },
+            wgpu::Extent3d {
+                width: self.width,
+                height: self.height,
+                depth_or_array_layers: 1,
+            },
+        );
     }
 
     /// Decodes image bytes (PNG/JPEG/WebP/BMP, any colour type) and uploads
@@ -1005,12 +1048,15 @@ impl Renderer {
         let mut items: Vec<(f32, Instance)> = Vec::new();
         // Custom skin background: a fullscreen quad at the far plane, drawn
         // before everything (kind 4 bypasses the camera in the shader).
+        // A user-chosen background carries its dim here — multiplied into
+        // the quad only, so gameplay stays untouched.
         if skin.tex_flags[3] > 0.5 {
+            let lum = 1.0 - config.custom_bg_dim.unwrap_or(0.0).clamp(0.0, 1.0);
             items.push((
                 f32::NEG_INFINITY,
                 Instance {
                     model: Mat4::IDENTITY.to_cols_array_2d(),
-                    color: [1.0, 1.0, 1.0, 1.0],
+                    color: [lum, lum, lum, 1.0],
                     kind: 4.0,
                     _pad: [0.0; 3],
                 },

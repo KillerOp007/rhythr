@@ -290,6 +290,15 @@ pub struct SkinConfig {
     /// Custom background layers from the skin's `BackgroundImages[]`,
     /// composited bottom-up behind the scene.
     pub background_images: Vec<BackgroundLayer>,
+    /// Dim of a USER-chosen custom background (0..1, multiplied into the
+    /// background quad only, gameplay untouched). None = no custom
+    /// background: skin backgrounds render exactly as before. Set by the
+    /// app/CLI, never parsed from a skin.
+    pub custom_bg_dim: Option<f32>,
+    /// The custom background is a video: prepare_skin allocates a
+    /// persistent writable texture the render loop streams decoded
+    /// frames into.
+    pub custom_bg_video: bool,
     /// Real note colours from the bundled `colorSet/*.txt`, in order. Empty
     /// when the pack references a built-in colorset (use the picker / a
     /// named-palette approximation instead).
@@ -371,6 +380,8 @@ impl Default for SkinConfig {
             cursor_trail_gradient: Vec::new(),
             note_texture: None,
             background_images: Vec::new(),
+            custom_bg_dim: None,
+            custom_bg_video: false,
             border_texture: None,
             cursor_texture: None,
             trail_texture: None,
@@ -652,6 +663,9 @@ impl SkinConfig {
         Ok(SkinConfig {
             mod_icons: Vec::new(),
             hud_font: None,
+            // App/CLI-only, never part of a skin.
+            custom_bg_dim: None,
+            custom_bg_video: false,
             camera_fov: num("CameraFov", d.camera_fov),
             approach_rate: num("ApproachRate", d.approach_rate),
             spawn_distance: num("SpawnDistance", d.spawn_distance),

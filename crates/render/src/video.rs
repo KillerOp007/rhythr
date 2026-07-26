@@ -43,6 +43,11 @@ pub struct VideoOptions {
     pub hitsounds: Option<HitsoundOptions>,
     /// A second replay of the same map, rendered as a ghost overlay.
     pub ghost: Option<GhostOptions>,
+    /// Custom VIDEO background: decoded by the same ffmpeg, muted and
+    /// looped, one frame per output frame. (Image backgrounds ride the
+    /// config's background layers instead.) The results screen is never
+    /// touched by it.
+    pub background_video: Option<PathBuf>,
 }
 
 /// Ghost-race settings: the second replay and its overlay colour (sRGB
@@ -76,6 +81,7 @@ impl Default for VideoOptions {
             music_volume: 1.0,
             hitsounds: None,
             ghost: None,
+            background_video: None,
         }
     }
 }
@@ -348,8 +354,23 @@ pub fn render_video(
     // roughly doubles throughput over the strictly serial loop.
     const DEPTH: u64 = crate::renderer::READBACK_SLOTS as u64 - 1;
     let slot = |i: u64| (i % crate::renderer::READBACK_SLOTS as u64) as usize;
+    // Custom video background: a second ffmpeg decodes it muted, looped
+    // and scaled-to-cover — one RGBA frame per output frame, streamed
+    // into the skin's persistent background texture. If it dies mid-way
+    // the last good frame stays.
+    let (fw, fh) = renderer.dimensions();
+    let mut bg_decoder = match &opts.background_video {
+        Some(p) => Some(
+            crate::background::VideoDecoder::spawn(&opts.ffmpeg, p, fw, fh, opts.fps)
+                .map_err(Error::Ffmpeg)?,
+        ),
+        None => None,
+    };
     for i in 0..play_frames {
         let song_ms = opts.start_ms + i as f64 * song_dt_ms;
+        if let Some(frame) = bg_decoder.as_mut().and_then(|d| d.next_frame()) {
+            renderer.stream_background(&skin, frame);
+        }
         renderer.submit_frame_with_ghost(
             params,
             config,
@@ -423,7 +444,7 @@ impl Drop for EncodeGuard<'_> {
 
 /// Keeps spawned ffmpeg processes from flashing a console window on Windows
 /// (CREATE_NO_WINDOW); no-op elsewhere.
-fn hide_console_window(cmd: &mut Command) {
+pub(crate) fn hide_console_window(cmd: &mut Command) {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;

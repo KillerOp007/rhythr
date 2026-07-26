@@ -135,6 +135,14 @@ enum Command {
         /// results delta graph.
         #[arg(long)]
         no_racing_delta: bool,
+        /// Custom playfield background: an image or a video file (videos
+        /// play muted and looped). Replaces the skin's background; the
+        /// results screen keeps its own look.
+        #[arg(long)]
+        background: Option<PathBuf>,
+        /// How much the custom background is darkened, 0-100 percent.
+        #[arg(long, default_value_t = 60)]
+        background_dim: u32,
     },
 }
 
@@ -274,6 +282,8 @@ fn run() -> anyhow::Result<bool> {
             config,
             game_assets,
             no_racing_delta,
+            background,
+            background_dim,
         } => {
             let r = Replay::from_path(&replay)
                 .with_context(|| format!("reading {}", replay.display()))?;
@@ -295,6 +305,18 @@ fn run() -> anyhow::Result<bool> {
             }
             let mut cfg = load_config(&config, &game_assets)?;
             cfg.hud.race_delta.enabled = !no_racing_delta;
+            let mut background_video = None;
+            if let Some(bg) = &background {
+                let kind = rhythia_render::background::apply_background(
+                    &mut cfg,
+                    bg,
+                    background_dim.min(100) as f32 / 100.0,
+                )
+                .with_context(|| format!("reading background {}", bg.display()))?;
+                if kind == rhythia_render::background::BackgroundKind::Video {
+                    background_video = Some(bg.clone());
+                }
+            }
 
             // Normalize BEFORE deriving the range: a wall-clock replay's raw
             // fail time / length is 1/speed of the song and would truncate
@@ -407,6 +429,7 @@ fn run() -> anyhow::Result<bool> {
                 music_volume: music_volume.min(150) as f32 / 100.0,
                 hitsounds,
                 ghost,
+                background_video,
             };
 
             println!(

@@ -4,6 +4,7 @@
 //! writes replay data.
 
 pub mod audio;
+pub mod background;
 pub mod builtin;
 pub mod config;
 pub mod exe_assets;

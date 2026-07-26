@@ -77,6 +77,11 @@ struct Settings {
     /// Ghost-race extra: the score-lead widget (numbers, tournament bar,
     /// results graph). Full-frame, so ghost_x/ghost_y stay unused.
     race_delta: MeterSettings,
+    /// Custom playfield background (image or video file); replaces the
+    /// skin's background during gameplay, results screen untouched.
+    background: Option<String>,
+    /// How much the custom background is darkened, 0-100 percent.
+    background_dim: u32,
     recent_replays: Vec<String>,
 }
 
@@ -107,6 +112,8 @@ impl Default for Settings {
             // The race widget only ever shows in ghost races, which are
             // deliberate — unlike the meters it defaults to on.
             race_delta: MeterSettings { enabled: true, ..MeterSettings::at(0.5, 0.095) },
+            background: None,
+            background_dim: 60,
             recent_replays: Vec::new(),
         }
     }
@@ -156,6 +163,9 @@ struct PreviewCtx {
     params: SceneParams,
     /// The map with the main replay's geometry mods applied.
     map: rhythia_formats::map::Map,
+    /// Video background: path + probed duration for per-scrub frame
+    /// extraction (None for image/no background).
+    bg_video: Option<(PathBuf, Option<f64>)>,
 }
 
 #[derive(Default)]
@@ -406,6 +416,12 @@ fn effective_config(inner: &Inner) -> SkinConfig {
     inner.settings.error_meter.apply(&mut cfg.hud.error_meter);
     inner.settings.aim_meter.apply(&mut cfg.hud.aim_meter);
     inner.settings.race_delta.apply(&mut cfg.hud.race_delta);
+    // Custom background: replaces the skin's background layers. Silently
+    // skipped if the file vanished — set_background validated it once.
+    if let Some(p) = &inner.settings.background {
+        let dim = inner.settings.background_dim.min(100) as f32 / 100.0;
+        let _ = rhythia_render::background::apply_background(&mut cfg, Path::new(p), dim);
+    }
     cfg
 }
 
@@ -1317,6 +1333,50 @@ fn reset_hud_layout(state: tauri::State<'_, App>) -> Result<StatusDto, String> {
     Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
 }
 
+/// Sets (or clears, with None) the custom playfield background. Validates
+/// up front: images must fully decode, videos must be readable by the
+/// bundled ffmpeg — so a bad file errors here instead of rendering black.
+#[tauri::command]
+fn set_background(state: tauri::State<'_, App>, path: Option<String>) -> Result<StatusDto, String> {
+    use rhythia_render::background as bg;
+    let app = state.inner();
+    let mut inner = app.lock();
+    if let Some(p) = &path {
+        let pb = PathBuf::from(p);
+        let kind = bg::classify_file(&pb).map_err(|e| format!("could not read background: {e}"))?;
+        match kind {
+            bg::BackgroundKind::Image => {
+                let bytes = std::fs::read(&pb).map_err(|e| format!("could not read background: {e}"))?;
+                if !bg::image_decodes(&bytes) {
+                    return Err("could not decode this image".into());
+                }
+            }
+            bg::BackgroundKind::Video => {
+                let ffmpeg = resolve_ffmpeg(&inner.settings);
+                if bg::probe_duration(&ffmpeg, &pb).is_none() {
+                    return Err(
+                        "ffmpeg could not read this file — unsupported or corrupt".into()
+                    );
+                }
+            }
+        }
+    }
+    inner.settings.background = path;
+    inner.settings.save();
+    invalidate_preview(&mut inner);
+    Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
+}
+
+#[tauri::command]
+fn set_background_dim(state: tauri::State<'_, App>, pct: u32) -> Result<StatusDto, String> {
+    let app = state.inner();
+    let mut inner = app.lock();
+    inner.settings.background_dim = pct.min(100);
+    inner.settings.save();
+    invalidate_preview(&mut inner);
+    Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
+}
+
 #[tauri::command]
 fn reset_hud_overrides(state: tauri::State<'_, App>) -> Result<StatusDto, String> {
     let app = state.inner();
@@ -1504,6 +1564,20 @@ async fn preview(state: tauri::State<'_, App>, time_ms: f64) -> Result<String, S
                     &rhythia_render::race::RaceSide { map: &g.map, replay: &g.replay, state: &g.state },
                 ));
             }
+            // A video background needs live frame extraction per scrub;
+            // classify + probe its duration once per ctx.
+            let bg_video = inner.settings.background.as_ref().and_then(|p| {
+                let pb = PathBuf::from(p);
+                (rhythia_render::background::classify_file(&pb).ok()
+                    == Some(rhythia_render::background::BackgroundKind::Video))
+                .then(|| {
+                    let d = rhythia_render::background::probe_duration(
+                        &resolve_ffmpeg(&inner.settings),
+                        &pb,
+                    );
+                    (pb, d)
+                })
+            });
             inner.preview = Some(PreviewCtx {
                 renderer,
                 skin,
@@ -1512,11 +1586,28 @@ async fn preview(state: tauri::State<'_, App>, time_ms: f64) -> Result<String, S
                 cfg,
                 params,
                 map: main_map,
+                bg_video,
             });
         }
         let inner = &*inner;
         let ctx = inner.preview.as_ref().unwrap();
         let (_, r) = inner.replay.as_ref().unwrap();
+        if let Some((p, dur)) = &ctx.bg_video {
+            // Match the render: the background video runs at wall-clock
+            // speed of the OUTPUT, looped over its own duration.
+            let t_out = (time_ms / 1000.0) / (r.speed as f64).clamp(0.25, 3.0);
+            let (bw, bh) = ctx.renderer.dimensions();
+            if let Some(frame) = rhythia_render::background::extract_frame(
+                &resolve_ffmpeg(&inner.settings),
+                p,
+                t_out,
+                *dur,
+                bw,
+                bh,
+            ) {
+                ctx.renderer.stream_background(&ctx.skin, &frame);
+            }
+        }
         let pixels = ctx
             .renderer
             .render_still_with_ghost(
@@ -1660,6 +1751,12 @@ fn start_render(
                     color: GHOST_COLOR,
                 }
             }),
+            background_video: s.background.as_ref().and_then(|p| {
+                let pb = PathBuf::from(p);
+                (rhythia_render::background::classify_file(&pb).ok()
+                    == Some(rhythia_render::background::BackgroundKind::Video))
+                .then_some(pb)
+            }),
             ffmpeg: resolve_ffmpeg(s),
             out: out.clone(),
         };
@@ -1721,6 +1818,9 @@ struct RenderJob {
     music_volume: f32,
     hitsounds: Option<rhythia_render::video::HitsoundOptions>,
     ghost: Option<rhythia_render::video::GhostOptions>,
+    /// Set when the custom background is a video file (images are already
+    /// baked into `cfg`).
+    background_video: Option<PathBuf>,
     ffmpeg: String,
     out: PathBuf,
 }
@@ -1780,6 +1880,7 @@ fn run_render_job(
         music_volume: job.music_volume,
         hitsounds: job.hitsounds,
         ghost: job.ghost,
+        background_video: job.background_video,
     };
 
     let started = std::time::Instant::now();
@@ -1961,6 +2062,8 @@ fn main() {
             load_ghost,
             clear_ghost,
             reset_hud_overrides,
+            set_background,
+            set_background_dim,
             reset_hud_layout,
             set_output,
             suggest_file_name,
