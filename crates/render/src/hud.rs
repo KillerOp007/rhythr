@@ -2100,12 +2100,15 @@ fn combo_ring(
 // ---------------------------------------------------------------------------
 // Racing delta (ghost races): the live score gap at the split seam.
 
-/// Everything the live racing-delta widget needs for one frame. Stats must
-/// come from the same `stats_at` calls that feed the two side HUDs so the
-/// gap always equals the difference of the numbers on screen.
+/// Everything the live racing-delta widget needs for one frame. The
+/// headline number is note-synchronized and eased by the caller (it rolls
+/// toward the target instead of jumping); the per-side stats feed the
+/// accuracy line and fail badges.
 pub struct RaceDeltaInput {
     pub main: HudStats,
     pub ghost: HudStats,
+    /// Displayed score gap: positive = main/left leads.
+    pub delta: i64,
     /// Cursor colours per side (`[main, ghost]`, 0..1 sRGB) — the leader's
     /// colour tints the number, arrow and bar.
     pub colors: [[f32; 3]; 2],
@@ -2156,8 +2159,7 @@ pub fn build_race_delta(
     let (cx, cy) = (em.x * w, em.y * h);
     let a = em.alpha;
 
-    let delta = input.main.score - input.ghost.score;
-    let (text, leader) = race_delta_text(delta);
+    let (text, leader) = race_delta_text(input.delta);
     let side_col = |i: usize| {
         srgb8_to_linear(
             [
@@ -2234,9 +2236,9 @@ pub fn build_race_delta(
 
     // Tournament-style lead bar: grows from the centre toward the leader
     // in that side's colour, on the game's health-bar track grey.
-    let bar_h = (refd * 0.008 * em.scale).max(2.0);
-    let bar_y = cy + sub_px * 2.7;
-    let half_len = refd * 0.11 * em.scale;
+    let bar_h = (refd * 0.0112 * em.scale).max(2.5);
+    let bar_y = cy + sub_px * 2.4;
+    let half_len = refd * 0.22 * em.scale;
     b.rect(
         cx - half_len,
         bar_y,

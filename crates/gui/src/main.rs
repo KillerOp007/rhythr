@@ -106,7 +106,7 @@ impl Default for Settings {
             aim_meter: MeterSettings::at(0.15, 0.32),
             // The race widget only ever shows in ghost races, which are
             // deliberate — unlike the meters it defaults to on.
-            race_delta: MeterSettings { enabled: true, ..MeterSettings::at(0.5, 0.115) },
+            race_delta: MeterSettings { enabled: true, ..MeterSettings::at(0.5, 0.095) },
             recent_replays: Vec::new(),
         }
     }
@@ -1311,7 +1311,7 @@ fn reset_hud_layout(state: tauri::State<'_, App>) -> Result<StatusDto, String> {
     }
     park(&mut inner.settings.error_meter, MeterSettings::at(0.5, 0.88));
     park(&mut inner.settings.aim_meter, MeterSettings::at(0.15, 0.32));
-    park(&mut inner.settings.race_delta, MeterSettings::at(0.5, 0.115));
+    park(&mut inner.settings.race_delta, MeterSettings::at(0.5, 0.095));
     inner.settings.save();
     invalidate_preview(&mut inner);
     Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))

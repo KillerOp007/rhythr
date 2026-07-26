@@ -183,7 +183,7 @@ impl Default for HudConfig {
             aim_meter: ErrorMeter::at(0.15, 0.32),
             // The race widget only ever appears in ghost races, which are
             // deliberate — so unlike the meters it defaults to on.
-            race_delta: ErrorMeter::at(0.5, 0.115).on(),
+            race_delta: ErrorMeter::at(0.5, 0.095).on(),
         }
     }
 }

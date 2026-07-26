@@ -873,33 +873,42 @@ impl Renderer {
                                 crate::race::side_end(replay),
                                 crate::race::side_end(&g.replay),
                             ];
-                            // The bar eases over a short trailing window (a
-                            // box filter over the last ~240 ms) so per-note
-                            // score steps read as motion, not jumps. The
-                            // k=0 sample doubles as the displayed numbers,
-                            // which stay exact.
-                            let mut display = None;
-                            let mut bar = 0.0;
-                            for k in 0..4 {
-                                let t = song_time_ms - k as f64 * 80.0;
-                                let m = state.stats_at(map, replay, t.min(ends[0]));
-                                let gs = g.state.stats_at(&g.map, &g.replay, t.min(ends[1]));
+                            // Number and bar ride the note-synchronized
+                            // race (no side-to-side flicker while even),
+                            // eased with a triangular kernel over the last
+                            // ~640 ms: the number rolls toward its target
+                            // and the bar moves instead of stepping.
+                            let m_side = crate::race::RaceSide { map, replay, state };
+                            let g_side = crate::race::RaceSide {
+                                map: &g.map,
+                                replay: &g.replay,
+                                state: &g.state,
+                            };
+                            const TAPS: usize = 16;
+                            let (mut wsum, mut delta_s, mut bar) = (0.0f64, 0.0f64, 0.0f32);
+                            for k in 0..TAPS {
+                                let w = (TAPS - k) as f64;
+                                let t = song_time_ms - k as f64 * 40.0;
+                                let sr = crate::race::synced_race(&m_side, &g_side, t);
+                                delta_s += sr.delta as f64 * w;
                                 bar += crate::race::race_bar_value(
-                                    m.score - gs.score,
-                                    m.score.max(gs.score),
-                                    m.resolved.min(gs.resolved),
-                                );
-                                if k == 0 {
-                                    display = Some((m, gs));
-                                }
+                                    sr.delta,
+                                    sr.scores[0].max(sr.scores[1]),
+                                    sr.settled,
+                                ) * w as f32;
+                                wsum += w;
                             }
-                            let (main, ghost_stats) = display.unwrap();
                             let input = crate::hud::RaceDeltaInput {
-                                main,
-                                ghost: ghost_stats,
+                                main: state.stats_at(map, replay, song_time_ms.min(ends[0])),
+                                ghost: g.state.stats_at(
+                                    &g.map,
+                                    &g.replay,
+                                    song_time_ms.min(ends[1]),
+                                ),
+                                delta: (delta_s / wsum).round() as i64,
                                 colors: [config.cursor_color, g.color],
                                 failed: [song_time_ms >= ends[0], song_time_ms >= ends[1]],
-                                bar: bar / 4.0,
+                                bar: bar / wsum as f32,
                             };
                             verts.extend(crate::hud::build_race_delta(
                                 &self.hud_atlas,

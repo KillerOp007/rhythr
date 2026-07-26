@@ -41,6 +41,78 @@ pub struct RaceSeries {
     pub lead_changes: Vec<f64>,
 }
 
+/// The race as the score-lead widget reads it: note-synchronized, so a
+/// lead only exists once a note is answered by BOTH sides and came out
+/// differently. Per-side scores bank a hit the instant it lands, which
+/// made the raw gap flicker side-to-side on every note while the race
+/// was even (one player is always a few ms earlier).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SyncedRace {
+    /// Main minus ghost over the settled prefix.
+    pub delta: i64,
+    /// Cumulative score per side over the settled prefix.
+    pub scores: [i64; 2],
+    /// Notes settled by both sides.
+    pub settled: u32,
+}
+
+/// Walks both runs note by note and stops at the last note whose outcome
+/// is known on BOTH sides at `t_ms` (a hit is known when it lands, a miss
+/// at the end of the hit window, and a side past its fail freeze answers
+/// instantly with nothing).
+pub fn synced_race(main: &RaceSide, ghost: &RaceSide, t_ms: f64) -> SyncedRace {
+    let sides = [main, ghost];
+    let ends = [side_end(main.replay), side_end(ghost.replay)];
+    let results = [main.state.results(), ghost.state.results()];
+    let n = results[0]
+        .len()
+        .min(results[1].len())
+        .min(main.map.notes.len())
+        .min(ghost.map.notes.len());
+
+    let mut out = SyncedRace {
+        delta: 0,
+        scores: [0, 0],
+        settled: 0,
+    };
+    let mut combo = [0i64; 2];
+    for i in 0..n {
+        // When is this note's outcome known on each side?
+        let mut known = 0.0f64;
+        for s in 0..2 {
+            let reg = sides[s].map.notes[i].time_ms as f64 + DEFAULT_WINDOW_MS;
+            let k = if reg >= ends[s] {
+                // Frozen side: the game never resolved this note — the
+                // answer ("nothing") is known from the freeze on.
+                ends[s]
+            } else {
+                results[s][i].hit_ms.unwrap_or(reg)
+            };
+            known = known.max(k);
+        }
+        // Hit times and windows are monotone over the note order, so the
+        // first pending note ends the settled prefix.
+        if known > t_ms {
+            break;
+        }
+        out.settled += 1;
+        for s in 0..2 {
+            let reg = sides[s].map.notes[i].time_ms as f64 + DEFAULT_WINDOW_MS;
+            if reg >= ends[s] {
+                continue;
+            }
+            if results[s][i].hit {
+                combo[s] += 1;
+                out.scores[s] += combo[s] * 100;
+            } else {
+                combo[s] = 0;
+            }
+        }
+    }
+    out.delta = out.scores[0] - out.scores[1];
+    out
+}
+
 /// Tournament-style lead bar: signed fill in -1..1 (positive = main/left
 /// leads), from the score gap RELATIVE to the leader's score so half a
 /// bar means the same thing early and late in a song (raw score grows
@@ -246,6 +318,58 @@ mod tests {
         let last = s.samples.last().unwrap();
         assert_eq!(last.score_delta, 1000 - 300);
         assert!((last.acc[1] - 100.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn synced_delta_stays_zero_while_both_answer_notes_identically() {
+        // A hits note 1 at 1005, B the same note at 1030: the raw scores
+        // differ between those instants, but the synced walk waits for
+        // both answers — an even race never shows a lead.
+        let map = map_with(&[1000, 2000]);
+        let (mr, gr) = (replay_with(&[1005.0, 2005.0]), replay_with(&[1030.0, 2030.0]));
+        let (ms, gs) = (HudState::new(&map, &mr), HudState::new(&map, &gr));
+        let m = RaceSide { map: &map, replay: &mr, state: &ms };
+        let g = RaceSide { map: &map, replay: &gr, state: &gs };
+        assert_eq!(synced_race(&m, &g, 1010.0).delta, 0);
+        assert_eq!(synced_race(&m, &g, 1010.0).settled, 0);
+        let at_1035 = synced_race(&m, &g, 1035.0);
+        assert_eq!((at_1035.delta, at_1035.settled), (0, 1));
+        assert_eq!(at_1035.scores, [100, 100]);
+        // A already banked note 2, B's answer is still pending: no lead.
+        assert_eq!(synced_race(&m, &g, 2010.0).settled, 1);
+        assert_eq!(synced_race(&m, &g, 2010.0).delta, 0);
+    }
+
+    #[test]
+    fn synced_delta_moves_only_when_a_note_resolves_differently() {
+        // B never answers note 2, so its outcome is known at the window
+        // end (2080) — only then does the lead appear.
+        let map = map_with(&[1000, 2000]);
+        let (mr, gr) = (replay_with(&[1005.0, 2005.0]), replay_with(&[1030.0]));
+        let (ms, gs) = (HudState::new(&map, &mr), HudState::new(&map, &gr));
+        let m = RaceSide { map: &map, replay: &mr, state: &ms };
+        let g = RaceSide { map: &map, replay: &gr, state: &gs };
+        assert_eq!(synced_race(&m, &g, 2050.0).delta, 0);
+        let done = synced_race(&m, &g, 2085.0);
+        assert_eq!((done.delta, done.settled), (200, 2));
+        assert_eq!(done.scores, [300, 100]);
+    }
+
+    #[test]
+    fn synced_delta_keeps_growing_after_a_side_fails() {
+        // B fails at 1500 after note 1: its later notes answer instantly
+        // with nothing, so A's continuing run keeps widening the gap.
+        let map = map_with(&[1000, 2000, 3000]);
+        let mr = replay_with(&[1005.0, 2005.0, 3005.0]);
+        let mut gr = replay_with(&[1030.0]);
+        gr.fail_time_ms = 1500;
+        gr.passed = false;
+        let (ms, gs) = (HudState::new(&map, &mr), HudState::new(&map, &gr));
+        let m = RaceSide { map: &map, replay: &mr, state: &ms };
+        let g = RaceSide { map: &map, replay: &gr, state: &gs };
+        let late = synced_race(&m, &g, 3500.0);
+        assert_eq!((late.delta, late.settled), (500, 3));
+        assert_eq!(late.scores, [600, 100]);
     }
 
     #[test]

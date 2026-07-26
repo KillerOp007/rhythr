@@ -436,7 +436,7 @@ function meterBox(key, m, side, imgH) {
   const refd = Math.min(side.w, h);
   if (key === "race_delta") {
     const s = m.scale || 1;
-    return { x: cx - refd * 0.17 * s, y: cy - refd * 0.062 * s, w: refd * 0.34 * s, h: refd * 0.125 * s };
+    return { x: cx - refd * 0.23 * s, y: cy - refd * 0.062 * s, w: refd * 0.46 * s, h: refd * 0.125 * s };
   }
   const half = h * 0.065 * (m.scale || 1);
   return { x: cx - half, y: cy - half, w: half * 2, h: half * 2 };
