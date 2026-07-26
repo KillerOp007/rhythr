@@ -267,6 +267,32 @@ details#advanced > div, details#advanced > label { margin-bottom: 10px; }
   background: var(--accent-soft);
 }
 
+/* HUD editor: corner resize handle (arrow in a circle) on every box. */
+.hud-resize {
+  position: absolute; top: -9px; right: -9px;
+  width: 18px; height: 18px; border-radius: 50%;
+  background: var(--accent); color: #07272b;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; line-height: 1; font-weight: 700;
+  cursor: nwse-resize; pointer-events: auto; user-select: none;
+}
+.hud-resize::before { content: "⤢"; }
+
+/* HUD editor: snap-grid picker dropdown. */
+#hud-grid-menu {
+  position: absolute; z-index: 60;
+  background: var(--panel-2); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 4px;
+  display: flex; flex-direction: column; gap: 2px; min-width: 110px;
+}
+#hud-grid-menu button {
+  background: none; border: none; color: var(--text);
+  padding: 5px 10px; text-align: left; border-radius: 6px;
+  font-size: 12px; cursor: pointer;
+}
+#hud-grid-menu button:hover { background: var(--panel); }
+#hud-grid-menu button.active { color: var(--accent); font-weight: 600; }
+
 #meter-ghost {
   position: absolute; z-index: 30; pointer-events: none;
   border: 1.5px dashed var(--accent); border-radius: 4px;

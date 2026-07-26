@@ -516,6 +516,50 @@ let hudEditOn = false;
 let hudDrag = null;
 let hudRefreshQueued = false;
 
+// Snap grid for the editor: cell size as a fraction of the frame height
+// (square cells). Persisted locally — a pure editor preference.
+const GRID_STEPS = [0, 1 / 48, 1 / 24, 1 / 12, 1 / 6];
+const GRID_NAMES = ["Off", "Fine", "Small", "Medium", "Large"];
+let gridStep = Number(localStorage.getItem("hud-grid")) || 0;
+
+// Snaps a point (frame pixels) to the grid; no-op with the grid off.
+function snapFrame(fx, fy, frameH) {
+  if (!gridStep || !frameH) return [fx, fy];
+  const s = frameH * gridStep;
+  return [Math.round(fx / s) * s, Math.round(fy / s) * s];
+}
+
+// Paints the grid over the preview image (its own child so the edit
+// boxes stay unclipped and the lines stop at the frame's edges).
+function drawEditGrid() {
+  const layer = document.getElementById("hud-edit-layer");
+  if (!layer) return;
+  let ov = document.getElementById("hud-grid-overlay");
+  const img = $("preview-img");
+  if (!hudEditOn || !gridStep || !img.naturalHeight) {
+    if (ov) ov.remove();
+    return;
+  }
+  if (!ov) {
+    ov = document.createElement("div");
+    ov.id = "hud-grid-overlay";
+    ov.style.position = "absolute";
+    ov.style.pointerEvents = "none";
+    layer.prepend(ov);
+  }
+  const r = img.getBoundingClientRect();
+  const wr = $("preview-wrap").getBoundingClientRect();
+  const cell = r.height * gridStep;
+  ov.style.left = `${r.left - wr.left}px`;
+  ov.style.top = `${r.top - wr.top}px`;
+  ov.style.width = `${r.width}px`;
+  ov.style.height = `${r.height}px`;
+  ov.style.backgroundImage =
+    "linear-gradient(to right, rgba(47, 214, 208, 0.16) 1px, transparent 1px)," +
+    "linear-gradient(to bottom, rgba(47, 214, 208, 0.16) 1px, transparent 1px)";
+  ov.style.backgroundSize = `${cell}px ${cell}px`;
+}
+
 function flushHudRefresh() {
   if (!hudRefreshQueued) return;
   hudRefreshQueued = false;
@@ -532,6 +576,7 @@ async function refreshHudBoxes() {
   const layer = $("hud-edit-layer");
   if (!hudEditOn || !status?.replay || !status?.map) {
     layer.innerHTML = "";
+    layer.style.backgroundImage = "";
     return;
   }
   let boxes;
@@ -556,8 +601,13 @@ async function refreshHudBoxes() {
     el.style.width = `${(b.x1 - b.x0) * sx + pad * 2}px`;
     el.style.height = `${(b.y1 - b.y0) * sy + pad * 2}px`;
     el.title = b.key.replace("_", " ");
+    const grip = document.createElement("div");
+    grip.className = "hud-resize";
+    grip.title = "Drag to resize";
+    el.appendChild(grip);
     layer.appendChild(el);
   }
+  drawEditGrid();
 }
 
 function initHudEdit() {
@@ -570,7 +620,50 @@ function initHudEdit() {
     hudEditOn = !hudEditOn;
     $("btn-edit-hud").classList.toggle("active", hudEditOn);
     $("btn-hud-reset").hidden = !hudEditOn;
+    $("btn-hud-grid").hidden = !hudEditOn;
+    if (!hudEditOn) gridMenu.hidden = true;
     refreshHudBoxes();
+  });
+
+  // Snap-grid picker: a small dropdown under the Grid button.
+  const gridMenu = document.createElement("div");
+  gridMenu.id = "hud-grid-menu";
+  gridMenu.hidden = true;
+  GRID_NAMES.forEach((name, i) => {
+    const b = document.createElement("button");
+    b.textContent = name;
+    b.dataset.i = i;
+    gridMenu.appendChild(b);
+  });
+  wrap.appendChild(gridMenu);
+  const gridLabel = () => {
+    const i = GRID_STEPS.indexOf(gridStep);
+    $("btn-hud-grid").textContent = `Grid: ${GRID_NAMES[i >= 0 ? i : 0]}`;
+    gridMenu.querySelectorAll("button").forEach((b) => {
+      b.classList.toggle("active", Number(b.dataset.i) === (i >= 0 ? i : 0));
+    });
+  };
+  gridLabel();
+  $("btn-hud-grid").addEventListener("click", (e) => {
+    const btn = e.currentTarget.getBoundingClientRect();
+    const wr = wrap.getBoundingClientRect();
+    gridMenu.style.left = `${btn.left - wr.left}px`;
+    gridMenu.style.top = `${btn.bottom - wr.top + 6}px`;
+    gridMenu.hidden = !gridMenu.hidden;
+  });
+  gridMenu.addEventListener("click", (e) => {
+    const b = e.target.closest("button");
+    if (!b) return;
+    gridStep = GRID_STEPS[Number(b.dataset.i)] || 0;
+    localStorage.setItem("hud-grid", String(gridStep));
+    gridLabel();
+    gridMenu.hidden = true;
+    drawEditGrid();
+  });
+  document.addEventListener("pointerdown", (e) => {
+    if (!gridMenu.hidden && !gridMenu.contains(e.target) && e.target.id !== "btn-hud-grid") {
+      gridMenu.hidden = true;
+    }
   });
 
   $("btn-hud-reset").addEventListener("click", async () => {
@@ -590,9 +683,31 @@ function initHudEdit() {
     e.preventDefault();
     box.setPointerCapture(e.pointerId);
     box.classList.add("dragging");
+    if (e.target.closest(".hud-resize")) {
+      // Corner handle: resize about the box centre.
+      const br = box.getBoundingClientRect();
+      const cx = br.left + br.width / 2;
+      const cy = br.top + br.height / 2;
+      hudDrag = {
+        box,
+        key: box.dataset.key,
+        mode: "resize",
+        cx,
+        cy,
+        startDist: Math.max(8, Math.hypot(e.clientX - cx, e.clientY - cy)),
+        baseScale: status?.settings?.hud_scales?.[box.dataset.key] ?? 1,
+        origLeft: parseFloat(box.style.left),
+        origTop: parseFloat(box.style.top),
+        origW: box.offsetWidth,
+        origH: box.offsetHeight,
+        factor: 1,
+      };
+      return;
+    }
     hudDrag = {
       box,
       key: box.dataset.key,
+      mode: "move",
       startX: e.clientX,
       startY: e.clientY,
       origLeft: parseFloat(box.style.left),
@@ -601,14 +716,51 @@ function initHudEdit() {
   });
   layer.addEventListener("pointermove", (e) => {
     if (!hudDrag) return;
-    hudDrag.box.style.left = `${hudDrag.origLeft + e.clientX - hudDrag.startX}px`;
-    hudDrag.box.style.top = `${hudDrag.origTop + e.clientY - hudDrag.startY}px`;
+    const d = hudDrag;
+    if (d.mode === "resize") {
+      // Distance from the centre sets the scale; clamp like the backend.
+      const dist = Math.max(8, Math.hypot(e.clientX - d.cx, e.clientY - d.cy));
+      const total = Math.min(2.5, Math.max(0.4, d.baseScale * (dist / d.startDist)));
+      d.factor = total / d.baseScale;
+      d.total = total;
+      d.box.style.width = `${d.origW * d.factor}px`;
+      d.box.style.height = `${d.origH * d.factor}px`;
+      d.box.style.left = `${d.origLeft + (d.origW - d.origW * d.factor) / 2}px`;
+      d.box.style.top = `${d.origTop + (d.origH - d.origH * d.factor) / 2}px`;
+      return;
+    }
+    let nl = d.origLeft + e.clientX - d.startX;
+    let nt = d.origTop + e.clientY - d.startY;
+    if (gridStep) {
+      // Snap the box centre to the display-space grid, live.
+      const img = $("preview-img");
+      const r = img.getBoundingClientRect();
+      const wr = $("preview-wrap").getBoundingClientRect();
+      const cell = r.height * gridStep;
+      const cxImg = nl + d.box.offsetWidth / 2 + wr.left - r.left;
+      const cyImg = nt + d.box.offsetHeight / 2 + wr.top - r.top;
+      nl += Math.round(cxImg / cell) * cell - cxImg;
+      nt += Math.round(cyImg / cell) * cell - cyImg;
+    }
+    d.box.style.left = `${nl}px`;
+    d.box.style.top = `${nt}px`;
   });
   layer.addEventListener("pointerup", async (e) => {
     if (!hudDrag) return;
     const d = hudDrag;
     hudDrag = null;
     d.box.classList.remove("dragging");
+    if (d.mode === "resize") {
+      try {
+        const st = await invoke("set_hud_scale", { key: d.key, scale: d.total ?? d.baseScale });
+        await applyStatus(st);
+        schedulePreview();
+      } catch (err) {
+        showPreviewMsg(String(err));
+      }
+      flushHudRefresh();
+      return;
+    }
     // Box centre (wrap px) → frame px → normalised to the HUD's frame,
     // which is HALF the preview in a ghost split.
     const img = $("preview-img");
@@ -616,8 +768,9 @@ function initHudEdit() {
     const wr = $("preview-wrap").getBoundingClientRect();
     const bx = parseFloat(d.box.style.left) + d.box.offsetWidth / 2;
     const by = parseFloat(d.box.style.top) + d.box.offsetHeight / 2;
-    const fx = ((bx + wr.left - r.left) / r.width) * (img.naturalWidth || 1);
-    const fy = ((by + wr.top - r.top) / r.height) * (img.naturalHeight || 1);
+    let fx = ((bx + wr.left - r.left) / r.width) * (img.naturalWidth || 1);
+    let fy = ((by + wr.top - r.top) / r.height) * (img.naturalHeight || 1);
+    [fx, fy] = snapFrame(fx, fy, img.naturalHeight || 0);
     const vpW = status?.ghost ? (img.naturalWidth || 1) / 2 : img.naturalWidth || 1;
     try {
       const st = await invoke("set_hud_position", {
@@ -714,6 +867,7 @@ function initMeterDrag() {
     const { key, side } = meterDrag;
     meterDrag = null;
     dragGhostBox(false);
+    if (hudEditOn) [g.x, g.y] = snapFrame(g.x, g.y, g.ih);
     const n = sideNorm(g, side);
     const patch = side.gk ? { ghost_x: n.x, ghost_y: n.y } : { x: n.x, y: n.y };
     await call(() => invoke("set_meter", { key, patch }));

@@ -71,6 +71,8 @@ struct Settings {
     hud_overrides: BTreeMap<String, bool>,
     /// Drag-editor positions per HUD element (normalised frame centre).
     hud_positions: BTreeMap<String, [f32; 2]>,
+    /// Drag-editor sizes per HUD element (scale factor, 0.4..2.5).
+    hud_scales: BTreeMap<String, f32>,
     /// Optional overlay meters (renderer extras, not game elements).
     error_meter: MeterSettings,
     aim_meter: MeterSettings,
@@ -107,6 +109,7 @@ impl Default for Settings {
             hitsound_volume: 50,
             hud_overrides: BTreeMap::new(),
             hud_positions: BTreeMap::new(),
+            hud_scales: BTreeMap::new(),
             error_meter: MeterSettings::at(0.5, 0.88),
             aim_meter: MeterSettings::at(0.15, 0.32),
             // The race widget only ever shows in ghost races, which are
@@ -413,6 +416,7 @@ fn effective_config(inner: &Inner) -> SkinConfig {
     let mut cfg = inner.base_config.clone();
     apply_overrides(&mut cfg, &inner.settings.hud_overrides);
     cfg.hud.positions = inner.settings.hud_positions.clone();
+    cfg.hud.scales = inner.settings.hud_scales.clone();
     inner.settings.error_meter.apply(&mut cfg.hud.error_meter);
     inner.settings.aim_meter.apply(&mut cfg.hud.aim_meter);
     inner.settings.race_delta.apply(&mut cfg.hud.race_delta);
@@ -1237,6 +1241,23 @@ fn set_hud_position(
     Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
 }
 
+/// The drag editor's corner-handle resize. A scale close to 1 removes the
+/// entry — back to the standard size, no leftover override.
+#[tauri::command]
+fn set_hud_scale(state: tauri::State<'_, App>, key: String, scale: f32) -> Result<StatusDto, String> {
+    let app = state.inner();
+    let mut inner = app.lock();
+    let s = scale.clamp(0.4, 2.5);
+    if (s - 1.0).abs() < 0.02 {
+        inner.settings.hud_scales.remove(&key);
+    } else {
+        inner.settings.hud_scales.insert(key, s);
+    }
+    inner.settings.save();
+    invalidate_preview(&mut inner);
+    Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
+}
+
 #[derive(Serialize, Clone)]
 struct HudBoxDto {
     key: String,
@@ -1340,6 +1361,7 @@ fn reset_hud_layout(state: tauri::State<'_, App>) -> Result<StatusDto, String> {
     let app = state.inner();
     let mut inner = app.lock();
     inner.settings.hud_positions.clear();
+    inner.settings.hud_scales.clear();
     fn park(m: &mut MeterSettings, d: MeterSettings) {
         m.x = d.x;
         m.y = d.y;
@@ -1404,6 +1426,7 @@ fn reset_hud_overrides(state: tauri::State<'_, App>) -> Result<StatusDto, String
     let mut inner = app.lock();
     inner.settings.hud_overrides.clear();
     inner.settings.hud_positions.clear();
+    inner.settings.hud_scales.clear();
     inner.settings.save();
     invalidate_preview(&mut inner);
     Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
@@ -2078,6 +2101,7 @@ fn main() {
             detect_game,
             set_hud_override,
             set_hud_position,
+            set_hud_scale,
             hud_layout,
             set_meter,
             load_ghost,

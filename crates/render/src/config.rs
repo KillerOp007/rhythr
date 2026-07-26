@@ -76,6 +76,9 @@ pub struct HudConfig {
     /// key), applied on top of the standard layout by the drag editor.
     /// Not part of the game's config — filled in by the app's settings.
     pub positions: std::collections::BTreeMap<String, [f32; 2]>,
+    /// User-set element sizes (scale factor per element key, 0.4..2.5),
+    /// the drag editor's corner-handle resize. App-only, like positions.
+    pub scales: std::collections::BTreeMap<String, f32>,
     pub accuracy: bool,
     pub combo_ring: bool,
     pub grade: bool,
@@ -153,6 +156,7 @@ impl Default for HudConfig {
     fn default() -> Self {
         HudConfig {
             positions: Default::default(),
+            scales: Default::default(),
             accuracy: true,
             combo_ring: true,
             grade: true,
@@ -565,6 +569,7 @@ impl SkinConfig {
         let hd = HudConfig::default();
         let hud = HudConfig {
             positions: Default::default(),
+            scales: Default::default(),
             accuracy: boolean("LeftPanelAccuracyEnabled", hd.accuracy),
             combo_ring: boolean("LeftPanelComboRingEnabled", hd.combo_ring),
             grade: boolean("LeftPanelGradeEnabled", hd.grade),

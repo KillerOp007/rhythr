@@ -585,6 +585,28 @@ pub struct HudBox {
     pub y1: f32,
 }
 
+/// Scales an element's vertices about its bounds' centre (the drag
+/// editor's resize) and returns the new bounds. Text scales with the
+/// element — the vertices are already laid out.
+fn scale_element(
+    verts: &mut [HudVertex],
+    bounds: (f32, f32, f32, f32),
+    s: f32,
+) -> (f32, f32, f32, f32) {
+    let (x0, y0, x1, y1) = bounds;
+    let (cx, cy) = ((x0 + x1) * 0.5, (y0 + y1) * 0.5);
+    for v in verts {
+        v.pos[0] = cx + (v.pos[0] - cx) * s;
+        v.pos[1] = cy + (v.pos[1] - cy) * s;
+    }
+    (
+        cx + (x0 - cx) * s,
+        cy + (y0 - cy) * s,
+        cx + (x1 - cx) * s,
+        cy + (y1 - cy) * s,
+    )
+}
+
 /// Closes out one movable element: applies the user's position override
 /// (normalised centre → pixel translate of everything drawn since `start`)
 /// and records the resulting bounds.
@@ -592,7 +614,7 @@ fn finish_element(
     b: &mut HudBuilder,
     start: usize,
     key: &'static str,
-    positions: &std::collections::BTreeMap<String, [f32; 2]>,
+    hud: &crate::config::HudConfig,
     w: f32,
     h: f32,
     boxes: &mut Vec<HudBox>,
@@ -607,7 +629,7 @@ fn finish_element(
         x1 = x1.max(v.pos[0]);
         y1 = y1.max(v.pos[1]);
     }
-    if let Some(p) = positions.get(key) {
+    if let Some(p) = hud.positions.get(key) {
         let (dx, dy) = (p[0] * w - (x0 + x1) * 0.5, p[1] * h - (y0 + y1) * 0.5);
         for v in &mut b.verts[start..] {
             v.pos[0] += dx;
@@ -617,6 +639,13 @@ fn finish_element(
         x1 += dx;
         y0 += dy;
         y1 += dy;
+    }
+    // The drag editor's resize: scale about the (possibly moved) centre.
+    if let Some(&s) = hud.scales.get(key) {
+        let s = s.clamp(0.4, 2.5);
+        if (s - 1.0).abs() > 1e-3 {
+            (x0, y0, x1, y1) = scale_element(&mut b.verts[start..], (x0, y0, x1, y1), s);
+        }
     }
     boxes.push(HudBox { key, x0, y0, x1, y1 });
 }
@@ -649,7 +678,6 @@ pub fn build_hud(
     portrait: bool,
 ) -> (Vec<HudVertex>, Vec<HudBox>) {
     let hud = &cfg.hud;
-    let positions = &cfg.hud.positions;
     let mut boxes: Vec<HudBox> = Vec::new();
     let mut b = HudBuilder::new(atlas);
     let (w, _h) = (width as f32, height as f32);
@@ -679,7 +707,7 @@ pub fn build_hud(
             Align::Center,
             col,
         );
-        finish_element(&mut b, el, "combo_text", positions, w, _h, &mut boxes);
+        finish_element(&mut b, el, "combo_text", hud, w, _h, &mut boxes);
     }
 
     // Column centre just past the box; PanelGap pushes it further out.
@@ -798,7 +826,7 @@ pub fn build_hud(
             stats,
             srgb8_to_linear(hud.combo_ring_color, hud.combo_ring_opacity),
         );
-        finish_element(&mut b, el, "combo_ring", positions, w, _h, &mut boxes);
+        finish_element(&mut b, el, "combo_ring", hud, w, _h, &mut boxes);
     }
     if hud.pauses {
         let el = b.verts.len();
@@ -807,7 +835,7 @@ pub fn build_hud(
         if !portrait {
             fan_tilt(&mut b, el, x, y + value_px * 0.6);
         }
-        finish_element(&mut b, el, "pauses", positions, w, _h, &mut boxes);
+        finish_element(&mut b, el, "pauses", hud, w, _h, &mut boxes);
     }
     if hud.grade {
         let el = b.verts.len();
@@ -824,7 +852,7 @@ pub fn build_hud(
         if !portrait {
             fan_tilt(&mut b, el, x, y + value_px * 0.6);
         }
-        finish_element(&mut b, el, "grade", positions, w, _h, &mut boxes);
+        finish_element(&mut b, el, "grade", hud, w, _h, &mut boxes);
     }
     if hud.accuracy {
         let el = b.verts.len();
@@ -841,7 +869,7 @@ pub fn build_hud(
         if !portrait {
             fan_tilt(&mut b, el, x, y + value_px * 0.6);
         }
-        finish_element(&mut b, el, "accuracy", positions, w, _h, &mut boxes);
+        finish_element(&mut b, el, "accuracy", hud, w, _h, &mut boxes);
     }
 
     // Right group: Score, Points, Misses, Notes — column on landscape, a
@@ -886,7 +914,7 @@ pub fn build_hud(
         if !portrait {
             fan_tilt(&mut b, el, x, y + value_px * 0.6);
         }
-        finish_element(&mut b, el, key, positions, w, _h, &mut boxes);
+        finish_element(&mut b, el, key, hud, w, _h, &mut boxes);
     }
 
     // Health bar just below the playfield.
@@ -906,7 +934,7 @@ pub fn build_hud(
             bh,
             srgb8_to_linear(hud.health_bar_color, hud.health_bar_alpha),
         );
-        finish_element(&mut b, el, "health_bar", positions, w, _h, &mut boxes);
+        finish_element(&mut b, el, "health_bar", hud, w, _h, &mut boxes);
     }
 
     // Song progress bar just above the playfield, with its elapsed/total
@@ -940,7 +968,7 @@ pub fn build_hud(
             Align::Center,
             label_col,
         );
-        finish_element(&mut b, el, "song_progress", positions, w, _h, &mut boxes);
+        finish_element(&mut b, el, "song_progress", hud, w, _h, &mut boxes);
     }
 
     // Speed notation under the health bar: "S" plus coloured step dots and a
@@ -952,7 +980,7 @@ pub fn build_hud(
         let el = b.verts.len();
         let sy = field.cy + field.half + refd * 0.014 + refd * 0.0088 + refd * 0.020;
         speed_label(&mut b, field.cx, sy, refd, replay.speed, value_col);
-        finish_element(&mut b, el, "speed_label", positions, w, _h, &mut boxes);
+        finish_element(&mut b, el, "speed_label", hud, w, _h, &mut boxes);
     }
 
     // Title header, sitting just above the playfield (as the game).
@@ -974,7 +1002,7 @@ pub fn build_hud(
             Align::Center,
             value_col,
         );
-        finish_element(&mut b, el, "song_info", positions, w, _h, &mut boxes);
+        finish_element(&mut b, el, "song_info", hud, w, _h, &mut boxes);
     }
 
     // Fail vignette — the game's own formula (vignette.fs): a fullscreen
@@ -1108,6 +1136,25 @@ mod tests {
         assert_eq!(thousands(143100), "143,100");
         assert_eq!(thousands(34084600), "34,084,600");
         assert_eq!(thousands(-2500), "-2,500");
+    }
+
+    #[test]
+    fn resize_scales_an_element_about_its_centre() {
+        // A 10x20 box centred at (20, 30), doubled: same centre, 20x40,
+        // every vertex twice as far from the centre.
+        let mk = |x: f32, y: f32| HudVertex {
+            pos: [x, y],
+            uv: [0.0, 0.0],
+            color: [1.0; 4],
+            mode: 0.0,
+            _pad: 0.0,
+        };
+        let mut v = [mk(15.0, 20.0), mk(25.0, 40.0), mk(20.0, 30.0)];
+        let nb = scale_element(&mut v, (15.0, 20.0, 25.0, 40.0), 2.0);
+        assert_eq!(nb, (10.0, 10.0, 30.0, 50.0));
+        assert_eq!(v[0].pos, [10.0, 10.0]);
+        assert_eq!(v[1].pos, [30.0, 50.0]);
+        assert_eq!(v[2].pos, [20.0, 30.0]);
     }
 
     #[test]
