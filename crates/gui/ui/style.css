@@ -260,6 +260,13 @@ details#advanced > div, details#advanced > label { margin-bottom: 10px; }
   pointer-events: none;
 }
 
+/* A card lit up as the drop target while a dragged file hovers it. */
+.card.drop-target {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+  background: var(--accent-soft);
+}
+
 #meter-ghost {
   position: absolute; z-index: 30; pointer-events: none;
   border: 1.5px dashed var(--accent); border-radius: 4px;

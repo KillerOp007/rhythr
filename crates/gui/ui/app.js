@@ -159,6 +159,40 @@ const HUD_GROUPS = [
   ]},
 ];
 
+function renderBackgroundCard() {
+  const p = status?.settings?.background;
+  $("btn-bg-clear").hidden = !p;
+  const body = $("bg-body");
+  // Re-rendering would yank the dim slider out from under an active drag.
+  if (body.contains(document.activeElement) && document.activeElement?.type === "range") {
+    return;
+  }
+  if (!p) {
+    body.innerHTML = `<p class="hint">Optional image or video shown behind the gameplay instead of the skin background (videos play muted and looped). The results screen keeps its own look. Drop a file here or browse.</p>`;
+    return;
+  }
+  const dim = status?.settings?.background_dim ?? 60;
+  body.innerHTML = `
+    <div class="src-meta">${esc(p.split(/[\\/]/).pop())}</div>
+    <span class="chip info">background active</span>
+    <label class="hint" style="display:flex;align-items:center;gap:8px;margin-top:8px">Dim
+      <input type="range" id="bg-dim" min="0" max="100" step="5" value="${dim}" style="flex:1">
+      <span id="bg-dim-val">${dim}%</span>
+    </label>`;
+  const sl = $("bg-dim");
+  let timer = null;
+  const push = async () => {
+    await call(() => invoke("set_background_dim", { pct: Number(sl.value) }));
+    schedulePreview();
+  };
+  sl.addEventListener("input", () => {
+    $("bg-dim-val").textContent = `${sl.value}%`;
+    clearTimeout(timer);
+    timer = setTimeout(push, 140);
+  });
+  sl.addEventListener("change", push);
+}
+
 // Settings entry for a draggable overlay extra ("error"/"aim" kept their
 // historic short keys; the race extras use their settings name directly).
 function meterSettings(key) {
@@ -827,6 +861,7 @@ async function applyStatus(st) {
   status = st;
   renderReplayCard();
   renderGhostCard();
+  renderBackgroundCard();
   renderMapCard();
   renderConfigCard();
   renderGameCard();
@@ -881,6 +916,25 @@ function loadNote(text) {
   if (!rendering) $("render-text").textContent = text;
 }
 
+// A replay dropped straight onto the Ghost race card. Without a main
+// replay there is nothing to race yet — it becomes YOUR replay, with a
+// hint (a lone replay renders as a normal video).
+async function dropGhost(path) {
+  const name = path.split(/[\\/]/).pop();
+  if (!status?.replay) {
+    await loadPath(path);
+    loadNote("Loaded as your replay — a ghost race needs a second one. Drop it on Ghost race, otherwise this renders as a normal video.");
+    return;
+  }
+  try {
+    await call(() => invoke("load_ghost", { path }));
+    loadNote(`Ghost replay loaded: ${name}`);
+    schedulePreview();
+  } catch (e) {
+    loadNote(String(e));
+  }
+}
+
 async function loadPath(path) {
   const name = path.split(/[\\/]/).pop();
   const lower = path.toLowerCase();
@@ -896,8 +950,17 @@ async function loadPath(path) {
       loadNote(`Loaded skin: ${name}`);
       schedulePreview();
     } else {
-      loadNote(`Unsupported file type: ${name}`);
-      showPreviewMsg(`Unsupported file type: ${name}`);
+      // Anything else might be a background image/video — the backend
+      // classifies by content and rejects what neither the image decoder
+      // nor ffmpeg can read.
+      try {
+        await call(() => invoke("set_background", { path }));
+        loadNote(`Background set: ${name}`);
+        schedulePreview();
+      } catch {
+        loadNote(`Unsupported file type: ${name}`);
+        showPreviewMsg(`Unsupported file type: ${name}`);
+      }
     }
   } catch (e) {
     // Surface the reason where it is always visible; don't let one bad
@@ -907,14 +970,69 @@ async function loadPath(path) {
 }
 
 function initDragDrop() {
-  listen("tauri://drag-enter", () => { $("drop-overlay").hidden = false; });
-  listen("tauri://drag-leave", () => { $("drop-overlay").hidden = true; });
+  // Drop targets: hovering a dragged file over these cards lights them up
+  // and routes the drop there instead of the default middle-drop path.
+  const dropTargets = () => [
+    { el: document.getElementById("card-ghost"), kind: "ghost" },
+    { el: document.getElementById("card-background"), kind: "background" },
+  ];
+  let hoverTarget = null;
+  const clearHover = () => {
+    document.querySelectorAll(".card.drop-target").forEach((c) => c.classList.remove("drop-target"));
+    hoverTarget = null;
+  };
+  const hitTarget = (pos) => {
+    if (!pos) return null;
+    const scale = window.devicePixelRatio || 1;
+    const x = pos.x / scale;
+    const y = pos.y / scale;
+    for (const t of dropTargets()) {
+      const r = t.el.getBoundingClientRect();
+      if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return t;
+    }
+    return null;
+  };
+  const trackHover = (e) => {
+    const t = hitTarget(e.payload?.position);
+    if (t?.kind !== hoverTarget?.kind) {
+      clearHover();
+      if (t) {
+        t.el.classList.add("drop-target");
+        hoverTarget = t;
+      }
+    }
+    // The full-screen overlay would cover the card highlight.
+    $("drop-overlay").hidden = !!t;
+  };
+  listen("tauri://drag-enter", trackHover);
+  listen("tauri://drag-over", trackHover);
+  listen("tauri://drag-leave", () => { $("drop-overlay").hidden = true; clearHover(); });
   listen("tauri://drag-drop", async (e) => {
     $("drop-overlay").hidden = true;
+    const target = hitTarget(e.payload?.position);
+    clearHover();
     // Replays first: loading a replay may swap the auto-resolved map, so a
     // map dropped in the same gesture must land after it.
     const rank = (p) => (p.toLowerCase().endsWith(".rhr") ? 0 : 1);
-    const paths = [...(e.payload.paths || [])].sort((a, b) => rank(a) - rank(b));
+    let paths = [...(e.payload.paths || [])].sort((a, b) => rank(a) - rank(b));
+    if (target?.kind === "ghost") {
+      const rhr = paths.find((p) => p.toLowerCase().endsWith(".rhr"));
+      if (rhr) {
+        await dropGhost(rhr);
+        paths = paths.filter((p) => p !== rhr);
+      }
+    } else if (target?.kind === "background" && paths.length) {
+      const p = paths[0];
+      try {
+        await call(() => invoke("set_background", { path: p }));
+        loadNote(`Background set: ${p.split(/[\\/]/).pop()}`);
+        schedulePreview();
+        paths = paths.slice(1);
+      } catch {
+        loadNote(`Unsupported background: ${p.split(/[\\/]/).pop()}`);
+        paths = paths.slice(1);
+      }
+    }
     for (const p of paths) await loadPath(p);
   });
   // Second app instance (e.g. double-clicked .rhr) forwards its file here.
@@ -958,6 +1076,22 @@ function initControls() {
     } catch (e) { loadNote(String(e)); }
   });
   $("btn-ghost-clear").addEventListener("click", () => call(() => invoke("clear_ghost")).then(schedulePreview));
+  $("btn-bg").addEventListener("click", async () => {
+    const p = await dialog.open({
+      filters: [
+        { name: "Image or video", extensions: ["png", "jpg", "jpeg", "webp", "bmp", "gif", "mp4", "webm", "mkv", "mov", "avi", "m4v", "wmv", "flv", "ts"] },
+        { name: "All files", extensions: ["*"] },
+      ],
+    });
+    if (!p) return;
+    try {
+      await call(() => invoke("set_background", { path: p }));
+      loadNote("Background set.");
+      schedulePreview();
+    } catch (e) { loadNote(String(e)); }
+  });
+  $("btn-bg-clear").addEventListener("click", () =>
+    call(() => invoke("set_background", { path: null })).then(schedulePreview));
 
   $("recent-list").addEventListener("click", (e) => {
     const li = e.target.closest("li[data-path]");
