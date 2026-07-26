@@ -552,12 +552,33 @@ fn resolve_ffmpeg(settings: &Settings) -> String {
     name.into()
 }
 
-/// Whether this install can replace itself through the updater: Windows
-/// (NSIS) and the Linux AppImage can; a deb/rpm install updates through
-/// its package manager or a manual download instead.
+/// How this install updates. "self": Windows (NSIS) and the Linux
+/// AppImage replace themselves through the updater. "aur": the binary is
+/// owned by pacman (the AUR package) — the update comes through the AUR
+/// helper, the banner should say so. "page": deb/rpm — point at the
+/// releases page.
 #[tauri::command]
-fn can_self_update() -> bool {
-    cfg!(windows) || std::env::var_os("APPIMAGE").is_some()
+fn update_channel() -> String {
+    if cfg!(windows) || std::env::var_os("APPIMAGE").is_some() {
+        return "self".into();
+    }
+    #[cfg(unix)]
+    {
+        let pacman_owned = std::env::current_exe().is_ok_and(|exe| {
+            std::process::Command::new("pacman")
+                .arg("-Qqo")
+                .arg(exe)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .is_ok_and(|s| s.success())
+        });
+        if pacman_owned {
+            return "aur".into();
+        }
+    }
+    "page".into()
 }
 
 /// Opens the GitHub releases page (the update path for deb/rpm installs).
@@ -2046,7 +2067,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             get_status,
-            can_self_update,
+            update_channel,
             open_releases_page,
             load_replay,
             load_map,
@@ -2100,4 +2121,19 @@ fn main() {
                 }
             }
         });
+}
+
+#[cfg(test)]
+mod update_channel_tests {
+    use super::*;
+
+    #[test]
+    fn a_test_binary_is_never_aur_managed() {
+        // Sanity for the channel probe: whatever host this builds on, a
+        // cargo test binary is not owned by pacman, so the only valid
+        // answers are self-updating (Windows/AppImage env) or the
+        // download-page fallback.
+        let c = update_channel();
+        assert!(c == "self" || c == "page", "unexpected channel {c}");
+    }
 }

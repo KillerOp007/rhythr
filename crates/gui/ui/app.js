@@ -1254,9 +1254,18 @@ async function initUpdater() {
     $("update-text").textContent = `Update ${update.version} is available.`;
     $("update-banner").hidden = false;
     $("btn-update-later").onclick = () => { $("update-banner").hidden = true; };
-    // deb/rpm installs can't replace themselves — point at the release.
-    if (!(await invoke("can_self_update"))) {
-      $("btn-update").textContent = "Open download page";
+    // Package installs can't replace themselves. An AUR install gets the
+    // honest hint (the update arrives through the AUR helper); deb/rpm
+    // get pointed at the release downloads.
+    const channel = await invoke("update_channel");
+    if (channel !== "self") {
+      if (channel === "aur") {
+        $("update-text").textContent =
+          `Update ${update.version} is available — update via your AUR helper (rhythr-bin).`;
+        $("btn-update").textContent = "Release notes";
+      } else {
+        $("btn-update").textContent = "Open download page";
+      }
       $("btn-update").onclick = () => invoke("open_releases_page");
       return;
     }
