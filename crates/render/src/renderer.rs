@@ -873,15 +873,33 @@ impl Renderer {
                                 crate::race::side_end(replay),
                                 crate::race::side_end(&g.replay),
                             ];
+                            // The bar eases over a short trailing window (a
+                            // box filter over the last ~240 ms) so per-note
+                            // score steps read as motion, not jumps. The
+                            // k=0 sample doubles as the displayed numbers,
+                            // which stay exact.
+                            let mut display = None;
+                            let mut bar = 0.0;
+                            for k in 0..4 {
+                                let t = song_time_ms - k as f64 * 80.0;
+                                let m = state.stats_at(map, replay, t.min(ends[0]));
+                                let gs = g.state.stats_at(&g.map, &g.replay, t.min(ends[1]));
+                                bar += crate::race::race_bar_value(
+                                    m.score - gs.score,
+                                    m.score.max(gs.score),
+                                    m.resolved.min(gs.resolved),
+                                );
+                                if k == 0 {
+                                    display = Some((m, gs));
+                                }
+                            }
+                            let (main, ghost_stats) = display.unwrap();
                             let input = crate::hud::RaceDeltaInput {
-                                main: state.stats_at(map, replay, song_time_ms.min(ends[0])),
-                                ghost: g.state.stats_at(
-                                    &g.map,
-                                    &g.replay,
-                                    song_time_ms.min(ends[1]),
-                                ),
+                                main,
+                                ghost: ghost_stats,
                                 colors: [config.cursor_color, g.color],
                                 failed: [song_time_ms >= ends[0], song_time_ms >= ends[1]],
+                                bar: bar / 4.0,
                             };
                             verts.extend(crate::hud::build_race_delta(
                                 &self.hud_atlas,

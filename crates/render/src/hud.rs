@@ -2107,10 +2107,13 @@ pub struct RaceDeltaInput {
     pub main: HudStats,
     pub ghost: HudStats,
     /// Cursor colours per side (`[main, ghost]`, 0..1 sRGB) — the leader's
-    /// colour tints the number and arrow.
+    /// colour tints the number, arrow and bar.
     pub colors: [[f32; 3]; 2],
     /// Side is past its fail time: its number froze, badge it.
     pub failed: [bool; 2],
+    /// Tournament-bar fill, -1..1 (positive = main/left leads), already
+    /// eased over a short trailing window by the caller.
+    pub bar: f32,
 }
 
 /// The widget's accuracy gap: difference of the two DISPLAYED (2dp)
@@ -2228,6 +2231,35 @@ pub fn build_race_delta(
     if input.failed[1] {
         b.text("FAILED", cx + fail_dx, cy, sub_px, Align::Left, fail_col);
     }
+
+    // Tournament-style lead bar: grows from the centre toward the leader
+    // in that side's colour, on the game's health-bar track grey.
+    let bar_h = (refd * 0.008 * em.scale).max(2.0);
+    let bar_y = cy + sub_px * 2.7;
+    let half_len = refd * 0.11 * em.scale;
+    b.rect(
+        cx - half_len,
+        bar_y,
+        half_len * 2.0,
+        bar_h,
+        srgb8_to_linear([40, 40, 44], 0.6 * a),
+    );
+    let fill = input.bar.clamp(-1.0, 1.0);
+    if fill != 0.0 {
+        let len = half_len * fill.abs();
+        let col = side_col(usize::from(fill < 0.0));
+        let x = if fill > 0.0 { cx - len } else { cx };
+        b.rect(x, bar_y, len, bar_h, col);
+    }
+    // Centre notch so the origin reads even with an empty bar.
+    let nw = (refd * 0.0016 * em.scale).max(1.5);
+    b.rect(
+        cx - nw * 0.5,
+        bar_y - bar_h * 0.35,
+        nw,
+        bar_h * 1.7,
+        srgb8_to_linear([225, 225, 230], 0.9 * a),
+    );
 
     b.verts
 }

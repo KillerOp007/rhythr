@@ -41,6 +41,18 @@ pub struct RaceSeries {
     pub lead_changes: Vec<f64>,
 }
 
+/// Tournament-style lead bar: signed fill in -1..1 (positive = main/left
+/// leads), from the score gap RELATIVE to the leader's score so half a
+/// bar means the same thing early and late in a song (raw score grows
+/// quadratically). Full at a 50% lead; empty during the first notes,
+/// where tiny scores whipsaw the ratio.
+pub fn race_bar_value(delta: i64, leader_score: i64, resolved: u32) -> f32 {
+    if resolved < 20 || leader_score <= 0 {
+        return 0.0;
+    }
+    (delta as f32 / leader_score as f32 / 0.5).clamp(-1.0, 1.0)
+}
+
 /// Vertical share of the results delta graph that sits above the zero
 /// line, from the two lead extremes. Clamped so the smaller side always
 /// keeps a visible strip even in a one-sided race.
@@ -234,6 +246,17 @@ mod tests {
         let last = s.samples.last().unwrap();
         assert_eq!(last.score_delta, 1000 - 300);
         assert!((last.acc[1] - 100.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn lead_bar_scales_with_the_relative_lead_and_warms_up() {
+        // Empty until 20 notes are resolved; then the gap relative to the
+        // leader's score, full bar at a 50% lead, sign = who leads.
+        assert_eq!(race_bar_value(5_000, 10_000, 10), 0.0);
+        assert_eq!(race_bar_value(0, 100_000, 200), 0.0);
+        assert!((race_bar_value(12_000, 100_000, 200) - 0.24).abs() < 1e-6);
+        assert_eq!(race_bar_value(-60_000, 100_000, 200), -1.0);
+        assert_eq!(race_bar_value(100, 0, 200), 0.0);
     }
 
     #[test]
