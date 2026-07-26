@@ -109,7 +109,11 @@ fn cover_vf(w: u32, h: u32) -> String {
 pub struct VideoDecoder {
     child: Child,
     stdout: ChildStdout,
+    /// Last complete frame — only ever overwritten by a full read.
     frame: Vec<u8>,
+    /// Read target; read_exact leaves it unspecified on error, so it must
+    /// not be the frame we keep serving.
+    scratch: Vec<u8>,
     got_any: bool,
     done: bool,
 }
@@ -139,6 +143,7 @@ impl VideoDecoder {
             child,
             stdout,
             frame: vec![0; (width * height * 4) as usize],
+            scratch: vec![0; (width * height * 4) as usize],
             got_any: false,
             done: false,
         })
@@ -150,8 +155,11 @@ impl VideoDecoder {
     pub fn next_frame(&mut self) -> Option<&[u8]> {
         use std::io::Read;
         if !self.done {
-            match self.stdout.read_exact(&mut self.frame) {
-                Ok(()) => self.got_any = true,
+            match self.stdout.read_exact(&mut self.scratch) {
+                Ok(()) => {
+                    self.frame.copy_from_slice(&self.scratch);
+                    self.got_any = true;
+                }
                 Err(_) => self.done = true,
             }
         }
