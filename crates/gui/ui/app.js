@@ -163,10 +163,17 @@ function renderBackgroundCard() {
   const p = status?.settings?.background;
   $("btn-bg-clear").hidden = !p;
   const body = $("bg-body");
-  // Re-rendering would yank the dim slider out from under an active drag.
-  if (body.contains(document.activeElement) && document.activeElement?.type === "range") {
+  // Re-rendering would yank the dim slider out from under an active drag —
+  // but only skip while the CONTENT is unchanged (the slider keeps focus
+  // after use, and a background dropped then must still show up).
+  if (
+    body.contains(document.activeElement) &&
+    document.activeElement?.type === "range" &&
+    body.dataset.bgPath === (p || "")
+  ) {
     return;
   }
+  body.dataset.bgPath = p || "";
   if (!p) {
     body.innerHTML = `<p class="hint">Optional image or video shown behind the gameplay instead of the skin background (videos play muted and looped). The results screen keeps its own look. Drop a file here or browse.</p>`;
     return;
@@ -923,7 +930,11 @@ async function dropGhost(path) {
   const name = path.split(/[\\/]/).pop();
   if (!status?.replay) {
     await loadPath(path);
-    loadNote("Loaded as your replay — a ghost race needs a second one. Drop it on Ghost race, otherwise this renders as a normal video.");
+    // loadPath swallows its own errors — only claim success if the
+    // replay actually landed.
+    if (status?.replay) {
+      loadNote("Loaded as your replay — a ghost race needs a second one. Drop it on Ghost race, otherwise this renders as a normal video.");
+    }
     return;
   }
   try {
@@ -984,13 +995,13 @@ function initDragDrop() {
   const hitTarget = (pos) => {
     if (!pos) return null;
     const scale = window.devicePixelRatio || 1;
-    const x = pos.x / scale;
-    const y = pos.y / scale;
-    for (const t of dropTargets()) {
-      const r = t.el.getBoundingClientRect();
-      if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return t;
-    }
-    return null;
+    // elementFromPoint respects the sources rail's scroll clipping — a
+    // card scrolled out of view must not catch drops through whatever
+    // covers its unclipped rect.
+    const el = document.elementFromPoint(pos.x / scale, pos.y / scale);
+    const card = el?.closest?.("#card-ghost, #card-background");
+    if (!card) return null;
+    return dropTargets().find((t) => t.el === card) || null;
   };
   const trackHover = (e) => {
     const t = hitTarget(e.payload?.position);
@@ -1016,11 +1027,12 @@ function initDragDrop() {
     const rank = (p) => (p.toLowerCase().endsWith(".rhr") ? 0 : 1);
     let paths = [...(e.payload.paths || [])].sort((a, b) => rank(a) - rank(b));
     if (target?.kind === "ghost") {
-      const rhr = paths.find((p) => p.toLowerCase().endsWith(".rhr"));
-      if (rhr) {
-        await dropGhost(rhr);
-        paths = paths.filter((p) => p !== rhr);
-      }
+      // ALL replays in the gesture go through the ghost route: two runs
+      // dropped together become main + ghost instead of the second one
+      // silently replacing the first.
+      const rhrs = paths.filter((p) => p.toLowerCase().endsWith(".rhr"));
+      for (const p of rhrs) await dropGhost(p);
+      paths = paths.filter((p) => !rhrs.includes(p));
     } else if (target?.kind === "background" && paths.length) {
       const p = paths[0];
       try {
