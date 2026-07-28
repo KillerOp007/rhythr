@@ -267,6 +267,10 @@ details#advanced > div, details#advanced > label { margin-bottom: 10px; }
   background: var(--accent-soft);
 }
 
+/* Meter boxes in the editor (client-side geometry) get a dotted outline
+   so they read as extras next to the renderer-backed element boxes. */
+.hud-edit-box.meter { border-style: dotted; }
+
 /* HUD editor: corner resize handle (arrow in a circle) on every box. */
 .hud-resize {
   position: absolute; top: -9px; right: -9px;
@@ -293,11 +297,6 @@ details#advanced > div, details#advanced > label { margin-bottom: 10px; }
 #hud-grid-menu button:hover { background: var(--panel); }
 #hud-grid-menu button.active { color: var(--accent); font-weight: 600; }
 
-#meter-ghost {
-  position: absolute; z-index: 30; pointer-events: none;
-  border: 1.5px dashed var(--accent); border-radius: 4px;
-  background: rgba(47, 214, 208, 0.08);
-}
 
 .meter-opts {
   margin: 2px 6px 8px 14px; padding: 8px 10px;

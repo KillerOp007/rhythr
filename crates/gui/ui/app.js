@@ -212,7 +212,7 @@ function meterRow(key, label, m) {
     <div class="meter-opts">
       <label>Size <input type="range" data-meter="${key}" data-prop="scale" min="40" max="250" step="10" value="${Math.round(m.scale * 100)}"></label>
       <label>Opacity <input type="range" data-meter="${key}" data-prop="alpha" min="10" max="100" step="5" value="${Math.round(m.alpha * 100)}"></label>
-      <div class="sub">Drag it in the preview to move it.</div>
+      <div class="sub">Move and resize it with Edit HUD on.</div>
     </div>`;
   return `
     <div class="hud-row meter-toggle" data-meter-key="${key}" data-on="${m.enabled ? 1 : 0}" role="switch"
@@ -483,29 +483,6 @@ function meterBox(key, m, side, imgH) {
   return { x: cx - half, y: cy - half, w: half * 2, h: half * 2 };
 }
 
-let meterDrag = null;
-
-// While dragging, a client-side outline follows the pointer instantly; the
-// backend renders once on release (round-tripping a full preview per move
-// felt laggy).
-function dragGhostBox(show, box) {
-  let el = document.getElementById("meter-ghost");
-  if (!el) {
-    el = document.createElement("div");
-    el.id = "meter-ghost";
-    $("preview-wrap").appendChild(el);
-  }
-  el.hidden = !show;
-  if (show && box) {
-    Object.assign(el.style, {
-      left: `${box.x}px`,
-      top: `${box.y}px`,
-      width: `${box.w}px`,
-      height: `${box.h}px`,
-    });
-  }
-}
-
 // ------------------------------------------------ HUD drag editor
 // The hitboxes come from the RENDERER (bounds of the vertices it actually
 // draws), so box and pixels can never drift apart — the lesson from the
@@ -627,6 +604,39 @@ async function refreshHudBoxes() {
     el.appendChild(grip);
     layer.appendChild(el);
   }
+  // Meters join the editor as real boxes too (client-side geometry —
+  // they have no renderer hitbox): drag to move, corner grip to resize.
+  const iw = img.naturalWidth || 1;
+  const ih = img.naturalHeight || 1;
+  const addMeter = (key, m, side) => {
+    const b = meterBox(key, m, side, ih);
+    const el = document.createElement("div");
+    el.className = "hud-edit-box meter";
+    el.dataset.meterKey = key;
+    el.dataset.gk = side.gk || "";
+    el.dataset.sideOff = String(side.off);
+    el.dataset.sideW = String(side.w);
+    el.dataset.fw = String(b.w);
+    el.dataset.fh = String(b.h);
+    const pad = 3;
+    el.style.left = `${r.left - wr.left + b.x * sx - pad}px`;
+    el.style.top = `${r.top - wr.top + b.y * sy - pad}px`;
+    el.style.width = `${b.w * sx + pad * 2}px`;
+    el.style.height = `${b.h * sy + pad * 2}px`;
+    el.title =
+      key === "error" ? "hit error bar" : key === "aim" ? "aim accuracy" : "racing delta";
+    const grip = document.createElement("div");
+    grip.className = "hud-resize";
+    grip.title = "Drag to resize";
+    el.appendChild(grip);
+    layer.appendChild(el);
+  };
+  for (const key of ["error", "aim"]) {
+    const m = meterSettings(key);
+    if (m?.enabled) for (const side of meterSides(iw)) addMeter(key, m, side);
+  }
+  const rd = meterSettings("race_delta");
+  if (status?.ghost && rd?.enabled) addMeter("race_delta", rd, { off: 0, w: iw, gk: null });
   drawEditGrid();
 }
 
@@ -703,6 +713,7 @@ function initHudEdit() {
     e.preventDefault();
     box.setPointerCapture(e.pointerId);
     box.classList.add("dragging");
+    const meterKey = box.dataset.meterKey || null;
     if (e.target.closest(".hud-resize")) {
       // Corner handle: resize about the box centre.
       const br = box.getBoundingClientRect();
@@ -711,11 +722,14 @@ function initHudEdit() {
       hudDrag = {
         box,
         key: box.dataset.key,
+        meterKey,
         mode: "resize",
         cx,
         cy,
         startDist: Math.max(8, Math.hypot(e.clientX - cx, e.clientY - cy)),
-        baseScale: status?.settings?.hud_scales?.[box.dataset.key] ?? 1,
+        baseScale: meterKey
+          ? meterSettings(meterKey).scale ?? 1
+          : status?.settings?.hud_scales?.[box.dataset.key] ?? 1,
         origLeft: parseFloat(box.style.left),
         origTop: parseFloat(box.style.top),
         origW: box.offsetWidth,
@@ -727,6 +741,7 @@ function initHudEdit() {
     hudDrag = {
       box,
       key: box.dataset.key,
+      meterKey,
       mode: "move",
       startX: e.clientX,
       startY: e.clientY,
@@ -776,7 +791,12 @@ function initHudEdit() {
     d.box.classList.remove("dragging");
     if (d.mode === "resize") {
       try {
-        const st = await invoke("set_hud_scale", { key: d.key, scale: d.total ?? d.baseScale });
+        const st = d.meterKey
+          ? await invoke("set_meter", {
+              key: d.meterKey,
+              patch: { scale: d.total ?? d.baseScale },
+            })
+          : await invoke("set_hud_scale", { key: d.key, scale: d.total ?? d.baseScale });
         await applyStatus(st);
         schedulePreview();
       } catch (err) {
@@ -807,13 +827,25 @@ function initHudEdit() {
       fx += dx;
       fy += dy;
     }
-    const vpW = status?.ghost ? (img.naturalWidth || 1) / 2 : img.naturalWidth || 1;
     try {
-      const st = await invoke("set_hud_position", {
-        key: d.key,
-        x: fx / vpW,
-        y: fy / (img.naturalHeight || 1),
-      });
+      let st;
+      if (d.meterKey) {
+        // Meter: normalise within its side (a ghost half stores its own
+        // position via ghost_x/ghost_y).
+        const off = parseFloat(d.box.dataset.sideOff) || 0;
+        const sw = parseFloat(d.box.dataset.sideW) || img.naturalWidth || 1;
+        const nx = Math.min(1, Math.max(0, (fx - off) / sw));
+        const ny = Math.min(1, Math.max(0, fy / (img.naturalHeight || 1)));
+        const patch = d.box.dataset.gk ? { ghost_x: nx, ghost_y: ny } : { x: nx, y: ny };
+        st = await invoke("set_meter", { key: d.meterKey, patch });
+      } else {
+        const vpW = status?.ghost ? (img.naturalWidth || 1) / 2 : img.naturalWidth || 1;
+        st = await invoke("set_hud_position", {
+          key: d.key,
+          x: fx / vpW,
+          y: fy / (img.naturalHeight || 1),
+        });
+      }
       await applyStatus(st);
       schedulePreview();
     } catch (err) {
@@ -831,99 +863,6 @@ function initHudEdit() {
   };
   layer.addEventListener("pointercancel", abortDrag);
   layer.addEventListener("lostpointercapture", abortDrag);
-}
-
-function initMeterDrag() {
-  const img = $("preview-img");
-  const wrap = $("preview-wrap");
-  const geom = (e) => {
-    const r = img.getBoundingClientRect();
-    const wr = wrap.getBoundingClientRect();
-    return {
-      x: ((e.clientX - r.left) / r.width) * (img.naturalWidth || 1280),
-      y: ((e.clientY - r.top) / r.height) * (img.naturalHeight || 720),
-      iw: img.naturalWidth || 1280,
-      ih: img.naturalHeight || 720,
-      rect: r,
-      wrapRect: wr,
-    };
-  };
-  // Meter box in on-screen wrap coordinates for the drag outline.
-  const screenBox = (b, g) => {
-    const sx = g.rect.width / g.iw;
-    const sy = g.rect.height / g.ih;
-    return {
-      x: g.rect.left - g.wrapRect.left + b.x * sx,
-      y: g.rect.top - g.wrapRect.top + b.y * sy,
-      w: b.w * sx,
-      h: b.h * sy,
-    };
-  };
-  // Pointer position → normalised coords within the given side.
-  const sideNorm = (g, side) => ({
-    x: Math.min(1, Math.max(0, (g.x - side.off) / side.w)),
-    y: Math.min(1, Math.max(0, g.y / g.ih)),
-  });
-  const grab = (e, g, key, m, side) => {
-    const b = meterBox(key, m, side, g.ih);
-    if (g.x < b.x || g.x > b.x + b.w || g.y < b.y || g.y > b.y + b.h) return false;
-    meterDrag = { key, m, side };
-    img.setPointerCapture(e.pointerId);
-    e.preventDefault();
-    dragGhostBox(true, screenBox(b, g));
-    return true;
-  };
-  img.addEventListener("pointerdown", (e) => {
-    const g = geom(e);
-    // Race widgets sit above the per-side meters and span the full frame.
-    if (status?.ghost) {
-      const full = { off: 0, w: g.iw, gk: null };
-      const m = meterSettings("race_delta");
-      if (m?.enabled && grab(e, g, "race_delta", m, full)) return;
-    }
-    for (const side of meterSides(g.iw)) {
-      for (const key of ["error", "aim"]) {
-        const m = meterSettings(key);
-        if (m?.enabled && grab(e, g, key, m, side)) return;
-      }
-    }
-  });
-  // Magnet-snaps a meter drag point so the meter's REAL box edges (or
-  // centre) land on grid lines — same feel as the HUD elements.
-  const snapMeterPoint = (g, key, m, side) => {
-    if (!hudEditOn || !gridStep) return;
-    const n = sideNorm(g, side);
-    const patched = side.gk
-      ? { ...m, ghost_x: n.x, ghost_y: n.y }
-      : { ...m, x: n.x, y: n.y };
-    const b = meterBox(key, patched, side, g.ih);
-    const [dx, dy] = snapBoxDelta(b.x, b.y, b.x + b.w, b.y + b.h, g.ih);
-    g.x += dx;
-    g.y += dy;
-  };
-  img.addEventListener("pointermove", (e) => {
-    if (!meterDrag) return;
-    const g = geom(e);
-    snapMeterPoint(g, meterDrag.key, meterDrag.m, meterDrag.side);
-    const n = sideNorm(g, meterDrag.side);
-    const patched = meterDrag.side.gk
-      ? { ...meterDrag.m, ghost_x: n.x, ghost_y: n.y }
-      : { ...meterDrag.m, x: n.x, y: n.y };
-    dragGhostBox(true, screenBox(meterBox(meterDrag.key, patched, meterDrag.side, g.ih), g));
-  });
-  img.addEventListener("pointerup", async (e) => {
-    if (!meterDrag) return;
-    const g = geom(e);
-    const { key, m, side } = meterDrag;
-    meterDrag = null;
-    dragGhostBox(false);
-    snapMeterPoint(g, key, m, side);
-    const n = sideNorm(g, side);
-    const patch = side.gk ? { ghost_x: n.x, ghost_y: n.y } : { x: n.x, y: n.y };
-    await call(() => invoke("set_meter", { key, patch }));
-    schedulePreview();
-  });
-  img.draggable = false;
 }
 
 function initScrubber() {
@@ -1498,7 +1437,6 @@ window.addEventListener("DOMContentLoaded", async () => {
   window.__TAURI__.app.getVersion().then((v) => { $("app-ver").textContent = `v${v}`; });
   initControls();
   initScrubber();
-  initMeterDrag();
   initHudEdit();
   initDragDrop();
   initRenderEvents();
