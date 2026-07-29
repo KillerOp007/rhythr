@@ -2288,12 +2288,25 @@ fn compose_background(config: &SkinConfig, width: u32, height: u32) -> Option<(V
                     (sw_f * k, sh_f * k)
                 }
             };
-            (
-                layer.center_x * fw,
-                layer.center_y * fh,
-                base_w * 0.5 * layer.scale_x,
-                base_h * 0.5 * layer.scale_y,
-            )
+            let (mut cx, mut cy) = (layer.center_x * fw, layer.center_y * fh);
+            // A USER background (custom_bg_dim set ⇒ the layers are ours)
+            // clamps its shift to the available overflow, so zoom/offset
+            // can never uncover the frame. Skin layers stay untouched.
+            if config.custom_bg_dim.is_some() {
+                cx = fw * 0.5
+                    + crate::background::clamp_cover_offset(
+                        cx - fw * 0.5,
+                        base_w * layer.scale_x,
+                        fw,
+                    );
+                cy = fh * 0.5
+                    + crate::background::clamp_cover_offset(
+                        cy - fh * 0.5,
+                        base_h * layer.scale_y,
+                        fh,
+                    );
+            }
+            (cx, cy, base_w * 0.5 * layer.scale_x, base_h * 0.5 * layer.scale_y)
         };
         if half_w < 1.0 || half_h < 1.0 {
             continue;

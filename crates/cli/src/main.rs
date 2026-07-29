@@ -143,6 +143,22 @@ enum Command {
         /// How much the custom background is darkened, 0-100 percent.
         #[arg(long, default_value_t = 60)]
         background_dim: u32,
+        /// Zoom on the custom background, percent (100 = exactly covering
+        /// the frame).
+        #[arg(long, default_value_t = 100)]
+        background_zoom: u32,
+        /// Horizontal shift of the custom background in percent of the
+        /// frame width (positive = right); clamped so the frame stays
+        /// covered.
+        #[arg(long, default_value_t = 0)]
+        background_x: i32,
+        /// Vertical shift in percent of the frame height (positive =
+        /// down).
+        #[arg(long, default_value_t = 0)]
+        background_y: i32,
+        /// Video backgrounds: start (and loop) playback from this second.
+        #[arg(long, default_value_t = 0.0)]
+        background_start: f64,
     },
 }
 
@@ -284,6 +300,10 @@ fn run() -> anyhow::Result<bool> {
             no_racing_delta,
             background,
             background_dim,
+            background_zoom,
+            background_x,
+            background_y,
+            background_start,
         } => {
             let r = Replay::from_path(&replay)
                 .with_context(|| format!("reading {}", replay.display()))?;
@@ -307,14 +327,23 @@ fn run() -> anyhow::Result<bool> {
             cfg.hud.race_delta.enabled = !no_racing_delta;
             let mut background_video = None;
             if let Some(bg) = &background {
-                let kind = rhythia_render::background::apply_background(
-                    &mut cfg,
-                    bg,
-                    background_dim.min(100) as f32 / 100.0,
-                )
-                .with_context(|| format!("reading background {}", bg.display()))?;
+                let bg_opts = rhythia_render::background::BackgroundOptions {
+                    dim: background_dim.min(100) as f32 / 100.0,
+                    zoom: background_zoom.clamp(100, 400) as f32 / 100.0,
+                    offset: [
+                        background_x.clamp(-100, 100) as f32 / 100.0,
+                        background_y.clamp(-100, 100) as f32 / 100.0,
+                    ],
+                    start_secs: background_start.max(0.0),
+                };
+                let kind =
+                    rhythia_render::background::apply_background(&mut cfg, bg, &bg_opts)
+                        .with_context(|| format!("reading background {}", bg.display()))?;
                 if kind == rhythia_render::background::BackgroundKind::Video {
-                    background_video = Some(bg.clone());
+                    background_video = Some(rhythia_render::video::BackgroundVideo {
+                        path: bg.clone(),
+                        opts: bg_opts,
+                    });
                 }
             }
 

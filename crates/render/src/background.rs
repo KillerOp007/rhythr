@@ -42,19 +42,20 @@ pub fn classify_file(path: &Path) -> std::io::Result<BackgroundKind> {
 }
 
 /// Applies a custom background to the render config: replaces the skin's
-/// background layers (an image becomes one frame-covering layer, a video
-/// flips the streaming flag) and sets the dim. Returns the detected kind.
+/// background layers (an image becomes one frame-covering layer with the
+/// user's zoom/shift, a video flips the streaming flag) and sets the dim.
+/// Returns the detected kind.
 pub fn apply_background(
     cfg: &mut SkinConfig,
     path: &Path,
-    dim: f32,
+    opts: &BackgroundOptions,
 ) -> std::io::Result<BackgroundKind> {
     let kind = classify_file(path)?;
     cfg.background_images.clear();
-    cfg.custom_bg_dim = Some(dim.clamp(0.0, 1.0));
+    cfg.custom_bg_dim = Some(opts.dim.clamp(0.0, 1.0));
     match kind {
         BackgroundKind::Image => {
-            cfg.background_images.push(cover_layer(std::fs::read(path)?));
+            cfg.background_images.push(cover_layer(std::fs::read(path)?, opts));
             cfg.custom_bg_video = false;
         }
         BackgroundKind::Video => cfg.custom_bg_video = true,
@@ -62,16 +63,19 @@ pub fn apply_background(
     Ok(kind)
 }
 
-/// A screen-space layer that covers the whole frame (centre-cropped).
-fn cover_layer(bytes: Vec<u8>) -> BackgroundLayer {
+/// A screen-space layer that covers the whole frame: cover-fit times the
+/// user's zoom, centre shifted by the offset (the compositor clamps the
+/// shift so the frame stays covered).
+fn cover_layer(bytes: Vec<u8>, opts: &BackgroundOptions) -> BackgroundLayer {
+    let zoom = opts.zoom.clamp(1.0, 4.0);
     BackgroundLayer {
         bytes,
         fit: 2,
         placement: 0,
-        center_x: 0.5,
-        center_y: 0.5,
-        scale_x: 1.0,
-        scale_y: 1.0,
+        center_x: 0.5 + opts.offset[0].clamp(-1.0, 1.0),
+        center_y: 0.5 + opts.offset[1].clamp(-1.0, 1.0),
+        scale_x: zoom,
+        scale_y: zoom,
         flip_horizontal: false,
         space_x: 0.0,
         space_y: 0.0,
@@ -99,16 +103,71 @@ pub fn image_decodes(bytes: &[u8]) -> bool {
     image::load_from_memory(bytes).is_ok()
 }
 
-/// Scale-to-cover filter: fill the frame, centre-crop the overflow.
-fn cover_vf(w: u32, h: u32) -> String {
-    format!("scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}")
+/// How the user placed the custom background. Defaults reproduce the
+/// plain cover behaviour exactly.
+#[derive(Debug, Clone, Copy)]
+pub struct BackgroundOptions {
+    /// 0..1 darkening of the background quad.
+    pub dim: f32,
+    /// Extra zoom on top of cover-fit (1.0 = exactly covering).
+    pub zoom: f32,
+    /// Shift as a fraction of the frame size (positive = image moves
+    /// right/down). Clamped to the available overflow so the frame stays
+    /// covered — no black bars.
+    pub offset: [f32; 2],
+    /// Videos: playback starts (and loops) from this point.
+    pub start_secs: f64,
 }
 
-/// A muted, endlessly looped ffmpeg decode of the background video,
-/// delivering exactly one frame-sized RGBA frame per output frame.
+impl Default for BackgroundOptions {
+    fn default() -> Self {
+        BackgroundOptions {
+            dim: 0.6,
+            zoom: 1.0,
+            offset: [0.0, 0.0],
+            start_secs: 0.0,
+        }
+    }
+}
+
+/// Clamps a wanted shift (px) to what the content can afford beyond the
+/// frame, keeping the frame fully covered.
+pub fn clamp_cover_offset(wanted: f32, content: f32, frame: f32) -> f32 {
+    let spare = ((content - frame) * 0.5).max(0.0);
+    wanted.clamp(-spare, spare)
+}
+
+/// Scale-to-cover filter with the user's zoom and shift: fill the frame,
+/// crop the overflow around the shifted window. The crop position is
+/// clamped inside ffmpeg (the source size is only known at run time).
+fn cover_vf(w: u32, h: u32, zoom: f32, offset: [f32; 2]) -> String {
+    let zoom = zoom.clamp(1.0, 4.0);
+    let (sw, sh) = (
+        (w as f32 * zoom).ceil() as u32,
+        (h as f32 * zoom).ceil() as u32,
+    );
+    let ox = (offset[0].clamp(-1.0, 1.0) * w as f32).round() as i64;
+    let oy = (offset[1].clamp(-1.0, 1.0) * h as f32).round() as i64;
+    format!(
+        "scale={sw}:{sh}:force_original_aspect_ratio=increase,\
+         crop={w}:{h}:x='clip((iw-{w})/2-({ox}),0,iw-{w})':y='clip((ih-{h})/2-({oy}),0,ih-{h})'"
+    )
+}
+
+/// A muted, looping ffmpeg decode of the background video, delivering
+/// exactly one frame-sized RGBA frame per output frame. Looping is done
+/// by respawning the decoder at end-of-stream, so playback restarts at
+/// the USER'S start point — not at an intro the start point was meant to
+/// skip.
 pub struct VideoDecoder {
     child: Child,
     stdout: ChildStdout,
+    /// Everything needed to respawn for the next loop.
+    spec: (String, std::path::PathBuf, u32, u32, u32, f64, f32, [f32; 2]),
+    /// Frames delivered by the current child — a child that dies without
+    /// producing any is broken (or the start point is past the end), and
+    /// respawning it would loop forever.
+    child_frames: u64,
     /// Last complete frame — only ever overwritten by a full read.
     frame: Vec<u8>,
     /// Read target; read_exact leaves it unspecified on error, so it must
@@ -119,18 +178,28 @@ pub struct VideoDecoder {
 }
 
 impl VideoDecoder {
-    pub fn spawn(
-        ffmpeg: &str,
-        path: &Path,
-        width: u32,
-        height: u32,
-        fps: u32,
-    ) -> Result<VideoDecoder, String> {
+    fn spawn_child(
+        (ffmpeg, path, width, height, fps, start, zoom, offset): &(
+            String,
+            std::path::PathBuf,
+            u32,
+            u32,
+            u32,
+            f64,
+            f32,
+            [f32; 2],
+        ),
+    ) -> Result<(Child, ChildStdout), String> {
         let mut cmd = Command::new(ffmpeg);
         crate::video::hide_console_window(&mut cmd);
-        cmd.args(["-loglevel", "error", "-stream_loop", "-1", "-an", "-i"])
+        cmd.args(["-loglevel", "error"]);
+        if *start > 0.0 {
+            cmd.args(["-ss", &format!("{start:.3}")]);
+        }
+        cmd.args(["-an", "-i"])
             .arg(path)
-            .args(["-f", "rawvideo", "-pix_fmt", "rgba", "-vf", &cover_vf(width, height)])
+            .args(["-f", "rawvideo", "-pix_fmt", "rgba"])
+            .args(["-vf", &cover_vf(*width, *height, *zoom, *offset)])
             .args(["-r", &fps.to_string(), "pipe:1"])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -139,9 +208,33 @@ impl VideoDecoder {
             .spawn()
             .map_err(|e| format!("could not start ffmpeg ({ffmpeg}): {e}"))?;
         let stdout = child.stdout.take().ok_or("ffmpeg gave no stdout")?;
+        Ok((child, stdout))
+    }
+
+    pub fn spawn(
+        ffmpeg: &str,
+        path: &Path,
+        width: u32,
+        height: u32,
+        fps: u32,
+        opts: &BackgroundOptions,
+    ) -> Result<VideoDecoder, String> {
+        let spec = (
+            ffmpeg.to_string(),
+            path.to_path_buf(),
+            width,
+            height,
+            fps,
+            opts.start_secs.max(0.0),
+            opts.zoom,
+            opts.offset,
+        );
+        let (child, stdout) = Self::spawn_child(&spec)?;
         Ok(VideoDecoder {
             child,
             stdout,
+            spec,
+            child_frames: 0,
             frame: vec![0; (width * height * 4) as usize],
             scratch: vec![0; (width * height * 4) as usize],
             got_any: false,
@@ -149,9 +242,10 @@ impl VideoDecoder {
         })
     }
 
-    /// The frame for the next output frame. After the stream ends or
-    /// errors, keeps returning the last good frame (or None if decoding
-    /// never produced one — the caller then leaves the background black).
+    /// The frame for the next output frame. At end-of-stream the decoder
+    /// respawns (looping from the start point); after a hard failure it
+    /// keeps returning the last good frame (or None if decoding never
+    /// produced one — the caller then leaves the background black).
     pub fn next_frame(&mut self) -> Option<&[u8]> {
         use std::io::Read;
         if !self.done {
@@ -159,6 +253,26 @@ impl VideoDecoder {
                 Ok(()) => {
                     self.frame.copy_from_slice(&self.scratch);
                     self.got_any = true;
+                    self.child_frames += 1;
+                }
+                Err(_) if self.child_frames > 0 => {
+                    // End of stream: loop by respawning at the start point.
+                    let _ = self.child.kill();
+                    let _ = self.child.wait();
+                    self.child_frames = 0;
+                    match Self::spawn_child(&self.spec) {
+                        Ok((child, stdout)) => {
+                            self.child = child;
+                            self.stdout = stdout;
+                            if self.stdout.read_exact(&mut self.scratch).is_ok() {
+                                self.frame.copy_from_slice(&self.scratch);
+                                self.child_frames = 1;
+                            } else {
+                                self.done = true;
+                            }
+                        }
+                        Err(_) => self.done = true,
+                    }
                 }
                 Err(_) => self.done = true,
             }
@@ -189,8 +303,9 @@ pub fn probe_duration(ffmpeg: &str, path: &Path) -> Option<f64> {
     parse_ffmpeg_duration(&String::from_utf8_lossy(&out.stderr))
 }
 
-/// One RGBA frame at `t_secs` (wrapped over `duration` so the preview
-/// loops like the render will) for the live preview.
+/// One RGBA frame at `t_secs` for the live preview, wrapped over the
+/// loop window `[start, duration)` so scrubbing matches what the render
+/// will show.
 pub fn extract_frame(
     ffmpeg: &str,
     path: &Path,
@@ -198,11 +313,13 @@ pub fn extract_frame(
     duration: Option<f64>,
     width: u32,
     height: u32,
+    opts: &BackgroundOptions,
 ) -> Option<Vec<u8>> {
     use std::io::Read;
+    let start = opts.start_secs.max(0.0);
     let t = match duration {
-        Some(d) if d > 0.05 => t_secs.max(0.0) % d,
-        _ => t_secs.max(0.0),
+        Some(d) if d - start > 0.05 => start + (t_secs.max(0.0) % (d - start)),
+        _ => start + t_secs.max(0.0),
     };
     let mut cmd = Command::new(ffmpeg);
     crate::video::hide_console_window(&mut cmd);
@@ -210,7 +327,7 @@ pub fn extract_frame(
         .args(["-loglevel", "error", "-ss", &format!("{t:.3}"), "-an", "-i"])
         .arg(path)
         .args(["-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgba"])
-        .args(["-vf", &cover_vf(width, height), "pipe:1"])
+        .args(["-vf", &cover_vf(width, height, opts.zoom, opts.offset), "pipe:1"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -259,20 +376,61 @@ mod tests {
         std::fs::write(&img, b"\x89PNG\r\n\x1a\n....").unwrap();
 
         let mut cfg = SkinConfig::default();
-        cfg.background_images.push(cover_layer(vec![1]));
-        let kind = apply_background(&mut cfg, &img, 0.6).unwrap();
+        cfg.background_images
+            .push(cover_layer(vec![1], &BackgroundOptions::default()));
+        let opts = BackgroundOptions {
+            dim: 0.6,
+            zoom: 1.5,
+            offset: [0.25, -0.1],
+            ..Default::default()
+        };
+        let kind = apply_background(&mut cfg, &img, &opts).unwrap();
         assert_eq!(kind, BackgroundKind::Image);
         assert_eq!(cfg.background_images.len(), 1);
         assert!(!cfg.custom_bg_video);
         assert_eq!(cfg.custom_bg_dim, Some(0.6));
+        // The layer carries the user's zoom and shift.
+        let l = &cfg.background_images[0];
+        assert_eq!((l.scale_x, l.scale_y), (1.5, 1.5));
+        assert_eq!((l.center_x, l.center_y), (0.75, 0.4));
 
         let vid = dir.join("bg.mp4");
         std::fs::write(&vid, b"\x00\x00\x00\x20ftypisom").unwrap();
-        let kind = apply_background(&mut cfg, &vid, 1.5).unwrap();
+        let kind = apply_background(
+            &mut cfg,
+            &vid,
+            &BackgroundOptions { dim: 1.5, ..Default::default() },
+        )
+        .unwrap();
         assert_eq!(kind, BackgroundKind::Video);
         assert!(cfg.background_images.is_empty());
         assert!(cfg.custom_bg_video);
         assert_eq!(cfg.custom_bg_dim, Some(1.0));
+    }
+
+    #[test]
+    fn cover_offset_clamps_to_the_available_overflow() {
+        // Content 200 wide over a 100 frame: 50 px spare per side.
+        assert_eq!(clamp_cover_offset(20.0, 200.0, 100.0), 20.0);
+        assert_eq!(clamp_cover_offset(80.0, 200.0, 100.0), 50.0);
+        assert_eq!(clamp_cover_offset(-80.0, 200.0, 100.0), -50.0);
+        // Content no bigger than the frame: nothing to shift.
+        assert_eq!(clamp_cover_offset(30.0, 100.0, 100.0), 0.0);
+    }
+
+    #[test]
+    fn cover_filter_defaults_stay_plain_and_zoom_shift_clamp_in_expr() {
+        // zoom 1 / no shift: centred crop, same behaviour as before.
+        assert_eq!(
+            cover_vf(1920, 1080, 1.0, [0.0, 0.0]),
+            "scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080:x='clip((iw-1920)/2-(0),0,iw-1920)':y='clip((ih-1080)/2-(0),0,ih-1080)'"
+        );
+        // zoom 1.5, shifted a quarter frame right: scale grows, the crop
+        // window moves left by 480 px, clamped inside the source.
+        let f = cover_vf(1920, 1080, 1.5, [0.25, -0.1]);
+        assert!(f.starts_with("scale=2880:1620:force_original_aspect_ratio=increase,crop=1920:1080:"));
+        assert!(f.contains("x='clip((iw-1920)/2-(480),0,iw-1920)'"));
+        assert!(f.contains("y='clip((ih-1080)/2-(-108),0,ih-1080)'"));
     }
 
     #[test]

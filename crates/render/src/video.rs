@@ -44,10 +44,16 @@ pub struct VideoOptions {
     /// A second replay of the same map, rendered as a ghost overlay.
     pub ghost: Option<GhostOptions>,
     /// Custom VIDEO background: decoded by the same ffmpeg, muted and
-    /// looped, one frame per output frame. (Image backgrounds ride the
-    /// config's background layers instead.) The results screen is never
-    /// touched by it.
-    pub background_video: Option<PathBuf>,
+    /// looped from its start point, one frame per output frame. (Image
+    /// backgrounds ride the config's background layers instead.) The
+    /// results screen is never touched by it.
+    pub background_video: Option<BackgroundVideo>,
+}
+
+/// A video background and how the user placed it.
+pub struct BackgroundVideo {
+    pub path: PathBuf,
+    pub opts: crate::background::BackgroundOptions,
 }
 
 /// Ghost-race settings: the second replay and its overlay colour (sRGB
@@ -360,9 +366,16 @@ pub fn render_video(
     // the last good frame stays.
     let (fw, fh) = renderer.dimensions();
     let mut bg_decoder = match &opts.background_video {
-        Some(p) => Some(
-            crate::background::VideoDecoder::spawn(&opts.ffmpeg, p, fw, fh, opts.fps)
-                .map_err(Error::Ffmpeg)?,
+        Some(bg) => Some(
+            crate::background::VideoDecoder::spawn(
+                &opts.ffmpeg,
+                &bg.path,
+                fw,
+                fh,
+                opts.fps,
+                &bg.opts,
+            )
+            .map_err(Error::Ffmpeg)?,
         ),
         None => None,
     };
