@@ -97,6 +97,20 @@
         </div>
       </section>
 
+      <section class="card" id="card-presets">
+        <div class="card-head">
+          <h2>Layout presets</h2>
+        </div>
+        <div class="card-body">
+          <ul id="preset-list"></ul>
+          <div class="row" style="display:flex;gap:6px;margin-top:6px">
+            <input type="text" id="preset-name" placeholder="Preset name" style="flex:1;min-width:0" />
+            <button class="btn small" id="btn-preset-save">Save</button>
+          </div>
+          <p class="hint">Saves the whole look: layout, sizes, hidden elements, meters, skin config, resolution and background.</p>
+        </div>
+      </section>
+
       <section class="card" id="card-recent" hidden>
         <div class="card-head"><h2>Recent replays</h2></div>
         <ul id="recent-list"></ul>
@@ -120,6 +134,7 @@
         <div id="preview-msg" hidden></div>
         <span id="preview-tools" hidden>
           <button class="btn small ghost" id="btn-edit-hud" title="Drag any HUD element where you want it — positions save automatically and apply to every render">Edit HUD</button>
+          <button class="btn small ghost" id="btn-hud-undo" hidden title="Undo the last layout change (press again to redo)">Undo</button>
           <button class="btn small ghost" id="btn-hud-grid" hidden title="Snap grid for the HUD editor">Grid: Off</button>
           <button class="btn small ghost" id="btn-hud-reset" hidden title="Put every HUD element (meters included) back to its standard position and size — visibility and the meters' size sliders stay as they are">Reset layout</button>
         <span id="thumb-wrap">
@@ -138,6 +153,14 @@
         <span id="scrub-time" class="mono">0:00</span>
         <canvas id="scrubber" height="46"></canvas>
         <span id="scrub-len" class="mono">0:00</span>
+      </div>
+      <div id="clip-row" hidden>
+        <button class="btn small" id="btn-clip-in" title="Clip starts at the playhead">Set start</button>
+        <button class="btn small" id="btn-clip-out" title="Clip ends at the playhead">Set end</button>
+        <span id="clip-label" class="mono muted"></span>
+        <button class="btn small ghost" id="btn-clip-clear" hidden title="Render the full run again">✕</button>
+        <span style="flex:1"></span>
+        <span id="clip-suggest"></span>
       </div>
 
       <div id="render-bar">

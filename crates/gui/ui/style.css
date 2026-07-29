@@ -271,6 +271,29 @@ details#advanced > div, details#advanced > label { margin-bottom: 10px; }
    so they read as extras next to the renderer-backed element boxes. */
 .hud-edit-box.meter { border-style: dotted; }
 
+/* Preset list: click a row to apply, ✕ to delete. */
+#preset-list { list-style: none; margin: 0; padding: 0; }
+#preset-list li {
+  display: flex; align-items: center; gap: 6px;
+  padding: 5px 6px; border-radius: 5px; cursor: pointer;
+  font-size: 12px; color: var(--muted);
+}
+#preset-list li:hover { background: var(--panel-2); color: var(--text); }
+#preset-list li .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#preset-list li .del {
+  border: 0; background: none; color: var(--muted); cursor: pointer;
+  font-size: 12px; padding: 0 4px; border-radius: 4px;
+}
+#preset-list li .del:hover { color: var(--danger); }
+
+/* Clip row under the scrubber. */
+#clip-row {
+  display: flex; align-items: center; gap: 8px; flex-shrink: 0;
+  font-size: 12px;
+}
+#clip-row .chip { margin-top: 0; cursor: pointer; }
+#clip-row .chip:hover { border-color: var(--accent); color: var(--accent); }
+
 /* HUD editor: corner resize handle (arrow in a circle) on every box. */
 .hud-resize {
   position: absolute; top: -9px; right: -9px;

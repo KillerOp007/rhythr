@@ -124,6 +124,129 @@ function renderGhostCard() {
     <span class="chip info">ghost active</span> ${warn}`;
 }
 
+function renderPresetsCard() {
+  // Typing a name must survive status refreshes.
+  if (document.activeElement === $("preset-name")) return;
+  const names = Object.keys(status?.settings?.presets || {});
+  $("preset-list").innerHTML = names.length
+    ? names
+        .map(
+          (n) =>
+            `<li data-preset="${esc(n)}" title="Apply this preset"><span class="name">${esc(n)}</span><button class="del" title="Delete preset">✕</button></li>`,
+        )
+        .join("")
+    : `<li style="cursor:default">No presets yet — set up a look and hit Save.</li>`;
+}
+
+// ------------------------------------------------------------ clip range
+
+// A temporary range while a scrubber handle is being dragged.
+let tempClip = null;
+
+function renderClipRow() {
+  const clip = status?.clip;
+  $("btn-clip-clear").hidden = !clip;
+  $("clip-label").textContent = clip
+    ? `${fmtTime(clip[0])}–${fmtTime(clip[1])} (${fmtTime(clip[1] - clip[0])})`
+    : "";
+  renderClipSuggestions();
+  drawScrubber();
+}
+
+// Suggestions computed from the run itself — offered, never imposed: a
+// click sets the range, the handles stay free to move.
+function computeClipSuggestions() {
+  if (!timelineData) return [];
+  const { length_ms, miss_times, fail_ms } = timelineData;
+  const out = [];
+  const misses = miss_times.filter((t) => t > 0 && t < length_ms).sort((a, b) => a - b);
+  // Longest clean streak.
+  const marks = [0, ...misses, length_ms];
+  let best = [0, 0];
+  for (let i = 1; i < marks.length; i++) {
+    if (marks[i] - marks[i - 1] > best[1] - best[0]) best = [marks[i - 1], marks[i]];
+  }
+  if (best[1] - best[0] > 8000) {
+    const s = Math.max(0, best[0] + 300);
+    const e = Math.min(length_ms, best[1] - 100);
+    out.push({ label: `Best streak (${fmtTime(e - s)})`, why: "Longest run without a miss", start: s, end: e });
+  }
+  // Densest miss window.
+  if (misses.length >= 3) {
+    const W = 20000;
+    let bs = 0;
+    let bc = 0;
+    for (const t of misses) {
+      const c = misses.filter((u) => u >= t && u < t + W).length;
+      if (c > bc) {
+        bc = c;
+        bs = t;
+      }
+    }
+    out.push({
+      label: "Toughest part",
+      why: `${bc} misses in 20 seconds`,
+      start: Math.max(0, bs - 3000),
+      end: Math.min(length_ms, bs + W),
+    });
+  }
+  // The fail, or the finish.
+  if (fail_ms != null) {
+    out.push({
+      label: "The fail",
+      why: "The last seconds before the run ended",
+      start: Math.max(0, fail_ms - 18000),
+      end: Math.min(length_ms, fail_ms + 1500),
+    });
+  } else if (length_ms > 25000) {
+    out.push({ label: "Finish", why: "The last 20 seconds", start: length_ms - 20000, end: length_ms });
+  }
+  return out;
+}
+
+function renderClipSuggestions() {
+  const el = $("clip-suggest");
+  const sug = computeClipSuggestions();
+  el.innerHTML = sug
+    .map(
+      (s, i) =>
+        `<span class="chip info" data-sug="${i}" title="${esc(s.why)} — just a suggestion: set it, then move the handles however you like">${esc(s.label)}</span>`,
+    )
+    .join(" ");
+  el.querySelectorAll("[data-sug]").forEach((c) =>
+    c.addEventListener("click", async () => {
+      const s = sug[Number(c.dataset.sug)];
+      try {
+        await call(() => invoke("set_clip", { startMs: s.start, endMs: s.end }));
+        renderClipRow();
+        schedulePreview();
+      } catch (e) {
+        loadNote(String(e));
+      }
+    }),
+  );
+}
+
+async function setClipEdge(isIn) {
+  const len = timelineData?.length_ms || 0;
+  const cur = status?.clip;
+  let s = cur ? cur[0] : 0;
+  let e = cur ? cur[1] : len;
+  if (isIn) {
+    s = currentMs;
+    if (e <= s + 500) e = len;
+  } else {
+    e = currentMs;
+    if (s >= e - 500) s = 0;
+  }
+  try {
+    await call(() => invoke("set_clip", { startMs: s, endMs: e }));
+    renderClipRow();
+  } catch (err) {
+    loadNote(String(err));
+  }
+}
+
 function renderRecent() {
   const list = status?.settings?.recent_replays || [];
   $("card-recent").hidden = list.length === 0;
@@ -178,26 +301,48 @@ function renderBackgroundCard() {
     body.innerHTML = `<p class="hint">Optional image or video shown behind the gameplay instead of the skin background (videos play muted and looped). The results screen keeps its own look. Drop a file here or browse.</p>`;
     return;
   }
-  const dim = status?.settings?.background_dim ?? 60;
+  const s = status.settings;
+  const dur = status?.bg_video_duration;
+  const row = (id, label, min, max, step, value, valText) => `
+    <label class="hint" style="display:flex;align-items:center;gap:8px;margin-top:6px">
+      <span style="width:44px">${label}</span>
+      <input type="range" id="${id}" min="${min}" max="${max}" step="${step}" value="${value}" style="flex:1">
+      <span id="${id}-val" style="width:44px;text-align:right">${valText}</span>
+    </label>`;
   body.innerHTML = `
     <div class="src-meta">${esc(p.split(/[\\/]/).pop())}</div>
     <span class="chip info">background active</span>
-    <label class="hint" style="display:flex;align-items:center;gap:8px;margin-top:8px">Dim
-      <input type="range" id="bg-dim" min="0" max="100" step="5" value="${dim}" style="flex:1">
-      <span id="bg-dim-val">${dim}%</span>
-    </label>`;
-  const sl = $("bg-dim");
-  let timer = null;
-  const push = async () => {
-    await call(() => invoke("set_background_dim", { pct: Number(sl.value) }));
-    schedulePreview();
+    ${row("bg-dim", "Dim", 0, 100, 5, s.background_dim ?? 60, `${s.background_dim ?? 60}%`)}
+    ${row("bg-zoom", "Zoom", 100, 300, 5, s.background_zoom ?? 100, `${s.background_zoom ?? 100}%`)}
+    ${row("bg-offx", "Pos X", -50, 50, 1, s.background_off_x ?? 0, `${s.background_off_x ?? 0}%`)}
+    ${row("bg-offy", "Pos Y", -50, 50, 1, s.background_off_y ?? 0, `${s.background_off_y ?? 0}%`)}
+    ${dur ? row("bg-start", "Start", 0, Math.max(0.1, dur - 0.5).toFixed(1), 0.1, s.background_start ?? 0, fmtTime((s.background_start ?? 0) * 1000)) : ""}`;
+  // Every slider debounces into its backend patch and refreshes the
+  // preview; the value label updates instantly.
+  const wire = (id, fmt, push) => {
+    const sl = $(id);
+    if (!sl) return;
+    let timer = null;
+    const send = async () => {
+      await call(push);
+      schedulePreview();
+    };
+    sl.addEventListener("input", () => {
+      $(`${id}-val`).textContent = fmt(sl.value);
+      clearTimeout(timer);
+      timer = setTimeout(send, 140);
+    });
+    sl.addEventListener("change", send);
   };
-  sl.addEventListener("input", () => {
-    $("bg-dim-val").textContent = `${sl.value}%`;
-    clearTimeout(timer);
-    timer = setTimeout(push, 140);
-  });
-  sl.addEventListener("change", push);
+  wire("bg-dim", (v) => `${v}%`, () => invoke("set_background_dim", { pct: Number($("bg-dim").value) }));
+  wire("bg-zoom", (v) => `${v}%`, () =>
+    invoke("set_background_transform", { patch: { zoom: Number($("bg-zoom").value) } }));
+  wire("bg-offx", (v) => `${v}%`, () =>
+    invoke("set_background_transform", { patch: { off_x: Number($("bg-offx").value) } }));
+  wire("bg-offy", (v) => `${v}%`, () =>
+    invoke("set_background_transform", { patch: { off_y: Number($("bg-offy").value) } }));
+  wire("bg-start", (v) => fmtTime(v * 1000), () =>
+    invoke("set_background_transform", { patch: { start: Number($("bg-start").value) } }));
 }
 
 // Settings entry for a draggable overlay extra ("error"/"aim" kept their
@@ -432,6 +577,20 @@ function drawScrubber() {
     ctx.fillStyle = "#ff5d6c";
     ctx.fillRect(x - 1, 0, 2, h);
   }
+  // Clip range: dim the outside, mark the in/out handles.
+  const clip = tempClip || status?.clip;
+  if (clip) {
+    const x0 = (clip[0] / length_ms) * w;
+    const x1 = (clip[1] / length_ms) * w;
+    ctx.fillStyle = "rgba(5, 7, 10, 0.55)";
+    ctx.fillRect(0, 0, x0, h);
+    ctx.fillRect(x1, 0, w - x1, h);
+    ctx.fillStyle = "#2fd6d0";
+    ctx.fillRect(x0 - 1.5, 0, 3, h);
+    ctx.fillRect(x1 - 1.5, 0, 3, h);
+    ctx.fillRect(x0 - 1.5, 0, 8, 5);
+    ctx.fillRect(x1 - 6.5, 0, 8, 5);
+  }
   // Playhead.
   const px = (currentMs / length_ms) * w;
   ctx.fillStyle = "#e8edf4";
@@ -651,8 +810,20 @@ function initHudEdit() {
     $("btn-edit-hud").classList.toggle("active", hudEditOn);
     $("btn-hud-reset").hidden = !hudEditOn;
     $("btn-hud-grid").hidden = !hudEditOn;
+    $("btn-hud-undo").hidden = !hudEditOn;
     if (!hudEditOn) gridMenu.hidden = true;
     refreshHudBoxes();
+  });
+
+  $("btn-hud-undo").addEventListener("click", async () => {
+    try {
+      const st = await invoke("undo_layout");
+      await applyStatus(st);
+      schedulePreview();
+      refreshHudBoxes();
+    } catch (e) {
+      loadNote(String(e));
+    }
   });
 
   // Snap-grid picker: a small dropdown under the Grid button.
@@ -868,13 +1039,56 @@ function initHudEdit() {
 function initScrubber() {
   const canvas = $("scrubber");
   let dragging = false;
+  let clipDrag = null; // "in" | "out" while a clip handle is being dragged
+  const fracAt = (clientX) => {
+    const rect = canvas.getBoundingClientRect();
+    return Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+  };
   canvas.addEventListener("pointerdown", (e) => {
+    const clip = status?.clip;
+    if (clip && timelineData) {
+      // Grab an in/out handle when the pointer is on it.
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const x0 = (clip[0] / timelineData.length_ms) * rect.width;
+      const x1 = (clip[1] / timelineData.length_ms) * rect.width;
+      const which = Math.abs(x - x0) < 7 ? "in" : Math.abs(x - x1) < 7 ? "out" : null;
+      if (which) {
+        clipDrag = which;
+        tempClip = [...clip];
+        canvas.setPointerCapture(e.pointerId);
+        return;
+      }
+    }
     dragging = true;
     canvas.setPointerCapture(e.pointerId);
     scrubTo(e.clientX);
   });
-  canvas.addEventListener("pointermove", (e) => { if (dragging) scrubTo(e.clientX); });
-  canvas.addEventListener("pointerup", () => { dragging = false; });
+  canvas.addEventListener("pointermove", (e) => {
+    if (clipDrag && timelineData) {
+      const t = fracAt(e.clientX) * timelineData.length_ms;
+      if (clipDrag === "in") tempClip[0] = Math.min(t, tempClip[1] - 500);
+      else tempClip[1] = Math.max(t, tempClip[0] + 500);
+      drawScrubber();
+      return;
+    }
+    if (dragging) scrubTo(e.clientX);
+  });
+  canvas.addEventListener("pointerup", async () => {
+    if (clipDrag) {
+      const range = tempClip;
+      clipDrag = null;
+      tempClip = null;
+      try {
+        await call(() => invoke("set_clip", { startMs: range[0], endMs: range[1] }));
+      } catch (err) {
+        loadNote(String(err));
+      }
+      renderClipRow();
+      return;
+    }
+    dragging = false;
+  });
   new ResizeObserver(drawScrubber).observe(canvas);
 }
 
@@ -973,13 +1187,19 @@ function updateRenderButton() {
   const ready = !!(status?.replay && status?.map);
   $("btn-render").disabled = !ready || rendering;
   if (!rendering) {
-    let readyText = "Ready to render the full run";
+    const clip = status?.clip;
+    const what = clip ? `the clip (${fmtTime(clip[1] - clip[0])})` : "the full run";
+    let readyText = `Ready to render ${what}`;
     const fps = status?.settings?.last_render_fps || 0;
     if (ready && fps > 1) {
-      const runMs = status.replay.failed ? status.replay.fail_time_ms : status.replay.length_ms;
+      const runMs = clip
+        ? clip[1] - clip[0]
+        : status.replay.failed
+          ? status.replay.fail_time_ms
+          : status.replay.length_ms;
       const frames = (runMs / 1000) * (status.settings.fps || 60);
-      const est = frames / fps + (status.settings.results_secs || 0);
-      readyText = `Ready to render the full run (~${fmtTime(est * 1000)} at last speed)`;
+      const est = frames / fps + (clip ? 0 : status.settings.results_secs || 0);
+      readyText = `Ready to render ${what} (~${fmtTime(est * 1000)} at last speed)`;
     }
     $("render-text").textContent = ready
       ? readyText
@@ -1012,12 +1232,14 @@ async function applyStatus(st) {
   renderReplayCard();
   renderGhostCard();
   renderBackgroundCard();
+  renderPresetsCard();
   renderMapCard();
   renderConfigCard();
   renderGameCard();
   renderRecent();
   renderHudTab();
   renderOutputTab();
+  renderClipRow();
   updateRenderButton();
 
   // A page (re)load during an active render must show the rendering state.
@@ -1040,10 +1262,14 @@ async function applyStatus(st) {
 
   const hasPair = !!(st.replay && st.map);
   $("scrub-row").hidden = !hasPair;
+  $("clip-row").hidden = !hasPair;
   if (hasPair && (replayChanged || mapChanged || !hadPair)) {
     currentMs = Math.min(15000, (st.replay.length_ms || 0) / 2);
     timelineData = await invoke("timeline", { samples: 600 }).catch(() => null);
     $("scrub-len").textContent = fmtTime(timelineData?.length_ms || 0);
+    // The clip suggestions come from the timeline — refresh them now
+    // that it exists (the render pass above ran before this fetch).
+    renderClipRow();
     $("scrub-time").textContent = fmtTime(currentMs);
     drawScrubber();
     schedulePreview();
@@ -1247,6 +1473,47 @@ function initControls() {
   });
   $("btn-bg-clear").addEventListener("click", () =>
     call(() => invoke("set_background", { path: null })).then(schedulePreview));
+
+  // Layout presets.
+  $("btn-preset-save").addEventListener("click", async () => {
+    const name = $("preset-name").value.trim();
+    try {
+      await call(() => invoke("save_preset", { name }));
+      $("preset-name").value = "";
+      $("preset-name").blur();
+      renderPresetsCard();
+      loadNote(`Preset saved: ${name}`);
+    } catch (e) {
+      loadNote(String(e));
+    }
+  });
+  $("preset-list").addEventListener("click", async (e) => {
+    const li = e.target.closest("li[data-preset]");
+    if (!li) return;
+    const name = li.dataset.preset;
+    try {
+      if (e.target.closest(".del")) {
+        await call(() => invoke("delete_preset", { name }));
+        renderPresetsCard();
+        loadNote(`Preset deleted: ${name}`);
+        return;
+      }
+      await call(() => invoke("apply_preset", { name }));
+      loadNote(`Preset applied: ${name}`);
+      schedulePreview();
+      refreshHudBoxes();
+    } catch (err) {
+      loadNote(String(err));
+    }
+  });
+
+  // Clip range.
+  $("btn-clip-in").addEventListener("click", () => setClipEdge(true));
+  $("btn-clip-out").addEventListener("click", () => setClipEdge(false));
+  $("btn-clip-clear").addEventListener("click", async () => {
+    await call(() => invoke("clear_clip"));
+    renderClipRow();
+  });
 
   $("recent-list").addEventListener("click", (e) => {
     const li = e.target.closest("li[data-path]");

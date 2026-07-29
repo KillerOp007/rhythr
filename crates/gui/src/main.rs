@@ -84,7 +84,18 @@ struct Settings {
     background: Option<String>,
     /// How much the custom background is darkened, 0-100 percent.
     background_dim: u32,
+    /// Zoom on the background, percent (100 = exactly covering).
+    background_zoom: u32,
+    /// Shift in percent of the frame size (positive = right/down),
+    /// clamped to the available overflow at compose time.
+    background_off_x: i32,
+    background_off_y: i32,
+    /// Video backgrounds: start (and loop) playback from this second.
+    background_start: f64,
     recent_replays: Vec<String>,
+    /// Named layout/look snapshots ("Save preset" in the app). "Before
+    /// reset" is written automatically before every layout reset.
+    presets: BTreeMap<String, LayoutPreset>,
 }
 
 impl Default for Settings {
@@ -117,9 +128,104 @@ impl Default for Settings {
             race_delta: MeterSettings { enabled: true, ..MeterSettings::at(0.5, 0.095) },
             background: None,
             background_dim: 60,
+            background_zoom: 100,
+            background_off_x: 0,
+            background_off_y: 0,
+            background_start: 0.0,
             recent_replays: Vec::new(),
+            presets: BTreeMap::new(),
         }
     }
+}
+
+/// A named layout/look snapshot: everything that defines how a render
+/// LOOKS — HUD layout, sizes and visibility, the meters, the skin config,
+/// output format and the custom background. "TikTok layout" and "YouTube
+/// layout" become one click each.
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(default)]
+struct LayoutPreset {
+    hud_overrides: BTreeMap<String, bool>,
+    hud_positions: BTreeMap<String, [f32; 2]>,
+    hud_scales: BTreeMap<String, f32>,
+    error_meter: MeterSettings,
+    aim_meter: MeterSettings,
+    race_delta: MeterSettings,
+    config_path: Option<String>,
+    width: u32,
+    height: u32,
+    background: Option<String>,
+    background_dim: u32,
+    background_zoom: u32,
+    background_off_x: i32,
+    background_off_y: i32,
+    background_start: f64,
+}
+
+impl Default for LayoutPreset {
+    fn default() -> Self {
+        let s = Settings::default();
+        LayoutPreset {
+            hud_overrides: BTreeMap::new(),
+            hud_positions: BTreeMap::new(),
+            hud_scales: BTreeMap::new(),
+            error_meter: s.error_meter,
+            aim_meter: s.aim_meter,
+            race_delta: s.race_delta,
+            config_path: None,
+            width: s.width,
+            height: s.height,
+            background: None,
+            background_dim: s.background_dim,
+            background_zoom: s.background_zoom,
+            background_off_x: s.background_off_x,
+            background_off_y: s.background_off_y,
+            background_start: s.background_start,
+        }
+    }
+}
+
+/// The current look as a preset.
+fn preset_snapshot(inner: &Inner) -> LayoutPreset {
+    let s = &inner.settings;
+    LayoutPreset {
+        hud_overrides: s.hud_overrides.clone(),
+        hud_positions: s.hud_positions.clone(),
+        hud_scales: s.hud_scales.clone(),
+        error_meter: s.error_meter,
+        aim_meter: s.aim_meter,
+        race_delta: s.race_delta,
+        config_path: inner
+            .config_path
+            .as_ref()
+            .map(|p| p.to_string_lossy().into_owned()),
+        width: s.width,
+        height: s.height,
+        background: s.background.clone(),
+        background_dim: s.background_dim,
+        background_zoom: s.background_zoom,
+        background_off_x: s.background_off_x,
+        background_off_y: s.background_off_y,
+        background_start: s.background_start,
+    }
+}
+
+/// Restores only the LAYOUT part (element positions/sizes/visibility and
+/// meters) — what Undo covers. Resolution, skin config and background
+/// stay put.
+fn apply_layout_only(settings: &mut Settings, p: &LayoutPreset) {
+    settings.hud_overrides = p.hud_overrides.clone();
+    settings.hud_positions = p.hud_positions.clone();
+    settings.hud_scales = p.hud_scales.clone();
+    settings.error_meter = p.error_meter;
+    settings.aim_meter = p.aim_meter;
+    settings.race_delta = p.race_delta;
+}
+
+/// Remembers the current layout for the one-step Undo, called before
+/// every mutating editor action.
+fn remember_layout(inner: &mut Inner) {
+    inner.layout_undo = Some(preset_snapshot(inner));
 }
 
 fn config_dir() -> PathBuf {
@@ -176,6 +282,15 @@ struct Inner {
     replay: Option<(PathBuf, Replay)>,
     map: Option<(PathBuf, Map)>,
     map_source: String,
+    /// Probed duration of the current VIDEO background (drives the
+    /// start-time slider); None for images/no background/unprobed.
+    bg_duration: Option<f64>,
+    /// Session clip range (song ms), rendered instead of the full run.
+    clip: Option<(f64, f64)>,
+    /// One-step layout undo: the layout as it was before the last
+    /// mutating editor action. Applying it swaps with the current state,
+    /// so pressing Undo twice is a redo.
+    layout_undo: Option<LayoutPreset>,
     /// True when the cached map's hash does not match the replay header.
     map_hash_mismatch: bool,
     config_path: Option<PathBuf>,
@@ -275,6 +390,10 @@ struct StatusDto {
     rendering: bool,
     /// The configured game-assets folder exists and holds an extraction.
     game_ok: bool,
+    /// Duration of the current video background, for the start slider.
+    bg_video_duration: Option<f64>,
+    /// Session clip range (start_ms, end_ms) if the user set one.
+    clip: Option<(f64, f64)>,
 }
 
 #[derive(Serialize)]
@@ -423,10 +542,26 @@ fn effective_config(inner: &Inner) -> SkinConfig {
     // Custom background: replaces the skin's background layers. Silently
     // skipped if the file vanished — set_background validated it once.
     if let Some(p) = &inner.settings.background {
-        let dim = inner.settings.background_dim.min(100) as f32 / 100.0;
-        let _ = rhythia_render::background::apply_background(&mut cfg, Path::new(p), dim);
+        let _ = rhythia_render::background::apply_background(
+            &mut cfg,
+            Path::new(p),
+            &bg_options(&inner.settings),
+        );
     }
     cfg
+}
+
+/// The user's background placement, as the render crate consumes it.
+fn bg_options(s: &Settings) -> rhythia_render::background::BackgroundOptions {
+    rhythia_render::background::BackgroundOptions {
+        dim: s.background_dim.min(100) as f32 / 100.0,
+        zoom: s.background_zoom.clamp(100, 400) as f32 / 100.0,
+        offset: [
+            s.background_off_x.clamp(-100, 100) as f32 / 100.0,
+            s.background_off_y.clamp(-100, 100) as f32 / 100.0,
+        ],
+        start_secs: s.background_start.max(0.0),
+    }
 }
 
 fn load_base_config(
@@ -686,6 +821,8 @@ fn assemble_status(inner: &Inner, rendering: bool) -> StatusDto {
         settings: inner.settings.clone(),
         rendering,
         game_ok,
+        bg_video_duration: inner.bg_duration,
+        clip: inner.clip,
     }
 }
 
@@ -1232,6 +1369,7 @@ fn set_hud_position(
 ) -> Result<StatusDto, String> {
     let app = state.inner();
     let mut inner = app.lock();
+    remember_layout(&mut inner);
     inner
         .settings
         .hud_positions
@@ -1247,6 +1385,7 @@ fn set_hud_position(
 fn set_hud_scale(state: tauri::State<'_, App>, key: String, scale: f32) -> Result<StatusDto, String> {
     let app = state.inner();
     let mut inner = app.lock();
+    remember_layout(&mut inner);
     let s = scale.clamp(0.4, 2.5);
     if (s - 1.0).abs() < 0.02 {
         inner.settings.hud_scales.remove(&key);
@@ -1321,6 +1460,7 @@ fn set_meter(
 ) -> Result<StatusDto, String> {
     let app = state.inner();
     let mut inner = app.lock();
+    remember_layout(&mut inner);
     let m = match key.as_str() {
         "error" => &mut inner.settings.error_meter,
         "aim" => &mut inner.settings.aim_meter,
@@ -1360,6 +1500,9 @@ fn set_meter(
 fn reset_hud_layout(state: tauri::State<'_, App>) -> Result<StatusDto, String> {
     let app = state.inner();
     let mut inner = app.lock();
+    let backup = preset_snapshot(&inner);
+    inner.settings.presets.insert("Before reset".into(), backup);
+    remember_layout(&mut inner);
     inner.settings.hud_positions.clear();
     inner.settings.hud_scales.clear();
     fn park(m: &mut MeterSettings, d: MeterSettings) {
@@ -1384,6 +1527,7 @@ fn set_background(state: tauri::State<'_, App>, path: Option<String>) -> Result<
     use rhythia_render::background as bg;
     let app = state.inner();
     let mut inner = app.lock();
+    let mut duration = None;
     if let Some(p) = &path {
         let pb = PathBuf::from(p);
         let kind = bg::classify_file(&pb).map_err(|e| format!("could not read background: {e}"))?;
@@ -1396,7 +1540,8 @@ fn set_background(state: tauri::State<'_, App>, path: Option<String>) -> Result<
             }
             bg::BackgroundKind::Video => {
                 let ffmpeg = resolve_ffmpeg(&inner.settings);
-                if bg::probe_duration(&ffmpeg, &pb).is_none() {
+                duration = bg::probe_duration(&ffmpeg, &pb);
+                if duration.is_none() {
                     return Err(
                         "ffmpeg could not read this file — unsupported or corrupt".into()
                     );
@@ -1404,9 +1549,155 @@ fn set_background(state: tauri::State<'_, App>, path: Option<String>) -> Result<
             }
         }
     }
+    // A different file means a different intro — the start point resets.
+    if inner.settings.background != path {
+        inner.settings.background_start = 0.0;
+    }
+    inner.bg_duration = duration;
     inner.settings.background = path;
     inner.settings.save();
     invalidate_preview(&mut inner);
+    Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
+}
+
+/// The user's zoom/shift/start placement of the custom background. All
+/// fields optional — a patch, like set_meter.
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct BackgroundTransform {
+    zoom: Option<u32>,
+    off_x: Option<i32>,
+    off_y: Option<i32>,
+    start: Option<f64>,
+}
+
+#[tauri::command]
+fn set_background_transform(
+    state: tauri::State<'_, App>,
+    patch: BackgroundTransform,
+) -> Result<StatusDto, String> {
+    let app = state.inner();
+    let mut inner = app.lock();
+    let s = &mut inner.settings;
+    if let Some(v) = patch.zoom {
+        s.background_zoom = v.clamp(100, 400);
+    }
+    if let Some(v) = patch.off_x {
+        s.background_off_x = v.clamp(-100, 100);
+    }
+    if let Some(v) = patch.off_y {
+        s.background_off_y = v.clamp(-100, 100);
+    }
+    if let Some(v) = patch.start {
+        s.background_start = v.max(0.0);
+    }
+    inner.settings.save();
+    invalidate_preview(&mut inner);
+    Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
+}
+
+#[tauri::command]
+fn save_preset(state: tauri::State<'_, App>, name: String) -> Result<StatusDto, String> {
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        return Err("give the preset a name first".into());
+    }
+    if name.len() > 48 {
+        return Err("preset name too long".into());
+    }
+    let app = state.inner();
+    let mut inner = app.lock();
+    let snap = preset_snapshot(&inner);
+    inner.settings.presets.insert(name, snap);
+    inner.settings.save();
+    Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
+}
+
+#[tauri::command]
+fn apply_preset(state: tauri::State<'_, App>, name: String) -> Result<StatusDto, String> {
+    let app = state.inner();
+    let mut inner = app.lock();
+    let Some(p) = inner.settings.presets.get(&name).cloned() else {
+        return Err(format!("no preset named {name}"));
+    };
+    remember_layout(&mut inner);
+    apply_layout_only(&mut inner.settings, &p);
+    inner.settings.width = p.width;
+    inner.settings.height = p.height;
+    inner.settings.background = p.background.clone();
+    inner.settings.background_dim = p.background_dim;
+    inner.settings.background_zoom = p.background_zoom;
+    inner.settings.background_off_x = p.background_off_x;
+    inner.settings.background_off_y = p.background_off_y;
+    inner.settings.background_start = p.background_start;
+    // Re-probe the background video's duration for the start slider.
+    inner.bg_duration = p.background.as_ref().and_then(|b| {
+        let pb = PathBuf::from(b);
+        (rhythia_render::background::classify_file(&pb).ok()
+            == Some(rhythia_render::background::BackgroundKind::Video))
+        .then(|| {
+            rhythia_render::background::probe_duration(&resolve_ffmpeg(&inner.settings), &pb)
+        })
+        .flatten()
+    });
+    // The preset's skin config — falls back to defaults when it had none
+    // or the file is gone (the rest of the preset still applies).
+    let cfg_path = p.config_path.as_ref().map(PathBuf::from);
+    match load_base_config(&cfg_path, &inner.settings.game_assets) {
+        Ok(cfg) => {
+            inner.base_config = cfg;
+            inner.config_path = cfg_path;
+            inner.settings.last_config = p.config_path.clone();
+        }
+        Err(_) => { /* keep the current config */ }
+    }
+    inner.settings.save();
+    invalidate_preview(&mut inner);
+    Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
+}
+
+#[tauri::command]
+fn delete_preset(state: tauri::State<'_, App>, name: String) -> Result<StatusDto, String> {
+    let app = state.inner();
+    let mut inner = app.lock();
+    inner.settings.presets.remove(&name);
+    inner.settings.save();
+    Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
+}
+
+/// One-step layout undo; applying it swaps with the current layout, so
+/// Undo twice is a redo.
+#[tauri::command]
+fn undo_layout(state: tauri::State<'_, App>) -> Result<StatusDto, String> {
+    let app = state.inner();
+    let mut inner = app.lock();
+    let Some(p) = inner.layout_undo.take() else {
+        return Err("nothing to undo".into());
+    };
+    inner.layout_undo = Some(preset_snapshot(&inner));
+    apply_layout_only(&mut inner.settings, &p);
+    inner.settings.save();
+    invalidate_preview(&mut inner);
+    Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
+}
+
+/// Sets the clip range (song ms) rendered instead of the full run.
+#[tauri::command]
+fn set_clip(state: tauri::State<'_, App>, start_ms: f64, end_ms: f64) -> Result<StatusDto, String> {
+    let app = state.inner();
+    let mut inner = app.lock();
+    if end_ms - start_ms < 500.0 {
+        return Err("clip is too short — give it at least half a second".into());
+    }
+    inner.clip = Some((start_ms.max(0.0), end_ms));
+    Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
+}
+
+#[tauri::command]
+fn clear_clip(state: tauri::State<'_, App>) -> Result<StatusDto, String> {
+    let app = state.inner();
+    let mut inner = app.lock();
+    inner.clip = None;
     Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
 }
 
@@ -1424,6 +1715,9 @@ fn set_background_dim(state: tauri::State<'_, App>, pct: u32) -> Result<StatusDt
 fn reset_hud_overrides(state: tauri::State<'_, App>) -> Result<StatusDto, String> {
     let app = state.inner();
     let mut inner = app.lock();
+    let backup = preset_snapshot(&inner);
+    inner.settings.presets.insert("Before reset".into(), backup);
+    remember_layout(&mut inner);
     inner.settings.hud_overrides.clear();
     inner.settings.hud_positions.clear();
     inner.settings.hud_scales.clear();
@@ -1648,6 +1942,7 @@ async fn preview(state: tauri::State<'_, App>, time_ms: f64) -> Result<String, S
                 *dur,
                 bw,
                 bh,
+                &bg_options(&inner.settings),
             ) {
                 ctx.renderer.stream_background(&ctx.skin, &frame);
             }
@@ -1773,6 +2068,16 @@ fn start_render(
         if !name.to_lowercase().ends_with(".mp4") {
             name.push_str(".mp4");
         }
+        // A clip gets its range in the name: "… (1.02-1.34).mp4" (dots,
+        // not colons — Windows path rules).
+        if let Some((cs, ce)) = inner.clip {
+            let tag = |ms: f64| {
+                let t = (ms / 1000.0).max(0.0) as u64;
+                format!("{}.{:02}", t / 60, t % 60)
+            };
+            let base = name.trim_end_matches(".mp4").to_string();
+            name = format!("{base} ({}-{}).mp4", tag(cs), tag(ce));
+        }
         let out = PathBuf::from(&dir).join(name);
         std::fs::create_dir_all(&dir).map_err(err_str)?;
         let job = RenderJob {
@@ -1799,8 +2104,12 @@ fn start_render(
                 let pb = PathBuf::from(p);
                 (rhythia_render::background::classify_file(&pb).ok()
                     == Some(rhythia_render::background::BackgroundKind::Video))
-                .then_some(pb)
+                .then(|| rhythia_render::video::BackgroundVideo {
+                    path: pb,
+                    opts: bg_options(s),
+                })
             }),
+            clip: inner.clip,
             ffmpeg: resolve_ffmpeg(s),
             out: out.clone(),
         };
@@ -1864,7 +2173,9 @@ struct RenderJob {
     ghost: Option<rhythia_render::video::GhostOptions>,
     /// Set when the custom background is a video file (images are already
     /// baked into `cfg`).
-    background_video: Option<PathBuf>,
+    background_video: Option<rhythia_render::video::BackgroundVideo>,
+    /// Session clip range (song ms); None renders the full run.
+    clip: Option<(f64, f64)>,
     ffmpeg: String,
     out: PathBuf,
 }
@@ -1905,14 +2216,20 @@ fn run_render_job(
         None
     };
 
-    let end_ms = if job.replay.failed() {
+    let run_end = if job.replay.failed() {
         f64::from(job.replay.fail_time_ms)
     } else {
         job.replay.length_ms()
     };
+    // A clip range renders just that slice; the results screen only
+    // appears when the clip reaches the end of the run (video.rs rule).
+    let (start_ms, end_ms) = match job.clip {
+        Some((s, e)) => (s.clamp(0.0, run_end), e.clamp(s, run_end)),
+        None => (0.0, run_end),
+    };
     let opts = rhythia_render::video::VideoOptions {
         fps: job.fps,
-        start_ms: 0.0,
+        start_ms,
         end_ms,
         ffmpeg: job.ffmpeg.clone(),
         audio,
@@ -2086,6 +2403,23 @@ fn main() {
         .manage(shared)
         .setup(|app| {
             let _ = RESOURCE_DIR.set(app.path().resource_dir().ok());
+            // A persisted VIDEO background needs its duration for the
+            // start-time slider — probe once, now that the bundled-ffmpeg
+            // resource dir is known.
+            let shared = app.state::<App>().inner().clone();
+            let mut inner = shared.lock();
+            if let Some(p) = inner.settings.background.clone() {
+                let pb = PathBuf::from(&p);
+                if rhythia_render::background::classify_file(&pb).ok()
+                    == Some(rhythia_render::background::BackgroundKind::Video)
+                {
+                    inner.bg_duration = rhythia_render::background::probe_duration(
+                        &resolve_ffmpeg(&inner.settings),
+                        &pb,
+                    );
+                }
+            }
+            drop(inner);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -2109,6 +2443,13 @@ fn main() {
             reset_hud_overrides,
             set_background,
             set_background_dim,
+            set_background_transform,
+            save_preset,
+            apply_preset,
+            delete_preset,
+            undo_layout,
+            set_clip,
+            clear_clip,
             reset_hud_layout,
             set_output,
             suggest_file_name,
