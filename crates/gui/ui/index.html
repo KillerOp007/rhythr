@@ -147,6 +147,7 @@
           <p class="muted">.rhr replay &nbsp;·&nbsp; .sspm / .rhm map &nbsp;·&nbsp; .rhs skin config</p>
         </div>
         <img id="preview-img" alt="" hidden />
+        <canvas id="analyze-overlay" hidden></canvas>
         <div id="preview-msg" hidden></div>
       </div>
 
@@ -155,6 +156,23 @@
         <canvas id="scrubber" height="46"></canvas>
         <span id="scrub-len" class="mono">0:00</span>
       </div>
+      <div id="play-row" hidden>
+        <button class="btn small" id="btn-play" title="Play / pause (Space)">▶</button>
+        <button class="btn small ghost" id="btn-step-back" title="One replay frame back (←)">⏴</button>
+        <button class="btn small ghost" id="btn-step-fwd" title="One replay frame forward (→)">⏵</button>
+        <select id="play-speed" title="Playback speed">
+          <option value="0.05">0.05×</option>
+          <option value="0.1">0.1×</option>
+          <option value="0.25">0.25×</option>
+          <option value="0.5">0.5×</option>
+          <option value="1" selected>1×</option>
+          <option value="2">2×</option>
+          <option value="4">4×</option>
+        </select>
+        <span id="play-time" class="mono">0:00.000</span>
+        <span class="hint" id="play-hint">Space play · ←/→ frame · Shift+←/→ 1s · click graphs to jump</span>
+      </div>
+
       <div id="clip-row" hidden>
         <button class="btn small" id="btn-clip-in" title="Clip starts at the playhead">Set start</button>
         <button class="btn small" id="btn-clip-out" title="Clip ends at the playhead">Set end</button>
@@ -180,6 +198,7 @@
       <nav id="tabs">
         <button class="tab active" data-tab="output">Output</button>
         <button class="tab" data-tab="hud">HUD</button>
+        <button class="tab" data-tab="analyze" id="tab-btn-analyze" hidden>Analyze</button>
       </nav>
 
       <div class="tab-page" id="tab-output">
@@ -260,6 +279,10 @@
         </details>
       </div>
 
+      <div class="tab-page" id="tab-analyze" hidden>
+        <div id="an-body"><p class="hint">Load a replay to analyze it.</p></div>
+      </div>
+
       <div class="tab-page" id="tab-hud" hidden>
         <div class="hud-note muted">
           Overrides sit on top of the skin config and are saved for every
@@ -278,5 +301,6 @@
   </div>
   <div id="drop-overlay" hidden><span>Drop to load</span></div>
   <script src="app.js"></script>
+  <script src="analyze.js"></script>
 </body>
 </html>

@@ -1942,10 +1942,46 @@ fn timeline(state: tauri::State<'_, App>, samples: usize) -> Result<TimelineDto,
     })
 }
 
+#[derive(Serialize, Clone)]
+struct SideProjDto {
+    /// Viewport x offset and width in preview pixels.
+    x: u32,
+    w: u32,
+    /// Column-major 4×4 view-projection matrix.
+    m: [[f32; 4]; 4],
+}
+
+#[derive(Serialize, Clone)]
+struct PreviewFrameDto {
+    img: String,
+    w: u32,
+    h: u32,
+    sides: Vec<SideProjDto>,
+}
+
 #[tauri::command]
 async fn preview(state: tauri::State<'_, App>, time_ms: f64) -> Result<String, String> {
     let app = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    tauri::async_runtime::spawn_blocking(move || render_preview_frame(&app, time_ms).map(|d| d.img))
+        .await
+        .map_err(err_str)?
+}
+
+/// Preview frame plus the per-side field projections the analyze overlay
+/// needs to map world points onto the image.
+#[tauri::command]
+async fn preview_analyze(
+    state: tauri::State<'_, App>,
+    time_ms: f64,
+) -> Result<PreviewFrameDto, String> {
+    let app = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || render_preview_frame(&app, time_ms))
+        .await
+        .map_err(err_str)?
+}
+
+fn render_preview_frame(app: &App, time_ms: f64) -> Result<PreviewFrameDto, String> {
+    {
         if app.rendering.load(Ordering::SeqCst) {
             return Err("rendering in progress".to_string());
         }
@@ -2065,10 +2101,86 @@ async fn preview(state: tauri::State<'_, App>, time_ms: f64) -> Result<String, S
             )
             .map_err(err_str)?;
         let (pw, ph) = ctx.renderer.dimensions();
-        png_data_url(&pixels, pw, ph)
+        let img = png_data_url(&pixels, pw, ph)?;
+        let sides = ctx
+            .renderer
+            .field_projections(
+                &ctx.params,
+                r,
+                ctx.ghost.as_ref().map(|g| &g.replay),
+                time_ms,
+            )
+            .into_iter()
+            .map(|((x, w), m)| SideProjDto { x, w, m })
+            .collect();
+        Ok(PreviewFrameDto { img, w: pw, h: ph, sides })
+    }
+}
+
+#[derive(Serialize, Clone)]
+struct AnalysisDto {
+    main: rhythia_render::analysis::Analysis,
+    ghost: Option<rhythia_render::analysis::Analysis>,
+    /// Cursor distance between the two runs over time (cells).
+    ghost_distance: Option<rhythia_render::analysis::Series>,
+    player: String,
+    ghost_player: Option<String>,
+    map_title: String,
+}
+
+/// Full replay analytics for the Analyze tab. Recomputed on demand — a
+/// few hundred ms even for long maps, and only requested on tab entry.
+#[tauri::command]
+async fn analysis_data(state: tauri::State<'_, App>) -> Result<AnalysisDto, String> {
+    let app = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let inner = app.lock();
+        let (_, r) = inner.replay.as_ref().ok_or("load a replay first")?;
+        let (_, m) = inner.map.as_ref().ok_or("load a map first")?;
+        // Analyze against the map as this player saw it (mirror/hardrock).
+        let (main_map, _) = rhythia_render::mods::map_for_replay(m, r);
+        let main = rhythia_render::analysis::analyze(&main_map, r);
+        let (ghost, ghost_distance, ghost_player) = match inner.ghost.as_ref() {
+            Some((_, g)) => {
+                let (gmap, _) = rhythia_render::mods::map_for_replay(m, g);
+                (
+                    Some(rhythia_render::analysis::analyze(&gmap, g)),
+                    Some(rhythia_render::analysis::cursor_distance(r, g)),
+                    Some(g.player_name.clone()),
+                )
+            }
+            None => (None, None, None),
+        };
+        Ok(AnalysisDto {
+            main,
+            ghost,
+            ghost_distance,
+            player: r.player_name.clone(),
+            ghost_player,
+            map_title: m.meta.title.clone(),
+        })
     })
     .await
     .map_err(err_str)?
+}
+
+/// Writes a text export (JSON/CSV) to a user-chosen path.
+#[tauri::command]
+fn save_text_file(path: String, contents: String) -> Result<(), String> {
+    std::fs::write(&path, contents).map_err(err_str)
+}
+
+/// Writes a canvas-rendered PNG (data URL) to a user-chosen path.
+#[tauri::command]
+fn save_data_url(path: String, data_url: String) -> Result<(), String> {
+    let b64 = data_url
+        .strip_prefix("data:image/png;base64,")
+        .ok_or("expected a PNG data URL")?;
+    use base64::Engine as _;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(b64)
+        .map_err(err_str)?;
+    std::fs::write(&path, bytes).map_err(err_str)
 }
 
 #[tauri::command]
@@ -2564,6 +2676,10 @@ fn main() {
             undo_layout,
             redo_layout,
             mark_undo,
+            preview_analyze,
+            analysis_data,
+            save_text_file,
+            save_data_url,
             set_clip,
             clear_clip,
             reset_hud_layout,

@@ -631,6 +631,34 @@ impl Renderer {
     }
 
     /// The render target's (width, height) in pixels.
+    /// Screen mapping for the analyze overlay: one entry per rendered
+    /// side — viewport (x, width in px) and the view-projection matrix at
+    /// `song_time_ms`, exactly as [`Self::submit_side`] builds the camera
+    /// (parallax and spin included). World points on the hit plane map to
+    /// pixels via `px = (ndc.x*0.5+0.5)*vp_w + vp_x`,
+    /// `py = (0.5-ndc.y*0.5)*height`.
+    pub fn field_projections(
+        &self,
+        params: &SceneParams,
+        replay: &Replay,
+        ghost: Option<&Replay>,
+        song_time_ms: f64,
+    ) -> Vec<((u32, u32), [[f32; 4]; 4])> {
+        let side = |r: &Replay, vp: (u32, u32)| {
+            let aspect = vp.1 as f32 / self.height as f32;
+            let cursor = r.cursor_at(song_time_ms);
+            let vp_m = params.view_proj(aspect, self.portrait_output(), cursor);
+            (vp, vp_m.to_cols_array_2d())
+        };
+        match ghost {
+            None => vec![side(replay, (0, self.width))],
+            Some(g) => {
+                let half = self.width / 2;
+                vec![side(replay, (0, half)), side(g, (half, half))]
+            }
+        }
+    }
+
     pub fn dimensions(&self) -> (u32, u32) {
         (self.width, self.height)
     }

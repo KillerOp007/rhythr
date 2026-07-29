@@ -1208,8 +1208,15 @@ async function runPreview() {
   previewWanted = false;
   previewBusy = true;
   try {
-    const url = await invoke("preview", { timeMs: currentMs });
     const img = $("preview-img");
+    let url;
+    if (window.rhythrAnalyze?.active()) {
+      const d = await invoke("preview_analyze", { timeMs: currentMs });
+      url = d.img;
+      window.rhythrAnalyze.onFrame(d, currentMs);
+    } else {
+      url = await invoke("preview", { timeMs: currentMs });
+    }
     img.src = url;
     img.hidden = false;
     $("dropzone").hidden = true;
@@ -1391,6 +1398,8 @@ async function applyStatus(st) {
   const hasPair = !!(st.replay && st.map);
   $("scrub-row").hidden = !hasPair;
   $("clip-row").hidden = !hasPair;
+  $("tab-btn-analyze").hidden = !hasPair;
+  window.rhythrAnalyze?.onStatus(st, { replayChanged, mapChanged });
   if (hasPair && (replayChanged || mapChanged || !hadPair)) {
     currentMs = Math.min(15000, (st.replay.length_ms || 0) / 2);
     timelineData = await invoke("timeline", { samples: 600 }).catch(() => null);
@@ -1651,9 +1660,16 @@ function initControls() {
   // Tabs.
   document.querySelectorAll(".tab").forEach((tab) => {
     tab.addEventListener("click", () => {
+      const was = document.querySelector(".tab.active")?.dataset.tab;
       document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t === tab));
       $("tab-output").hidden = tab.dataset.tab !== "output";
       $("tab-hud").hidden = tab.dataset.tab !== "hud";
+      $("tab-analyze").hidden = tab.dataset.tab !== "analyze";
+      if (tab.dataset.tab === "analyze" && was !== "analyze") {
+        window.rhythrAnalyze?.enter();
+      } else if (tab.dataset.tab !== "analyze" && was === "analyze") {
+        window.rhythrAnalyze?.leave();
+      }
     });
   });
 
