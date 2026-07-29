@@ -222,10 +222,16 @@ fn apply_layout_only(settings: &mut Settings, p: &LayoutPreset) {
     settings.race_delta = p.race_delta;
 }
 
-/// Remembers the current layout for the one-step Undo, called before
-/// every mutating editor action.
+/// Remembers the current layout on the undo stack — called before every
+/// editor action, and once per drag GESTURE (mark_undo), not per live
+/// tick. A new action invalidates the redo branch.
 fn remember_layout(inner: &mut Inner) {
-    inner.layout_undo = Some(preset_snapshot(inner));
+    let snap = preset_snapshot(inner);
+    if inner.undo_stack.len() >= 50 {
+        inner.undo_stack.remove(0);
+    }
+    inner.undo_stack.push(snap);
+    inner.redo_stack.clear();
 }
 
 fn config_dir() -> PathBuf {
@@ -287,10 +293,10 @@ struct Inner {
     bg_duration: Option<f64>,
     /// Session clip range (song ms), rendered instead of the full run.
     clip: Option<(f64, f64)>,
-    /// One-step layout undo: the layout as it was before the last
-    /// mutating editor action. Applying it swaps with the current state,
-    /// so pressing Undo twice is a redo.
-    layout_undo: Option<LayoutPreset>,
+    /// Multi-step layout history (Ctrl+Z / Ctrl+Y): snapshots taken
+    /// before each editor action/gesture.
+    undo_stack: Vec<LayoutPreset>,
+    redo_stack: Vec<LayoutPreset>,
     /// True when the cached map's hash does not match the replay header.
     map_hash_mismatch: bool,
     config_path: Option<PathBuf>,
@@ -394,6 +400,8 @@ struct StatusDto {
     bg_video_duration: Option<f64>,
     /// Session clip range (start_ms, end_ms) if the user set one.
     clip: Option<(f64, f64)>,
+    can_undo: bool,
+    can_redo: bool,
 }
 
 #[derive(Serialize)]
@@ -530,15 +538,31 @@ impl Default for MeterSettings {
     }
 }
 
+/// Applies the LAYOUT part of the settings onto a config — cheap (bools
+/// and small maps only), so the live editor can re-apply it per preview
+/// frame without rebuilding the renderer or re-uploading the skin. The
+/// hud section resets from the BASE config first: a removed override
+/// must fall back to the skin's own value.
+fn apply_hud_settings(cfg: &mut SkinConfig, base: &SkinConfig, s: &Settings) {
+    cfg.hud = base.hud.clone();
+    apply_overrides(cfg, &s.hud_overrides);
+    cfg.hud.positions = s.hud_positions.clone();
+    cfg.hud.scales = s.hud_scales.clone();
+    s.error_meter.apply(&mut cfg.hud.error_meter);
+    s.aim_meter.apply(&mut cfg.hud.aim_meter);
+    s.race_delta.apply(&mut cfg.hud.race_delta);
+    // The dim rides the background quad's instance colour — no
+    // recompose needed, so it is live too.
+    cfg.custom_bg_dim = s
+        .background
+        .as_ref()
+        .map(|_| s.background_dim.min(100) as f32 / 100.0);
+}
+
 /// The config as it renders: file config + game assets + HUD overrides.
 fn effective_config(inner: &Inner) -> SkinConfig {
     let mut cfg = inner.base_config.clone();
-    apply_overrides(&mut cfg, &inner.settings.hud_overrides);
-    cfg.hud.positions = inner.settings.hud_positions.clone();
-    cfg.hud.scales = inner.settings.hud_scales.clone();
-    inner.settings.error_meter.apply(&mut cfg.hud.error_meter);
-    inner.settings.aim_meter.apply(&mut cfg.hud.aim_meter);
-    inner.settings.race_delta.apply(&mut cfg.hud.race_delta);
+    apply_hud_settings(&mut cfg, &inner.base_config, &inner.settings);
     // Custom background: replaces the skin's background layers. Silently
     // skipped if the file vanished — set_background validated it once.
     if let Some(p) = &inner.settings.background {
@@ -823,6 +847,8 @@ fn assemble_status(inner: &Inner, rendering: bool) -> StatusDto {
         game_ok,
         bg_video_duration: inner.bg_duration,
         clip: inner.clip,
+        can_undo: !inner.undo_stack.is_empty(),
+        can_redo: !inner.redo_stack.is_empty(),
     }
 }
 
@@ -1315,6 +1341,7 @@ fn set_hud_override(
     let app = state.inner();
     let mut inner = app.lock();
     remember_layout(&mut inner);
+    let _ = &inner; // (override lands via the per-frame hud sync)
     match value {
         Some(v) => {
             inner.settings.hud_overrides.insert(key, v);
@@ -1324,7 +1351,6 @@ fn set_hud_override(
         }
     }
     inner.settings.save();
-    invalidate_preview(&mut inner);
     Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
 }
 
@@ -1370,39 +1396,40 @@ fn set_hud_position(
     key: String,
     x: f32,
     y: f32,
+    commit: Option<bool>,
 ) -> Result<StatusDto, String> {
     let app = state.inner();
     let mut inner = app.lock();
-    remember_layout(&mut inner);
     inner
         .settings
         .hud_positions
         .insert(key, [x.clamp(0.0, 1.0), y.clamp(0.0, 1.0)]);
-    inner.settings.save();
-    invalidate_preview(&mut inner);
+    if commit.unwrap_or(true) {
+        inner.settings.save();
+    }
     Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
 }
 
 /// The drag editor's corner-handle resize. A scale close to 1 removes the
 /// entry — back to the standard size, no leftover override.
 #[tauri::command]
-fn set_hud_scale(state: tauri::State<'_, App>, key: String, scale: f32) -> Result<StatusDto, String> {
+fn set_hud_scale(
+    state: tauri::State<'_, App>,
+    key: String,
+    scale: f32,
+    commit: Option<bool>,
+) -> Result<StatusDto, String> {
     let app = state.inner();
     let mut inner = app.lock();
-    let snapshot = preset_snapshot(&inner);
-    let before = inner.settings.hud_scales.get(&key).copied();
     let s = scale.clamp(0.4, 2.5);
     if (s - 1.0).abs() < 0.02 {
         inner.settings.hud_scales.remove(&key);
     } else {
-        inner.settings.hud_scales.insert(key.clone(), s);
+        inner.settings.hud_scales.insert(key, s);
     }
-    if inner.settings.hud_scales.get(&key).copied() == before {
-        return Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)));
+    if commit.unwrap_or(true) {
+        inner.settings.save();
     }
-    inner.layout_undo = Some(snapshot);
-    inner.settings.save();
-    invalidate_preview(&mut inner);
     Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
 }
 
@@ -1422,7 +1449,14 @@ struct HudBoxDto {
 async fn hud_layout(state: tauri::State<'_, App>, time_ms: f64) -> Result<Vec<HudBoxDto>, String> {
     let app = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let inner = app.lock();
+        let mut inner = app.lock();
+        {
+            let Inner { preview, settings, base_config, .. } = &mut *inner;
+            if let Some(ctx) = preview.as_mut() {
+                apply_hud_settings(&mut ctx.cfg, base_config, settings);
+            }
+        }
+        let inner = &*inner;
         let ctx = inner.preview.as_ref().ok_or("no preview yet")?;
         let (_, r) = inner.replay.as_ref().ok_or("no replay loaded")?;
         let boxes = ctx.renderer.hud_boxes(
@@ -1466,16 +1500,10 @@ fn set_meter(
     state: tauri::State<'_, App>,
     key: String,
     patch: MeterPatch,
+    commit: Option<bool>,
 ) -> Result<StatusDto, String> {
     let app = state.inner();
     let mut inner = app.lock();
-    let snapshot = preset_snapshot(&inner);
-    let before = match key.as_str() {
-        "error" => inner.settings.error_meter,
-        "aim" => inner.settings.aim_meter,
-        "race_delta" => inner.settings.race_delta,
-        _ => return Err(format!("unknown meter: {key}")),
-    };
     let m = match key.as_str() {
         "error" => &mut inner.settings.error_meter,
         "aim" => &mut inner.settings.aim_meter,
@@ -1503,18 +1531,9 @@ fn set_meter(
     if let Some(v) = patch.alpha {
         m.alpha = v.clamp(0.05, 1.0);
     }
-    let changed = match key.as_str() {
-        "error" => inner.settings.error_meter != before,
-        "aim" => inner.settings.aim_meter != before,
-        _ => inner.settings.race_delta != before,
-    };
-    if !changed {
-        // Nothing moved — keep the undo slot and skip the preview rebuild.
-        return Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)));
+    if commit.unwrap_or(true) {
+        inner.settings.save();
     }
-    inner.layout_undo = Some(snapshot);
-    inner.settings.save();
-    invalidate_preview(&mut inner);
     Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
 }
 
@@ -1540,7 +1559,6 @@ fn reset_hud_layout(state: tauri::State<'_, App>) -> Result<StatusDto, String> {
     park(&mut inner.settings.aim_meter, MeterSettings::at(0.15, 0.32));
     park(&mut inner.settings.race_delta, MeterSettings::at(0.5, 0.095));
     inner.settings.save();
-    invalidate_preview(&mut inner);
     Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
 }
 
@@ -1617,7 +1635,11 @@ fn set_background_transform(
         s.background_start = v.max(0.0);
     }
     inner.settings.save();
-    invalidate_preview(&mut inner);
+    // Video backgrounds read zoom/shift/start live at frame extraction;
+    // only an image needs its composite rebuilt.
+    if inner.bg_duration.is_none() {
+        invalidate_preview(&mut inner);
+    }
     Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
 }
 
@@ -1690,20 +1712,45 @@ fn delete_preset(state: tauri::State<'_, App>, name: String) -> Result<StatusDto
     Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
 }
 
-/// One-step layout undo; applying it swaps with the current layout, so
-/// Undo twice is a redo.
 #[tauri::command]
 fn undo_layout(state: tauri::State<'_, App>) -> Result<StatusDto, String> {
     let app = state.inner();
     let mut inner = app.lock();
-    let Some(p) = inner.layout_undo.take() else {
+    let Some(p) = inner.undo_stack.pop() else {
         return Err("nothing to undo".into());
     };
-    inner.layout_undo = Some(preset_snapshot(&inner));
+    let now = preset_snapshot(&inner);
+    inner.redo_stack.push(now);
     apply_layout_only(&mut inner.settings, &p);
     inner.settings.save();
-    invalidate_preview(&mut inner);
     Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
+}
+
+#[tauri::command]
+fn redo_layout(state: tauri::State<'_, App>) -> Result<StatusDto, String> {
+    let app = state.inner();
+    let mut inner = app.lock();
+    let Some(p) = inner.redo_stack.pop() else {
+        return Err("nothing to redo".into());
+    };
+    let now = preset_snapshot(&inner);
+    if inner.undo_stack.len() >= 50 {
+        inner.undo_stack.remove(0);
+    }
+    inner.undo_stack.push(now);
+    apply_layout_only(&mut inner.settings, &p);
+    inner.settings.save();
+    Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
+}
+
+/// One undo snapshot per drag gesture: the frontend calls this on
+/// pointer-down, then streams live positions without touching history.
+#[tauri::command]
+fn mark_undo(state: tauri::State<'_, App>) -> Result<(), String> {
+    let app = state.inner();
+    let mut inner = app.lock();
+    remember_layout(&mut inner);
+    Ok(())
 }
 
 /// Sets the clip range (song ms) rendered instead of the full run.
@@ -1732,7 +1779,6 @@ fn set_background_dim(state: tauri::State<'_, App>, pct: u32) -> Result<StatusDt
     let mut inner = app.lock();
     inner.settings.background_dim = pct.min(100);
     inner.settings.save();
-    invalidate_preview(&mut inner);
     Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
 }
 
@@ -1747,7 +1793,6 @@ fn reset_hud_overrides(state: tauri::State<'_, App>) -> Result<StatusDto, String
     inner.settings.hud_positions.clear();
     inner.settings.hud_scales.clear();
     inner.settings.save();
-    invalidate_preview(&mut inner);
     Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
 }
 
@@ -1951,6 +1996,14 @@ async fn preview(state: tauri::State<'_, App>, time_ms: f64) -> Result<String, S
                 map: main_map,
                 bg_video,
             });
+        }
+        {
+            // Live editing: the cached pipeline stays, only the cheap
+            // layout part of the config is refreshed per frame.
+            let Inner { preview, settings, base_config, .. } = &mut *inner;
+            if let Some(ctx) = preview.as_mut() {
+                apply_hud_settings(&mut ctx.cfg, base_config, settings);
+            }
         }
         let inner = &*inner;
         let ctx = inner.preview.as_ref().unwrap();
@@ -2473,6 +2526,8 @@ fn main() {
             apply_preset,
             delete_preset,
             undo_layout,
+            redo_layout,
+            mark_undo,
             set_clip,
             clear_clip,
             reset_hud_layout,

@@ -312,8 +312,8 @@ function renderBackgroundCard() {
   body.innerHTML = `
     <div class="src-meta">${esc(p.split(/[\\/]/).pop())}</div>
     <span class="chip info">background active</span>
-    ${row("bg-dim", "Dim", 0, 100, 5, s.background_dim ?? 60, `${s.background_dim ?? 60}%`)}
-    ${row("bg-zoom", "Zoom", 100, 300, 5, s.background_zoom ?? 100, `${s.background_zoom ?? 100}%`)}
+    ${row("bg-dim", "Dim", 0, 100, 1, s.background_dim ?? 60, `${s.background_dim ?? 60}%`)}
+    ${row("bg-zoom", "Zoom", 100, 300, 1, s.background_zoom ?? 100, `${s.background_zoom ?? 100}%`)}
     ${row("bg-offx", "Pos X", -50, 50, 1, s.background_off_x ?? 0, `${s.background_off_x ?? 0}%`)}
     ${row("bg-offy", "Pos Y", -50, 50, 1, s.background_off_y ?? 0, `${s.background_off_y ?? 0}%`)}
     ${dur ? row("bg-start", "Start", 0, Math.max(0.1, dur - 0.5).toFixed(1), 0.1, s.background_start ?? 0, fmtTime((s.background_start ?? 0) * 1000)) : ""}`;
@@ -330,7 +330,7 @@ function renderBackgroundCard() {
     sl.addEventListener("input", () => {
       $(`${id}-val`).textContent = fmt(sl.value);
       clearTimeout(timer);
-      timer = setTimeout(send, 140);
+      timer = setTimeout(send, 60);
     });
     sl.addEventListener("change", () => {
       clearTimeout(timer);
@@ -358,8 +358,8 @@ function meterSettings(key) {
 function meterRow(key, label, m) {
   const opts = !m.enabled ? "" : `
     <div class="meter-opts">
-      <label>Size <input type="range" data-meter="${key}" data-prop="scale" min="40" max="250" step="10" value="${Math.round(m.scale * 100)}"></label>
-      <label>Opacity <input type="range" data-meter="${key}" data-prop="alpha" min="10" max="100" step="5" value="${Math.round(m.alpha * 100)}"></label>
+      <label>Size <input type="range" data-meter="${key}" data-prop="scale" min="40" max="250" step="1" value="${Math.round(m.scale * 100)}"></label>
+      <label>Opacity <input type="range" data-meter="${key}" data-prop="alpha" min="10" max="100" step="1" value="${Math.round(m.alpha * 100)}"></label>
       <div class="sub">Move and resize it with Edit HUD on.</div>
     </div>`;
   return `
@@ -406,6 +406,7 @@ function renderHudTab() {
     const key = row.dataset.meterKey;
     const toggle = async () => {
       const cur = meterSettings(key);
+      await invoke("mark_undo").catch(() => {});
       await call(() => invoke("set_meter", { key, patch: { enabled: !cur.enabled } }));
       schedulePreview();
     };
@@ -416,20 +417,35 @@ function renderHudTab() {
   });
   wrap.querySelectorAll(".meter-opts input[type=range]").forEach((sl) => {
     let timer = null;
-    const push = async () => {
-      const patch = {};
-      patch[sl.dataset.prop] = Number(sl.value) / 100;
-      await call(() => invoke("set_meter", { key: sl.dataset.meter, patch }));
-      schedulePreview();
+    let gestured = false;
+    let chain = Promise.resolve();
+    const push = (commit) => {
+      chain = chain.then(async () => {
+        const patch = {};
+        patch[sl.dataset.prop] = Number(sl.value) / 100;
+        if (commit) {
+          await call(() => invoke("set_meter", { key: sl.dataset.meter, patch, commit: true }));
+        } else {
+          await invoke("set_meter", { key: sl.dataset.meter, patch, commit: false }).catch(() => {});
+        }
+        schedulePreview();
+      }).catch(() => {});
+      return chain;
     };
-    // Live while sliding (debounced to the preview's render pace).
+    // Live while sliding; the whole slide is one undo step, committed on
+    // release ("change").
     sl.addEventListener("input", () => {
+      if (!gestured) {
+        gestured = true;
+        chain = chain.then(() => invoke("mark_undo")).catch(() => {});
+      }
       clearTimeout(timer);
-      timer = setTimeout(push, 140);
+      timer = setTimeout(() => push(false), 60);
     });
     sl.addEventListener("change", () => {
       clearTimeout(timer);
-      push();
+      gestured = false;
+      push(true);
     });
   });
 
@@ -535,6 +551,7 @@ async function autoConnectGame() {
 
 async function pushOutput(update) {
   await call(() => invoke("set_output", { update }));
+  schedulePreview();
 }
 
 // ------------------------------------------------------------ scrubber
@@ -544,7 +561,10 @@ function drawScrubber() {
   const ctx = canvas.getContext("2d");
   const dpr = window.devicePixelRatio || 1;
   const w = canvas.clientWidth, h = canvas.clientHeight;
-  if (canvas.width !== w * dpr) { canvas.width = w * dpr; canvas.height = h * dpr; }
+  if (canvas.width !== w * dpr || canvas.height !== h * dpr) {
+    canvas.width = w * dpr;
+    canvas.height = h * dpr;
+  }
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
   if (!timelineData) return;
@@ -817,18 +837,39 @@ function initHudEdit() {
     $("btn-hud-reset").hidden = !hudEditOn;
     $("btn-hud-grid").hidden = !hudEditOn;
     $("btn-hud-undo").hidden = !hudEditOn;
+    $("btn-hud-redo").hidden = !hudEditOn;
     if (!hudEditOn) gridMenu.hidden = true;
     refreshHudBoxes();
   });
 
-  $("btn-hud-undo").addEventListener("click", async () => {
+  const doHistory = async (cmd) => {
+    if (cmd === "undo_layout" ? !status?.can_undo : !status?.can_redo) return;
+    // A focused slider would pin the HUD tab to its stale value.
+    if (document.activeElement?.type === "range") document.activeElement.blur();
     try {
-      const st = await invoke("undo_layout");
+      const st = await invoke(cmd);
       await applyStatus(st);
       schedulePreview();
       refreshHudBoxes();
     } catch (e) {
       loadNote(String(e));
+    }
+  };
+  $("btn-hud-undo").addEventListener("click", () => doHistory("undo_layout"));
+  $("btn-hud-redo").addEventListener("click", () => doHistory("redo_layout"));
+  document.addEventListener("keydown", (e) => {
+    if (!(e.ctrlKey || e.metaKey)) return;
+    const t = document.activeElement;
+    const typing = t && (t.tagName === "TEXTAREA" || t.isContentEditable
+      || (t.tagName === "INPUT" && !["range", "checkbox", "button"].includes(t.type)));
+    if (typing) return;
+    const k = e.key.toLowerCase();
+    if (k === "z" && !e.shiftKey) {
+      e.preventDefault();
+      doHistory("undo_layout");
+    } else if (k === "y" || (k === "z" && e.shiftKey)) {
+      e.preventDefault();
+      doHistory("redo_layout");
     }
   });
 
@@ -926,67 +967,14 @@ function initHudEdit() {
       origTop: parseFloat(box.style.top),
     };
   });
-  layer.addEventListener("pointermove", (e) => {
-    if (!hudDrag) return;
-    const d = hudDrag;
+  // The backend payload for the gesture's current geometry — shared by the
+  // live (uncommitted) pushes and the final commit on release.
+  const dragPayload = (d) => {
     if (d.mode === "resize") {
-      d.moved = true;
-      // Distance from the centre sets the scale; clamp like the backend.
-      const dist = Math.max(8, Math.hypot(e.clientX - d.cx, e.clientY - d.cy));
-      const total = Math.min(2.5, Math.max(0.4, d.baseScale * (dist / d.startDist)));
-      d.factor = total / d.baseScale;
-      d.total = total;
-      d.box.style.width = `${d.origW * d.factor}px`;
-      d.box.style.height = `${d.origH * d.factor}px`;
-      d.box.style.left = `${d.origLeft + (d.origW - d.origW * d.factor) / 2}px`;
-      d.box.style.top = `${d.origTop + (d.origH - d.origH * d.factor) / 2}px`;
-      return;
-    }
-    d.moved = true;
-    let nl = d.origLeft + e.clientX - d.startX;
-    let nt = d.origTop + e.clientY - d.startY;
-    if (gridStep) {
-      // Magnet-snap the element's REAL edges/centre in frame space, live.
-      const img = $("preview-img");
-      const r = img.getBoundingClientRect();
-      const wr = $("preview-wrap").getBoundingClientRect();
-      const nw = img.naturalWidth || 1;
-      const nh = img.naturalHeight || 1;
-      const cxF = ((nl + d.box.offsetWidth / 2 + wr.left - r.left) / r.width) * nw;
-      const cyF = ((nt + d.box.offsetHeight / 2 + wr.top - r.top) / r.height) * nh;
-      const bw = parseFloat(d.box.dataset.fw) || 0;
-      const bh = parseFloat(d.box.dataset.fh) || 0;
-      const [dx, dy] = snapBoxDelta(cxF - bw / 2, cyF - bh / 2, cxF + bw / 2, cyF + bh / 2, nh);
-      nl += dx * (r.width / nw);
-      nt += dy * (r.height / nh);
-    }
-    d.box.style.left = `${nl}px`;
-    d.box.style.top = `${nt}px`;
-  });
-  layer.addEventListener("pointerup", async (e) => {
-    if (!hudDrag) return;
-    const d = hudDrag;
-    hudDrag = null;
-    d.box.classList.remove("dragging");
-    if (!d.moved) {
-      flushHudRefresh();
-      return;
-    }
-    if (d.mode === "resize") {
-      try {
-        const st = d.meterKey
-          ? await invoke("set_meter", {
-              key: d.meterKey,
-              patch: { scale: d.total ?? d.baseScale },
-            })
-          : await invoke("set_hud_scale", { key: d.key, scale: d.total ?? d.baseScale });
-        await applyStatus(st);
-        schedulePreview();
-      } catch (err) {
-        showPreviewMsg(String(err));
-      }
-      flushHudRefresh();
-      return;
+      const scale = d.total ?? d.baseScale;
+      return d.meterKey
+        ? { cmd: "set_meter", args: { key: d.meterKey, patch: { scale } } }
+        : { cmd: "set_hud_scale", args: { key: d.key, scale } };
     }
     // Box centre (wrap px) → frame px → normalised to the HUD's frame,
     // which is HALF the preview in a ghost split.
@@ -1010,25 +998,97 @@ function initHudEdit() {
       fx += dx;
       fy += dy;
     }
+    if (d.meterKey) {
+      // Meter: normalise within its side (a ghost half stores its own
+      // position via ghost_x/ghost_y).
+      const off = parseFloat(d.box.dataset.sideOff) || 0;
+      const sw = parseFloat(d.box.dataset.sideW) || img.naturalWidth || 1;
+      const nx = Math.min(1, Math.max(0, (fx - off) / sw));
+      const ny = Math.min(1, Math.max(0, fy / (img.naturalHeight || 1)));
+      const patch = d.box.dataset.gk ? { ghost_x: nx, ghost_y: ny } : { x: nx, y: ny };
+      return { cmd: "set_meter", args: { key: d.meterKey, patch } };
+    }
+    const vpW = status?.ghost ? (img.naturalWidth || 1) / 2 : img.naturalWidth || 1;
+    return {
+      cmd: "set_hud_position",
+      args: { key: d.key, x: fx / vpW, y: fy / (img.naturalHeight || 1) },
+    };
+  };
+
+  // Throttled uncommitted pushes keep the preview frame tracking the box
+  // under the cursor mid-drag.
+  const livePush = (d) => {
+    const now = performance.now();
+    if (d.pushBusy || (d.lastPush && now - d.lastPush < 90)) return;
+    d.lastPush = now;
+    d.pushBusy = true;
+    const { cmd, args } = dragPayload(d);
+    d.chain = d.chain
+      .then(() => invoke(cmd, { ...args, commit: false }))
+      .then(() => schedulePreview())
+      .catch(() => {})
+      .finally(() => {
+        d.pushBusy = false;
+      });
+  };
+
+  layer.addEventListener("pointermove", (e) => {
+    if (!hudDrag) return;
+    const d = hudDrag;
+    // The undo snapshot marks the state at gesture start, once per gesture.
+    if (!d.gate) {
+      d.gate = invoke("mark_undo").catch(() => {});
+      d.chain = d.gate;
+    }
+    if (d.mode === "resize") {
+      d.moved = true;
+      // Distance from the centre sets the scale; clamp like the backend.
+      const dist = Math.max(8, Math.hypot(e.clientX - d.cx, e.clientY - d.cy));
+      const total = Math.min(2.5, Math.max(0.4, d.baseScale * (dist / d.startDist)));
+      d.factor = total / d.baseScale;
+      d.total = total;
+      d.box.style.width = `${d.origW * d.factor}px`;
+      d.box.style.height = `${d.origH * d.factor}px`;
+      d.box.style.left = `${d.origLeft + (d.origW - d.origW * d.factor) / 2}px`;
+      d.box.style.top = `${d.origTop + (d.origH - d.origH * d.factor) / 2}px`;
+      livePush(d);
+      return;
+    }
+    d.moved = true;
+    let nl = d.origLeft + e.clientX - d.startX;
+    let nt = d.origTop + e.clientY - d.startY;
+    if (gridStep) {
+      // Magnet-snap the element's REAL edges/centre in frame space, live.
+      const img = $("preview-img");
+      const r = img.getBoundingClientRect();
+      const wr = $("preview-wrap").getBoundingClientRect();
+      const nw = img.naturalWidth || 1;
+      const nh = img.naturalHeight || 1;
+      const cxF = ((nl + d.box.offsetWidth / 2 + wr.left - r.left) / r.width) * nw;
+      const cyF = ((nt + d.box.offsetHeight / 2 + wr.top - r.top) / r.height) * nh;
+      const bw = parseFloat(d.box.dataset.fw) || 0;
+      const bh = parseFloat(d.box.dataset.fh) || 0;
+      const [dx, dy] = snapBoxDelta(cxF - bw / 2, cyF - bh / 2, cxF + bw / 2, cyF + bh / 2, nh);
+      nl += dx * (r.width / nw);
+      nt += dy * (r.height / nh);
+    }
+    d.box.style.left = `${nl}px`;
+    d.box.style.top = `${nt}px`;
+    livePush(d);
+  });
+  layer.addEventListener("pointerup", async (e) => {
+    if (!hudDrag) return;
+    const d = hudDrag;
+    hudDrag = null;
+    d.box.classList.remove("dragging");
+    if (!d.moved) {
+      flushHudRefresh();
+      return;
+    }
     try {
-      let st;
-      if (d.meterKey) {
-        // Meter: normalise within its side (a ghost half stores its own
-        // position via ghost_x/ghost_y).
-        const off = parseFloat(d.box.dataset.sideOff) || 0;
-        const sw = parseFloat(d.box.dataset.sideW) || img.naturalWidth || 1;
-        const nx = Math.min(1, Math.max(0, (fx - off) / sw));
-        const ny = Math.min(1, Math.max(0, fy / (img.naturalHeight || 1)));
-        const patch = d.box.dataset.gk ? { ghost_x: nx, ghost_y: ny } : { x: nx, y: ny };
-        st = await invoke("set_meter", { key: d.meterKey, patch });
-      } else {
-        const vpW = status?.ghost ? (img.naturalWidth || 1) / 2 : img.naturalWidth || 1;
-        st = await invoke("set_hud_position", {
-          key: d.key,
-          x: fx / vpW,
-          y: fy / (img.naturalHeight || 1),
-        });
-      }
+      if (d.chain) await d.chain;
+      const { cmd, args } = dragPayload(d);
+      const st = await invoke(cmd, { ...args, commit: true });
       await applyStatus(st);
       schedulePreview();
     } catch (err) {
@@ -1120,7 +1180,7 @@ function schedulePreview() {
   if (!status?.replay || !status?.map || rendering) return;
   previewWanted = true;
   clearTimeout(previewTimer);
-  previewTimer = setTimeout(runPreview, 140);
+  previewTimer = setTimeout(runPreview, 60);
 }
 
 async function runPreview() {
@@ -1137,13 +1197,38 @@ async function runPreview() {
     $("preview-tools").hidden = false;
     $("preview-msg").hidden = true;
     // Wait for layout before measuring the img rect for the edit boxes.
-    requestAnimationFrame(() => refreshHudBoxes());
+    requestAnimationFrame(() => {
+      syncPreviewBox();
+      refreshHudBoxes();
+    });
   } catch (e) {
     showPreviewMsg(String(e));
   } finally {
     previewBusy = false;
     if (previewWanted) runPreview();
   }
+}
+
+function syncPreviewBox() {
+  const wrap = $("preview-wrap");
+  const img = $("preview-img");
+  const center = $("center");
+  if (img.hidden || !img.naturalWidth || !img.naturalHeight) {
+    wrap.style.maxHeight = "";
+    wrap.style.maxWidth = "";
+    return;
+  }
+  const ar = img.naturalWidth / img.naturalHeight;
+  const availW = center.clientWidth;
+  // Height the column can spare: everything except the other rows.
+  let others = 0;
+  for (const el of center.children) {
+    if (el !== wrap && !el.hidden) others += el.offsetHeight + 8;
+  }
+  const availH = Math.max(160, center.clientHeight - others);
+  const h = Math.min(availH, availW / ar);
+  wrap.style.maxHeight = `${Math.ceil(h) + 2}px`;
+  wrap.style.maxWidth = `${Math.ceil(h * ar) + 2}px`;
 }
 
 function showPreviewMsg(text) {
@@ -1263,6 +1348,8 @@ async function applyStatus(st) {
   renderOutputTab();
   renderClipRow();
   updateRenderButton();
+  $("btn-hud-undo").disabled = !st.can_undo;
+  $("btn-hud-redo").disabled = !st.can_redo;
 
   // A page (re)load during an active render must show the rendering state.
   if (st.rendering && !rendering) setRenderingUi(true);
@@ -1725,6 +1812,16 @@ async function initUpdater() {
 window.addEventListener("DOMContentLoaded", async () => {
   window.__TAURI__.app.getVersion().then((v) => { $("app-ver").textContent = `v${v}`; });
   $("preview-img").draggable = false;
+  // The rAF below the src swap can race the decode; the load event is the
+  // reliable moment to fit the box around the fresh frame.
+  $("preview-img").addEventListener("load", () => {
+    syncPreviewBox();
+    requestAnimationFrame(() => refreshHudBoxes());
+  });
+  new ResizeObserver(() => {
+    syncPreviewBox();
+    requestAnimationFrame(() => refreshHudBoxes());
+  }).observe($("center"));
   initControls();
   initScrubber();
   initHudEdit();
