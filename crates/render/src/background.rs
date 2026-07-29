@@ -117,6 +117,9 @@ pub struct BackgroundOptions {
     pub offset: [f32; 2],
     /// Videos: playback starts (and loops) from this point.
     pub start_secs: f64,
+    /// Videos: the FIRST pass begins this far into the loop window
+    /// (song-synced clip renders); later loops return to start_secs.
+    pub sync_offset_secs: f64,
 }
 
 impl Default for BackgroundOptions {
@@ -126,6 +129,7 @@ impl Default for BackgroundOptions {
             zoom: 1.0,
             offset: [0.0, 0.0],
             start_secs: 0.0,
+            sync_offset_secs: 0.0,
         }
     }
 }
@@ -239,7 +243,14 @@ impl VideoDecoder {
             opts.zoom,
             opts.offset,
         );
-        let (child, stdout) = Self::spawn_child(&spec)?;
+        let sync = opts.sync_offset_secs.max(0.0);
+        let (child, stdout) = if sync > 0.0 {
+            let mut first = spec.clone();
+            first.5 += sync;
+            Self::spawn_child(&first)?
+        } else {
+            Self::spawn_child(&spec)?
+        };
         Ok(VideoDecoder {
             child,
             stdout,
@@ -247,7 +258,7 @@ impl VideoDecoder {
             child_frames: 0,
             loop_buf: Vec::new(),
             loop_bytes: 0,
-            buffering: true,
+            buffering: sync <= 0.0,
             mem_loop: false,
             buf_idx: 0,
             frame: vec![0; (width * height * 4) as usize],
@@ -334,6 +345,16 @@ impl Drop for VideoDecoder {
 }
 
 /// The video's duration via ffmpeg's `-i` banner (no ffprobe shipped).
+/// Where a song-synced clip render enters the video's loop window:
+/// the clip's elapsed OUTPUT time folded into [0, duration - start).
+pub fn sync_offset(elapsed_out_secs: f64, start_secs: f64, duration: Option<f64>) -> f64 {
+    let start = start_secs.max(0.0);
+    match duration {
+        Some(d) if d - start > 0.05 => elapsed_out_secs.max(0.0) % (d - start),
+        _ => 0.0,
+    }
+}
+
 pub fn probe_duration(ffmpeg: &str, path: &Path) -> Option<f64> {
     let mut cmd = Command::new(ffmpeg);
     crate::video::hide_console_window(&mut cmd);
@@ -391,6 +412,18 @@ pub fn extract_frame(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn sync_offset_folds_into_loop_window() {
+        // 40 s video, no intro skip: 90 s into the song = 10 s into pass 3.
+        assert!((super::sync_offset(90.0, 0.0, Some(40.0)) - 10.0).abs() < 1e-9);
+        // Intro skip 5 s → 35 s window: 90 % 35 = 20.
+        assert!((super::sync_offset(90.0, 5.0, Some(40.0)) - 20.0).abs() < 1e-9);
+        // Unknown or degenerate durations never offset.
+        assert_eq!(super::sync_offset(90.0, 0.0, None), 0.0);
+        assert_eq!(super::sync_offset(90.0, 39.99, Some(40.0)), 0.0);
+        assert_eq!(super::sync_offset(-3.0, 0.0, Some(40.0)), 0.0);
+    }
+
     use super::*;
 
     #[test]

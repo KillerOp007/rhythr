@@ -316,7 +316,16 @@ function renderBackgroundCard() {
     ${row("bg-zoom", "Zoom", 100, 300, 1, s.background_zoom ?? 100, `${s.background_zoom ?? 100}%`)}
     ${row("bg-offx", "Pos X", -50, 50, 1, s.background_off_x ?? 0, `${s.background_off_x ?? 0}%`)}
     ${row("bg-offy", "Pos Y", -50, 50, 1, s.background_off_y ?? 0, `${s.background_off_y ?? 0}%`)}
-    ${dur ? row("bg-start", "Start", 0, Math.max(0.1, dur - 0.5).toFixed(1), 0.1, s.background_start ?? 0, fmtTime((s.background_start ?? 0) * 1000)) : ""}`;
+    ${dur ? row("bg-start", "Start", 0, Math.max(0.1, dur - 0.5).toFixed(1), 0.1, s.background_start ?? 0, fmtTime((s.background_start ?? 0) * 1000)) : ""}
+    ${dur ? `
+    <label class="hint" style="display:flex;align-items:center;gap:8px;margin-top:6px"
+           title="Only matters when you render a clip: should the video be at the position it would have reached since 0:00 of the song, or restart at the clip start?">
+      <span style="width:44px">Timing</span>
+      <select id="bg-sync" style="flex:1">
+        <option value="song">Follow song position</option>
+        <option value="clip">Restart at clip start</option>
+      </select>
+    </label>` : ""}`;
   // Every slider debounces into its backend patch and refreshes the
   // preview; the value label updates instantly.
   const wire = (id, fmt, push) => {
@@ -346,6 +355,16 @@ function renderBackgroundCard() {
     invoke("set_background_transform", { patch: { off_y: Number($("bg-offy").value) } }));
   wire("bg-start", (v) => fmtTime(v * 1000), () =>
     invoke("set_background_transform", { patch: { start: Number($("bg-start").value) } }));
+  const sync = $("bg-sync");
+  if (sync) {
+    sync.value = (s.background_sync_song ?? true) ? "song" : "clip";
+    sync.addEventListener("change", async () => {
+      await call(() => invoke("set_background_transform", {
+        patch: { sync_song: sync.value === "song" },
+      }));
+      schedulePreview();
+    });
+  }
 }
 
 // Settings entry for a draggable overlay extra ("error"/"aim" kept their

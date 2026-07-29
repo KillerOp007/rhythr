@@ -11,9 +11,9 @@
     "windows": [
       {
         "title": "rhythr",
-        "width": 1380,
+        "width": 1416,
         "height": 880,
-        "minWidth": 1120,
+        "minWidth": 1156,
         "minHeight": 720,
         "dragDropEnabled": true
       }

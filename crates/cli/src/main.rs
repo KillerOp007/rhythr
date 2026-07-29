@@ -159,6 +159,11 @@ enum Command {
         /// Video backgrounds: start (and loop) playback from this second.
         #[arg(long, default_value_t = 0.0)]
         background_start: f64,
+        /// Video backgrounds in clip renders (--start): "song" plays the
+        /// video as if it ran since 0:00 of the song, "clip" restarts it
+        /// at the clip start.
+        #[arg(long, default_value = "song", value_parser = ["song", "clip"])]
+        background_sync: String,
     },
 }
 
@@ -304,6 +309,7 @@ fn run() -> anyhow::Result<bool> {
             background_x,
             background_y,
             background_start,
+            background_sync,
         } => {
             let r = Replay::from_path(&replay)
                 .with_context(|| format!("reading {}", replay.display()))?;
@@ -335,6 +341,7 @@ fn run() -> anyhow::Result<bool> {
                         background_y.clamp(-100, 100) as f32 / 100.0,
                     ],
                     start_secs: background_start.max(0.0),
+                    sync_offset_secs: 0.0,
                 };
                 let kind =
                     rhythia_render::background::apply_background(&mut cfg, bg, &bg_opts)
@@ -369,6 +376,17 @@ fn run() -> anyhow::Result<bool> {
             };
             if end_ms <= start_ms {
                 anyhow::bail!("end ({end_ms} ms) must be after start ({start_ms} ms)");
+            }
+            if background_sync == "song" && start_ms > 0.0 {
+                if let Some(bv) = background_video.as_mut() {
+                    let dur = rhythia_render::background::probe_duration(&ffmpeg, &bv.path);
+                    let speed = f64::from(r.speed).clamp(0.25, 3.0);
+                    bv.opts.sync_offset_secs = rhythia_render::background::sync_offset(
+                        start_ms / 1000.0 / speed,
+                        bv.opts.start_secs,
+                        dur,
+                    );
+                }
             }
 
             // Audio: explicit flag wins; otherwise use the .rhm's embedded

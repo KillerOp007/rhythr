@@ -92,6 +92,10 @@ struct Settings {
     background_off_y: i32,
     /// Video backgrounds: start (and loop) playback from this second.
     background_start: f64,
+    /// Video backgrounds in clip renders: true = the video follows the
+    /// song position (as if it played since 0:00), false = it restarts
+    /// at the clip start.
+    background_sync_song: bool,
     recent_replays: Vec<String>,
     /// Named layout/look snapshots ("Save preset" in the app). "Before
     /// reset" is written automatically before every layout reset.
@@ -132,6 +136,7 @@ impl Default for Settings {
             background_off_x: 0,
             background_off_y: 0,
             background_start: 0.0,
+            background_sync_song: true,
             recent_replays: Vec::new(),
             presets: BTreeMap::new(),
         }
@@ -160,6 +165,12 @@ struct LayoutPreset {
     background_off_x: i32,
     background_off_y: i32,
     background_start: f64,
+    #[serde(default = "default_true")]
+    background_sync_song: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for LayoutPreset {
@@ -181,6 +192,7 @@ impl Default for LayoutPreset {
             background_off_x: s.background_off_x,
             background_off_y: s.background_off_y,
             background_start: s.background_start,
+            background_sync_song: s.background_sync_song,
         }
     }
 }
@@ -207,6 +219,7 @@ fn preset_snapshot(inner: &Inner) -> LayoutPreset {
         background_off_x: s.background_off_x,
         background_off_y: s.background_off_y,
         background_start: s.background_start,
+        background_sync_song: s.background_sync_song,
     }
 }
 
@@ -585,6 +598,7 @@ fn bg_options(s: &Settings) -> rhythia_render::background::BackgroundOptions {
             s.background_off_y.clamp(-100, 100) as f32 / 100.0,
         ],
         start_secs: s.background_start.max(0.0),
+        sync_offset_secs: 0.0,
     }
 }
 
@@ -1612,6 +1626,7 @@ struct BackgroundTransform {
     off_x: Option<i32>,
     off_y: Option<i32>,
     start: Option<f64>,
+    sync_song: Option<bool>,
 }
 
 #[tauri::command]
@@ -1633,6 +1648,9 @@ fn set_background_transform(
     }
     if let Some(v) = patch.start {
         s.background_start = v.max(0.0);
+    }
+    if let Some(v) = patch.sync_song {
+        s.background_sync_song = v;
     }
     inner.settings.save();
     // Video backgrounds read zoom/shift/start live at frame extraction;
@@ -1677,6 +1695,7 @@ fn apply_preset(state: tauri::State<'_, App>, name: String) -> Result<StatusDto,
     inner.settings.background_off_x = p.background_off_x;
     inner.settings.background_off_y = p.background_off_y;
     inner.settings.background_start = p.background_start;
+    inner.settings.background_sync_song = p.background_sync_song;
     // Re-probe the background video's duration for the start slider.
     inner.bg_duration = p.background.as_ref().and_then(|b| {
         let pb = PathBuf::from(b);
@@ -2010,8 +2029,15 @@ async fn preview(state: tauri::State<'_, App>, time_ms: f64) -> Result<String, S
         let (_, r) = inner.replay.as_ref().unwrap();
         if let Some((p, dur)) = &ctx.bg_video {
             // Match the render: the background video runs at wall-clock
-            // speed of the OUTPUT, looped over its own duration.
-            let t_out = (time_ms / 1000.0) / (r.speed as f64).clamp(0.25, 3.0);
+            // speed of the OUTPUT, looped over its own duration. In
+            // "restart at clip" mode the video's zero is the clip start.
+            let mut t_song = time_ms;
+            if !inner.settings.background_sync_song {
+                if let Some((cs, _)) = inner.clip {
+                    t_song = (time_ms - cs).max(0.0);
+                }
+            }
+            let t_out = (t_song / 1000.0) / (r.speed as f64).clamp(0.25, 3.0);
             let (bw, bh) = ctx.renderer.dimensions();
             if let Some(frame) = rhythia_render::background::extract_frame(
                 &resolve_ffmpeg(&inner.settings),
@@ -2182,9 +2208,19 @@ fn start_render(
                 let pb = PathBuf::from(p);
                 (rhythia_render::background::classify_file(&pb).ok()
                     == Some(rhythia_render::background::BackgroundKind::Video))
-                .then(|| rhythia_render::video::BackgroundVideo {
-                    path: pb,
-                    opts: bg_options(s),
+                .then(|| {
+                    let mut opts = bg_options(s);
+                    if s.background_sync_song {
+                        if let Some((cs, _)) = inner.clip {
+                            let speed = (replay.speed as f64).clamp(0.25, 3.0);
+                            opts.sync_offset_secs = rhythia_render::background::sync_offset(
+                                cs / 1000.0 / speed,
+                                opts.start_secs,
+                                inner.bg_duration,
+                            );
+                        }
+                    }
+                    rhythia_render::video::BackgroundVideo { path: pb, opts }
                 })
             }),
             clip: inner.clip,
