@@ -150,11 +150,11 @@ enum Command {
         /// Horizontal shift of the custom background in percent of the
         /// frame width (positive = right); clamped so the frame stays
         /// covered.
-        #[arg(long, default_value_t = 0)]
+        #[arg(long, default_value_t = 0, allow_negative_numbers = true)]
         background_x: i32,
         /// Vertical shift in percent of the frame height (positive =
         /// down).
-        #[arg(long, default_value_t = 0)]
+        #[arg(long, default_value_t = 0, allow_negative_numbers = true)]
         background_y: i32,
         /// Video backgrounds: start (and loop) playback from this second.
         #[arg(long, default_value_t = 0.0)]

@@ -168,6 +168,16 @@ pub struct VideoDecoder {
     /// producing any is broken (or the start point is past the end), and
     /// respawning it would loop forever.
     child_frames: u64,
+    /// First-pass frames, recorded while they fit LOOP_BUF_CAP. A loop
+    /// that fits entirely replays from memory — a 1-frame GIF must not
+    /// cost one ffmpeg spawn per loop iteration in the render hot path.
+    loop_buf: Vec<Vec<u8>>,
+    loop_bytes: usize,
+    /// Still recording the first pass into loop_buf.
+    buffering: bool,
+    /// Serving loops from loop_buf; no child process anymore.
+    mem_loop: bool,
+    buf_idx: usize,
     /// Last complete frame — only ever overwritten by a full read.
     frame: Vec<u8>,
     /// Read target; read_exact leaves it unspecified on error, so it must
@@ -235,6 +245,11 @@ impl VideoDecoder {
             stdout,
             spec,
             child_frames: 0,
+            loop_buf: Vec::new(),
+            loop_bytes: 0,
+            buffering: true,
+            mem_loop: false,
+            buf_idx: 0,
             frame: vec![0; (width * height * 4) as usize],
             scratch: vec![0; (width * height * 4) as usize],
             got_any: false,
@@ -246,19 +261,49 @@ impl VideoDecoder {
     /// respawns (looping from the start point); after a hard failure it
     /// keeps returning the last good frame (or None if decoding never
     /// produced one — the caller then leaves the background black).
+    /// Byte cap for the in-memory loop buffer (~7 frames at 1080p) —
+    /// enough for 1-frame GIFs and tiny loops, negligible for real
+    /// videos, which keep the respawn path.
+    const LOOP_BUF_CAP: usize = 64 * 1024 * 1024;
+
     pub fn next_frame(&mut self) -> Option<&[u8]> {
         use std::io::Read;
+        if self.mem_loop {
+            self.frame.copy_from_slice(&self.loop_buf[self.buf_idx]);
+            self.buf_idx = (self.buf_idx + 1) % self.loop_buf.len();
+            return Some(self.frame.as_slice());
+        }
         if !self.done {
             match self.stdout.read_exact(&mut self.scratch) {
                 Ok(()) => {
                     self.frame.copy_from_slice(&self.scratch);
                     self.got_any = true;
                     self.child_frames += 1;
+                    if self.buffering {
+                        if self.loop_bytes + self.scratch.len() <= Self::LOOP_BUF_CAP {
+                            self.loop_buf.push(self.scratch.clone());
+                            self.loop_bytes += self.scratch.len();
+                        } else {
+                            // Too big to keep — this loop respawns instead.
+                            self.buffering = false;
+                            self.loop_buf.clear();
+                            self.loop_bytes = 0;
+                        }
+                    }
                 }
                 Err(_) if self.child_frames > 0 => {
-                    // End of stream: loop by respawning at the start point.
                     let _ = self.child.kill();
                     let _ = self.child.wait();
+                    if self.buffering && !self.loop_buf.is_empty() {
+                        // The whole loop fit in memory: serve it from
+                        // there, no more child processes.
+                        self.buffering = false;
+                        self.mem_loop = true;
+                        self.frame.copy_from_slice(&self.loop_buf[0]);
+                        self.buf_idx = 1 % self.loop_buf.len();
+                        return Some(self.frame.as_slice());
+                    }
+                    // End of stream: loop by respawning at the start point.
                     self.child_frames = 0;
                     match Self::spawn_child(&self.spec) {
                         Ok((child, stdout)) => {

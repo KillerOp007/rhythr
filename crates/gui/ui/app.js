@@ -332,7 +332,10 @@ function renderBackgroundCard() {
       clearTimeout(timer);
       timer = setTimeout(send, 140);
     });
-    sl.addEventListener("change", send);
+    sl.addEventListener("change", () => {
+      clearTimeout(timer);
+      send();
+    });
   };
   wire("bg-dim", (v) => `${v}%`, () => invoke("set_background_dim", { pct: Number($("bg-dim").value) }));
   wire("bg-zoom", (v) => `${v}%`, () =>
@@ -424,7 +427,10 @@ function renderHudTab() {
       clearTimeout(timer);
       timer = setTimeout(push, 140);
     });
-    sl.addEventListener("change", push);
+    sl.addEventListener("change", () => {
+      clearTimeout(timer);
+      push();
+    });
   });
 
   wrap.querySelectorAll(".hud-row:not(.meter-toggle)").forEach((row) => {
@@ -924,6 +930,7 @@ function initHudEdit() {
     if (!hudDrag) return;
     const d = hudDrag;
     if (d.mode === "resize") {
+      d.moved = true;
       // Distance from the centre sets the scale; clamp like the backend.
       const dist = Math.max(8, Math.hypot(e.clientX - d.cx, e.clientY - d.cy));
       const total = Math.min(2.5, Math.max(0.4, d.baseScale * (dist / d.startDist)));
@@ -935,6 +942,7 @@ function initHudEdit() {
       d.box.style.top = `${d.origTop + (d.origH - d.origH * d.factor) / 2}px`;
       return;
     }
+    d.moved = true;
     let nl = d.origLeft + e.clientX - d.startX;
     let nt = d.origTop + e.clientY - d.startY;
     if (gridStep) {
@@ -960,6 +968,10 @@ function initHudEdit() {
     const d = hudDrag;
     hudDrag = null;
     d.box.classList.remove("dragging");
+    if (!d.moved) {
+      flushHudRefresh();
+      return;
+    }
     if (d.mode === "resize") {
       try {
         const st = d.meterKey
@@ -1089,6 +1101,16 @@ function initScrubber() {
     }
     dragging = false;
   });
+  // A cancelled gesture (touch pan, lost capture) must not leave a
+  // half-dragged clip handle behind.
+  const abortScrub = () => {
+    dragging = false;
+    clipDrag = null;
+    tempClip = null;
+    drawScrubber();
+  };
+  canvas.addEventListener("pointercancel", abortScrub);
+  canvas.addEventListener("lostpointercapture", abortScrub);
   new ResizeObserver(drawScrubber).observe(canvas);
 }
 
@@ -1702,6 +1724,7 @@ async function initUpdater() {
 
 window.addEventListener("DOMContentLoaded", async () => {
   window.__TAURI__.app.getVersion().then((v) => { $("app-ver").textContent = `v${v}`; });
+  $("preview-img").draggable = false;
   initControls();
   initScrubber();
   initHudEdit();

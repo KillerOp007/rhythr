@@ -487,7 +487,7 @@ fn err_str(e: impl std::fmt::Display) -> String {
 }
 
 /// Placement/looks of an optional overlay meter (normalised position).
-#[derive(Serialize, Deserialize, Clone, Copy)]
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq)]
 #[serde(default)]
 struct MeterSettings {
     enabled: bool,
@@ -975,6 +975,9 @@ fn load_replay(state: tauri::State<'_, App>, path: String) -> Result<StatusDto, 
             inner.ghost = None;
         }
     }
+    // A clip range belongs to the run it was set on — a different replay
+    // must not inherit it (a shorter run would collapse it to nothing).
+    inner.clip = None;
     inner.settings.last_replay = Some(path.clone());
     let recent = &mut inner.settings.recent_replays;
     recent.retain(|p| p != &path);
@@ -1311,6 +1314,7 @@ fn set_hud_override(
     }
     let app = state.inner();
     let mut inner = app.lock();
+    remember_layout(&mut inner);
     match value {
         Some(v) => {
             inner.settings.hud_overrides.insert(key, v);
@@ -1385,13 +1389,18 @@ fn set_hud_position(
 fn set_hud_scale(state: tauri::State<'_, App>, key: String, scale: f32) -> Result<StatusDto, String> {
     let app = state.inner();
     let mut inner = app.lock();
-    remember_layout(&mut inner);
+    let snapshot = preset_snapshot(&inner);
+    let before = inner.settings.hud_scales.get(&key).copied();
     let s = scale.clamp(0.4, 2.5);
     if (s - 1.0).abs() < 0.02 {
         inner.settings.hud_scales.remove(&key);
     } else {
-        inner.settings.hud_scales.insert(key, s);
+        inner.settings.hud_scales.insert(key.clone(), s);
     }
+    if inner.settings.hud_scales.get(&key).copied() == before {
+        return Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)));
+    }
+    inner.layout_undo = Some(snapshot);
     inner.settings.save();
     invalidate_preview(&mut inner);
     Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
@@ -1460,7 +1469,13 @@ fn set_meter(
 ) -> Result<StatusDto, String> {
     let app = state.inner();
     let mut inner = app.lock();
-    remember_layout(&mut inner);
+    let snapshot = preset_snapshot(&inner);
+    let before = match key.as_str() {
+        "error" => inner.settings.error_meter,
+        "aim" => inner.settings.aim_meter,
+        "race_delta" => inner.settings.race_delta,
+        _ => return Err(format!("unknown meter: {key}")),
+    };
     let m = match key.as_str() {
         "error" => &mut inner.settings.error_meter,
         "aim" => &mut inner.settings.aim_meter,
@@ -1488,6 +1503,16 @@ fn set_meter(
     if let Some(v) = patch.alpha {
         m.alpha = v.clamp(0.05, 1.0);
     }
+    let changed = match key.as_str() {
+        "error" => inner.settings.error_meter != before,
+        "aim" => inner.settings.aim_meter != before,
+        _ => inner.settings.race_delta != before,
+    };
+    if !changed {
+        // Nothing moved — keep the undo slot and skip the preview rebuild.
+        return Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)));
+    }
+    inner.layout_undo = Some(snapshot);
     inner.settings.save();
     invalidate_preview(&mut inner);
     Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
