@@ -654,7 +654,9 @@ impl Renderer {
             None => vec![side(replay, (0, self.width))],
             Some(g) => {
                 let half = self.width / 2;
-                vec![side(replay, (0, half)), side(g, (half, half))]
+                // Mirror submit_frame_with_ghost exactly: the right side
+                // takes the remainder on odd widths.
+                vec![side(replay, (0, half)), side(g, (half, self.width - half))]
             }
         }
     }

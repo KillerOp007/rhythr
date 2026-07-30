@@ -394,6 +394,7 @@ struct ConfigDto {
 
 #[derive(Serialize, Clone)]
 struct GhostDto {
+    path: String,
     file_name: String,
     player: String,
     same_map: bool,
@@ -821,6 +822,7 @@ fn assemble_status(inner: &Inner, rendering: bool) -> StatusDto {
         hash_mismatch: inner.map_hash_mismatch,
     });
     let ghost = inner.ghost.as_ref().map(|(path, g)| GhostDto {
+        path: path.to_string_lossy().into_owned(),
         file_name: path
             .file_name()
             .unwrap_or_default()

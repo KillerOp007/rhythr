@@ -1855,7 +1855,10 @@ window.addEventListener("DOMContentLoaded", async () => {
   });
   new ResizeObserver(() => {
     syncPreviewBox();
-    requestAnimationFrame(() => refreshHudBoxes());
+    requestAnimationFrame(() => {
+      refreshHudBoxes();
+      window.rhythrAnalyze?.onResize();
+    });
   }).observe($("center"));
   initControls();
   initScrubber();

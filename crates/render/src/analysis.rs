@@ -347,10 +347,27 @@ pub fn analyze(map: &Map, replay: &Replay) -> Analysis {
     let speed = if replay.speed > 0.0 { replay.speed as f64 } else { 1.0 };
     let kin = kinematics(replay);
 
-    // ---- judgement base (same pipeline as the HUD meters)
+    // ---- judgement base (same pipeline as the HUD meters).
+    // Attempted window: a practice run starts at start_from_ms and a
+    // failed run ends at fail_time_ms — notes outside that span were
+    // never played and must not count as misses (same rule the
+    // integrity checker pins empirically).
+    let attempt_lo = if replay.start_from_ms > 0 {
+        f64::from(replay.start_from_ms)
+    } else {
+        f64::NEG_INFINITY
+    };
+    let attempt_hi = if replay.fail_time_ms >= 0 {
+        f64::from(replay.fail_time_ms) + DEFAULT_WINDOW_MS
+    } else {
+        f64::INFINITY
+    };
     let outcome = match_hits(&map.notes, f, DEFAULT_WINDOW_MS);
     let mut notes: Vec<NoteAnalysis> = Vec::with_capacity(map.notes.len());
     for (i, note) in map.notes.iter().enumerate() {
+        if (note.time_ms as f64) < attempt_lo || (note.time_ms as f64) > attempt_hi {
+            continue;
+        }
         let r = &outcome.results[i];
         let (nx, ny) = crate::scene::grid_to_world(note.x, note.y);
         let t = note.time_ms as f64;
@@ -402,8 +419,15 @@ pub fn analyze(map: &Map, replay: &Replay) -> Analysis {
 
     // ---- cursor stats
     let total_path: f64 = kin.seg_dist.iter().sum();
-    let optimal_path: f64 = map
+    let attempted_notes: Vec<&rhythia_formats::map::Note> = map
         .notes
+        .iter()
+        .filter(|n| {
+            let t = n.time_ms as f64;
+            t >= attempt_lo && t <= attempt_hi
+        })
+        .collect();
+    let optimal_path: f64 = attempted_notes
         .windows(2)
         .map(|w| {
             let (ax, ay) = crate::scene::grid_to_world(w[0].x, w[0].y);
@@ -693,9 +717,11 @@ pub fn analyze(map: &Map, replay: &Replay) -> Analysis {
     let mut on_stream = 0u32;
     let mut other = 0u32;
     for n in &miss_notes {
-        let idx = n.i as usize;
-        let fast = idx > 0 && {
-            let p = &notes[idx - 1];
+        // Previous ATTEMPTED note by position (n.i is the map-wide index
+        // and no longer matches positions once the window filter applies).
+        let pos = notes.partition_point(|m| m.t < n.t).min(notes.len());
+        let fast = pos > 0 && {
+            let p = &notes[pos - 1];
             let (ax, ay) = crate::scene::grid_to_world(p.gx, p.gy);
             let (bx, by) = crate::scene::grid_to_world(n.gx, n.gy);
             let d = (((bx - ax) as f64).powi(2) + ((by - ay) as f64).powi(2)).sqrt();
@@ -770,8 +796,8 @@ pub fn analyze(map: &Map, replay: &Replay) -> Analysis {
         if dt <= 0.0 {
             continue;
         }
-        let u = ((fr.x + hm_extent) / (2.0 * hm_extent) * hm_size as f32) as isize;
-        let v = ((hm_extent - fr.y) / (2.0 * hm_extent) * hm_size as f32) as isize;
+        let u = ((fr.x + hm_extent) / (2.0 * hm_extent) * hm_size as f32).floor() as isize;
+        let v = ((hm_extent - fr.y) / (2.0 * hm_extent) * hm_size as f32).floor() as isize;
         if (0..hm_size as isize).contains(&u) && (0..hm_size as isize).contains(&v) {
             hm[v as usize * hm_size + u as usize] += dt;
         }
@@ -816,20 +842,27 @@ pub fn analyze(map: &Map, replay: &Replay) -> Analysis {
     let mut signals: Vec<Signal> = Vec::new();
     let report = integrity::verify_replay(replay, map);
     if !report.consistent() {
+        let practice = replay.start_from_ms > 0;
         signals.push(Signal {
             id: "integrity".into(),
-            severity: "warn".into(),
+            severity: if practice { "notice" } else { "warn" }.into(),
             title: "File integrity check failed".into(),
-            detail: "Header stats and frame data disagree — the file may be corrupted or edited."
-                .into(),
+            detail: if practice {
+                "Header stats and frame data disagree. This is a practice-mode run                  (started mid-song) — header semantics for partial runs are not fully                  pinned yet, so treat this as informational."
+            } else {
+                "Header stats and frame data disagree — the file may be corrupted or edited."
+            }
+            .into(),
             times: vec![],
         });
     }
     // Teleports: large displacement in a tiny time step.
     let mut tp_times = Vec::new();
     for (i, w) in f.windows(2).enumerate() {
-        let dt = w[1].ms - w[0].ms;
-        if dt <= 0.0 || dt > 25.0 {
+        // Frame times are song time; the recorder ticks in wall time, so
+        // the single-frame gate must be wall ms or speed mods disable it.
+        let dt_wall = (w[1].ms - w[0].ms) / speed;
+        if dt_wall <= 0.0 || dt_wall > 25.0 {
             continue;
         }
         if kin.seg_dist.get(i).copied().unwrap_or(0.0) > 1.8 {
@@ -1217,6 +1250,65 @@ mod tests {
         assert!(!s.contains("null,null"));
         // empty replay: everything finite / defaulted
         assert_eq!(a.meta.frame_count, 0);
+    }
+
+    /// A 2× speed mod stretches song-time frame deltas to ~33 ms — the
+    /// teleport gate must still fire (it compares WALL time).
+    #[test]
+    fn teleport_detected_under_speed_mod() {
+        let mut frames: Vec<Frame> =
+            (0..30).map(|i| frame(i as f64 * 33.4, 0.0, 0.0, false)).collect();
+        frames.push(frame(1002.0, 2.0, 0.0, false));
+        frames.push(frame(1035.4, 2.0, 0.0, false));
+        let mut r = test_replay(frames);
+        r.speed = 2.0;
+        let a = analyze(&test_map(vec![]), &r);
+        assert!(a.signals.iter().any(|s| s.id == "teleport"));
+    }
+
+    /// A failed run: notes after the fail point were never attempted and
+    /// must not count as misses.
+    #[test]
+    fn failed_run_ignores_post_fail_notes() {
+        let notes = vec![
+            Note { time_ms: 500, x: 1.0, y: 1.0 },
+            Note { time_ms: 1000, x: 1.0, y: 1.0 },
+            Note { time_ms: 5000, x: 1.0, y: 1.0 },
+            Note { time_ms: 6000, x: 1.0, y: 1.0 },
+        ];
+        let mut frames: Vec<Frame> =
+            (0..80).map(|i| frame(i as f64 * 16.0, 0.0, 0.0, false)).collect();
+        frames.push(frame(500.0, 0.0, 0.0, true));
+        frames.push(frame(1000.0, 0.0, 0.0, true));
+        frames.sort_by(|a, b| a.ms.total_cmp(&b.ms));
+        let mut r = replay_for(frames, 2); // 2 attempted notes
+        r.passed = false;
+        r.fail_time_ms = 1300;
+        let a = analyze(&test_map(notes), &r);
+        assert_eq!(a.meta.hits, 2);
+        assert_eq!(a.meta.misses, 0, "post-fail notes are not misses");
+        assert_eq!(a.notes.len(), 2);
+    }
+
+    /// A practice run starting mid-song must not count skipped intro
+    /// notes as misses, and a header mismatch stays a notice, not a warn.
+    #[test]
+    fn practice_run_skips_pre_start_notes() {
+        let notes = vec![
+            Note { time_ms: 500, x: 1.0, y: 1.0 },
+            Note { time_ms: 10_000, x: 1.0, y: 1.0 },
+        ];
+        let mut frames: Vec<Frame> = (0..40)
+            .map(|i| frame(9800.0 + i as f64 * 16.0, 0.0, 0.0, false))
+            .collect();
+        frames.push(frame(10_000.0, 0.0, 0.0, true));
+        frames.sort_by(|a, b| a.ms.total_cmp(&b.ms));
+        let mut r = replay_for(frames, 1);
+        r.start_from_ms = 9000;
+        let a = analyze(&test_map(notes), &r);
+        assert_eq!(a.meta.hits, 1);
+        assert_eq!(a.meta.misses, 0, "pre-start notes are not misses");
+        assert_ne!(a.verdict, "warn", "practice runs must never hard-warn on header checks");
     }
 
     #[test]

@@ -21,7 +21,7 @@
   let selNote = -1; // selected note index (main side)
   let pathWindow = 600;
   const overlays = { path: true, raw: true, markers: false, hitboxes: true, heatmap: false };
-  const play = { on: false, factor: 1, last: 0 };
+  const play = { on: false, factor: 1, last: 0, gen: 0 };
   let heatCanvases = { main: null, ghost: null };
 
   // ------------------------------------------------------------ helpers
@@ -42,6 +42,10 @@
     String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
   const runEnd = () => timelineData?.length_ms || status?.replay?.length_ms || 0;
+
+  // notes[] holds only ATTEMPTED notes; `i` is the map-wide index, so
+  // positional indexing is wrong — always resolve by id.
+  const noteById = (i) => data?.main?.notes.find((n) => n.i === i);
 
   function seek(t) {
     currentMs = Math.max(0, Math.min(t, runEnd()));
@@ -291,16 +295,22 @@
   function setPlaying(on) {
     if (on && (!entered || !data)) return;
     play.on = on;
+    play.gen++; // any in-flight pump loop belongs to an old generation now
     $("btn-play").textContent = on ? "⏸" : "▶";
     if (on) {
       if (currentMs >= runEnd() - 1) currentMs = 0;
       play.last = performance.now();
-      pump();
+      pump(play.gen);
     }
   }
 
-  async function pump() {
-    if (!play.on || !entered) return;
+  async function pump(gen) {
+    if (gen !== play.gen || !play.on || !entered) return;
+    if (rendering) {
+      // A video render owns the pipeline — pause instead of hammering it.
+      setPlaying(false);
+      return;
+    }
     const now = performance.now();
     const sp = Math.max(0.25, Math.min(3, status?.replay?.speed || 1));
     currentMs = Math.min(currentMs + (now - play.last) * play.factor * sp, runEnd());
@@ -317,11 +327,12 @@
     if (performance.now() - t0 < 8) {
       await new Promise((r) => setTimeout(r, 8));
     }
+    if (gen !== play.gen) return;
     if (currentMs >= runEnd()) {
       setPlaying(false);
       return;
     }
-    pump();
+    pump(gen);
   }
 
   function stepFrame(dir) {
@@ -329,9 +340,12 @@
     const ft = data.main.frames.t;
     if (!ft.length) return;
     let i = lastIndexLE(ft, currentMs);
-    i = Math.max(0, Math.min(ft.length - 1, i + dir));
-    // step past duplicates
-    while (i > 0 && i < ft.length - 1 && ft[i] === currentMs) i += dir;
+    // Between two frames the preview shows frame i — stepping back goes
+    // TO i first instead of skipping over it.
+    if (!(dir < 0 && i >= 0 && ft[i] < currentMs)) {
+      i += dir;
+    }
+    i = Math.max(0, Math.min(ft.length - 1, i));
     seek(ft[i]);
   }
 
@@ -524,7 +538,7 @@
 
     let html = "";
     html += `<div class="an-verdict"><span class="chip ${vcls}">${a.verdict === "clean" ? "no integrity signals" : a.verdict === "notice" ? "signals — take a look" : "strong signals"}</span>
-      <span class="hint">${data.player} · ${a.meta.hits}/${a.meta.hits + a.meta.misses} hits</span></div>`;
+      <span class="hint">${esc2(data.player)} · ${a.meta.hits}/${a.meta.hits + a.meta.misses} hits</span></div>`;
 
     html += card(
       "Overlays",
@@ -676,15 +690,6 @@
         drawOverlay(lastFrameT);
       });
     }
-    $("an-body").addEventListener("click", (e) => {
-      const j = e.target.closest("a.an-jump");
-      if (!j) return;
-      if (j.dataset.note != null) {
-        selNote = Number(j.dataset.note);
-        renderInspector();
-      }
-      seek(Number(j.dataset.t));
-    });
     for (const id of ["an-speed", "an-rollur", "an-ghostdist"]) {
       const cv = $(id);
       if (cv) seriesSeekHandler(cv);
@@ -708,10 +713,11 @@
             best = n.i;
           }
         }
-        if (best >= 0) {
+        const picked = best >= 0 ? noteById(best) : null;
+        if (picked) {
           selNote = best;
           renderInspector();
-          seek(data.main.notes[best].t);
+          seek(picked.t);
         }
       });
       sc.classList.add("an-clickable");
@@ -752,11 +758,11 @@
   function renderInspector() {
     const el = $("an-inspector");
     if (!el) return;
-    if (!data || selNote < 0 || selNote >= data.main.notes.length) {
+    const n = selNote >= 0 ? noteById(selNote) : null;
+    if (!n) {
       el.innerHTML = `<p class="hint">Click a note box in the preview (or a miss above).</p>`;
       return;
     }
-    const n = data.main.notes[selNote];
     el.innerHTML =
       kv("Note", `#${n.i + 1} @ <a class="an-jump" data-t="${n.t}">${fmtMs(n.t)}</a>`) +
       kv("Result", n.hit ? `<span class="an-ok">hit</span>` : `<span class="an-bad">miss</span>`) +
@@ -902,27 +908,38 @@
 
   // ------------------------------------------------------------ lifecycle
 
+  const sourceKey = () =>
+    `${status?.replay?.path}|${status?.ghost?.path || status?.ghost?.file_name || ""}|${status?.map?.path}`;
+
   async function ensureData() {
-    const key = `${status?.replay?.path}|${status?.ghost?.file_name || ""}|${status?.map?.path}`;
+    const key = sourceKey();
     if (data && key === dataKey) return;
     if (loading) return;
     loading = true;
     data = null;
     selNote = -1;
     renderPanels();
+    let fresh = null;
     try {
-      data = await invoke("analysis_data");
-      dataKey = key;
-      heatCanvases = {
-        main: buildHeatCanvas(data.main.heatmap, ACCENT),
-        ghost: data.ghost ? buildHeatCanvas(data.ghost.heatmap, GHOST) : null,
-      };
+      fresh = await invoke("analysis_data");
     } catch (e) {
-      $("an-body").innerHTML = `<p class="hint">Analysis failed: ${esc2(String(e))}</p>`;
       loading = false;
+      $("an-body").innerHTML = `<p class="hint">Analysis failed: ${esc2(String(e))}</p>`;
       return;
     }
     loading = false;
+    // The sources may have changed while we were computing — this result
+    // belongs to the old pair, throw it away and start over.
+    if (sourceKey() !== key) {
+      ensureData();
+      return;
+    }
+    data = fresh;
+    dataKey = key;
+    heatCanvases = {
+      main: buildHeatCanvas(data.main.heatmap, ACCENT),
+      ghost: data.ghost ? buildHeatCanvas(data.ghost.heatmap, GHOST) : null,
+    };
     renderPanels();
     drawOverlay(lastFrameT);
   }
@@ -931,6 +948,7 @@
     active: () => entered,
     enter() {
       entered = true;
+      if (typeof hudEditOn !== "undefined" && hudEditOn) $("btn-edit-hud").click();
       $("play-row").hidden = false;
       updateTimeLabel();
       ensureData();
@@ -942,8 +960,8 @@
       $("play-row").hidden = true;
       $("analyze-overlay").hidden = true;
     },
-    onStatus(st) {
-      const key = `${st?.replay?.path}|${st?.ghost?.file_name || ""}|${st?.map?.path}`;
+    onStatus() {
+      const key = sourceKey();
       if (key !== dataKey) {
         data = null;
         if (entered) {
@@ -956,9 +974,15 @@
         }
       }
     },
+    onResize() {
+      if (!entered) return;
+      drawOverlay(lastFrameT);
+      drawGraphs();
+    },
     onFrame(frameDto, t) {
       lastFrame = frameDto;
       lastFrameT = t;
+      updateTimeLabel();
       // wait for the img to actually show the new frame before measuring
       requestAnimationFrame(() => {
         drawOverlay(t);
@@ -970,6 +994,15 @@
   // ------------------------------------------------------------ input
 
   document.addEventListener("DOMContentLoaded", () => {
+    $("an-body").addEventListener("click", (e) => {
+      const j = e.target.closest("a.an-jump");
+      if (!j) return;
+      if (j.dataset.note != null) {
+        selNote = Number(j.dataset.note);
+        renderInspector();
+      }
+      seek(Number(j.dataset.t));
+    });
     $("btn-play").addEventListener("click", () => setPlaying(!play.on));
     $("btn-step-back").addEventListener("click", () => stepFrame(-1));
     $("btn-step-fwd").addEventListener("click", () => stepFrame(1));
@@ -981,11 +1014,7 @@
       if (!entered || e.ctrlKey || e.metaKey || e.altKey) return;
       const t = document.activeElement;
       const typing =
-        t &&
-        (t.tagName === "TEXTAREA" ||
-          t.isContentEditable ||
-          (t.tagName === "INPUT" && !["range", "checkbox", "button"].includes(t.type)) ||
-          t.tagName === "SELECT");
+        t && (t.tagName === "TEXTAREA" || t.isContentEditable || t.tagName === "INPUT" || t.tagName === "SELECT");
       if (typing) return;
       if (e.code === "Space") {
         e.preventDefault();
