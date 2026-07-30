@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>rhythr — Analyze</title>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="analyze.css" />
+</head>
+<body class="an-window">
+  <div id="stage">
+    <img id="an-img" alt="" />
+    <canvas id="an-overlay"></canvas>
+    <div id="an-msg" hidden></div>
+
+    <div id="an-topbar">
+      <span id="an-title" class="mono"></span>
+      <span id="an-chip" class="chip info" hidden></span>
+      <button class="an-icon" id="an-gear" title="Options (O)" aria-label="Options">
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+          <path fill="currentColor" d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8Zm0 6.2a2.2 2.2 0 1 1 0-4.4 2.2 2.2 0 0 1 0 4.4Z"/>
+          <path fill="currentColor" d="m20.3 13.1.1-1.1-.1-1.1 1.7-1.3-1.7-3-2 .7q-.9-.7-1.9-1.1L16 4h-3.9l-.4 2.2q-1 .4-1.9 1.1l-2-.7-1.7 3 1.7 1.3-.1 1.1.1 1.1-1.7 1.3 1.7 3 2-.7q.9.7 1.9 1.1l.4 2.2H16l.4-2.2q1-.4 1.9-1.1l2 .7 1.7-3-1.7-1.3Z" opacity=".45"/>
+        </svg>
+      </button>
+    </div>
+
+    <div id="an-playbar">
+      <button class="btn small" id="an-play" title="Play / pause (Space)">▶</button>
+      <button class="btn small ghost" id="an-back" title="One frame back (←)">⏴</button>
+      <button class="btn small ghost" id="an-fwd" title="One frame forward (→)">⏵</button>
+      <span class="an-speedbox">
+        <input type="range" id="an-speed" min="1" max="400" step="1" value="100" title="Playback speed">
+        <input type="number" id="an-speed-num" min="0.01" max="4" step="0.01" value="1">
+        <span class="an-x">×</span>
+        <button class="btn small ghost" id="an-speed-reset" title="Back to 1×">1×</button>
+      </span>
+      <span id="an-time" class="mono">0:00.000</span>
+      <canvas id="an-scrub"></canvas>
+      <span id="an-total" class="mono">0:00</span>
+    </div>
+  </div>
+
+  <aside id="an-options" hidden>
+    <div class="an-opt-head">
+      <nav id="an-secnav"></nav>
+      <button class="an-icon" id="an-close" title="Hide options (O / Esc)" aria-label="Hide options">✕</button>
+    </div>
+    <div id="an-secbody"></div>
+  </aside>
+
+  <script src="analyze-window.js"></script>
+</body>
+</html>

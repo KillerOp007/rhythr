@@ -306,6 +306,9 @@ struct Inner {
     bg_duration: Option<f64>,
     /// Session clip range (song ms), rendered instead of the full run.
     clip: Option<(f64, f64)>,
+    /// Height the live preview renders at; the Analyze window raises it
+    /// so a full-screen replay stays sharp.
+    preview_height: u32,
     /// Multi-step layout history (Ctrl+Z / Ctrl+Y): snapshots taken
     /// before each editor action/gesture.
     undo_stack: Vec<LayoutPreset>,
@@ -414,6 +417,8 @@ struct StatusDto {
     bg_video_duration: Option<f64>,
     /// Session clip range (start_ms, end_ms) if the user set one.
     clip: Option<(f64, f64)>,
+    /// Height the live preview renders at (Analyze can raise it).
+    preview_height: u32,
     can_undo: bool,
     can_redo: bool,
 }
@@ -863,6 +868,7 @@ fn assemble_status(inner: &Inner, rendering: bool) -> StatusDto {
         game_ok,
         bg_video_duration: inner.bg_duration,
         clip: inner.clip,
+        preview_height: if inner.preview_height >= 240 { inner.preview_height } else { PREVIEW_H },
         can_undo: !inner.undo_stack.is_empty(),
         can_redo: !inner.redo_stack.is_empty(),
     }
@@ -983,8 +989,14 @@ fn get_status(state: tauri::State<'_, App>) -> StatusDto {
     assemble_status(&inner, app.rendering.load(Ordering::SeqCst))
 }
 
+/// Nudges the Analyze window after a source change so it reloads without
+/// waiting for its poll.
+fn notify_sources_changed(app_handle: &tauri::AppHandle) {
+    let _ = app_handle.emit("sources-changed", ());
+}
+
 #[tauri::command]
-fn load_replay(state: tauri::State<'_, App>, path: String) -> Result<StatusDto, String> {
+fn load_replay(state: tauri::State<'_, App>, path: String, app_handle: tauri::AppHandle) -> Result<StatusDto, String> {
     let app = state.inner();
     let replay = Replay::from_path(&path).map_err(err_str)?;
     let mut inner = app.lock();
@@ -1029,11 +1041,12 @@ fn load_replay(state: tauri::State<'_, App>, path: String) -> Result<StatusDto, 
     inner.replay = Some((PathBuf::from(path), replay));
     normalize_time_bases(&mut inner);
     invalidate_preview(&mut inner);
+    notify_sources_changed(&app_handle);
     Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
 }
 
 #[tauri::command]
-fn load_map(state: tauri::State<'_, App>, path: String) -> Result<StatusDto, String> {
+fn load_map(state: tauri::State<'_, App>, path: String, app_handle: tauri::AppHandle) -> Result<StatusDto, String> {
     let app = state.inner();
     let map = Map::from_path(&path).map_err(err_str)?;
     let mut inner = app.lock();
@@ -1042,6 +1055,7 @@ fn load_map(state: tauri::State<'_, App>, path: String) -> Result<StatusDto, Str
     inner.map_hash_mismatch = false;
     normalize_time_bases(&mut inner);
     invalidate_preview(&mut inner);
+    notify_sources_changed(&app_handle);
     Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
 }
 
@@ -1371,7 +1385,7 @@ fn set_hud_override(
 }
 
 #[tauri::command]
-fn load_ghost(state: tauri::State<'_, App>, path: String) -> Result<StatusDto, String> {
+fn load_ghost(state: tauri::State<'_, App>, path: String, app_handle: tauri::AppHandle) -> Result<StatusDto, String> {
     let app = state.inner();
     let ghost = Replay::from_path(&path).map_err(err_str)?;
     let mut inner = app.lock();
@@ -1391,15 +1405,17 @@ fn load_ghost(state: tauri::State<'_, App>, path: String) -> Result<StatusDto, S
     inner.ghost = Some((PathBuf::from(path), ghost));
     normalize_time_bases(&mut inner);
     invalidate_preview(&mut inner);
+    notify_sources_changed(&app_handle);
     Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
 }
 
 #[tauri::command]
-fn clear_ghost(state: tauri::State<'_, App>) -> Result<StatusDto, String> {
+fn clear_ghost(state: tauri::State<'_, App>, app_handle: tauri::AppHandle) -> Result<StatusDto, String> {
     let app = state.inner();
     let mut inner = app.lock();
     inner.ghost = None;
     invalidate_preview(&mut inner);
+    notify_sources_changed(&app_handle);
     Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
 }
 
@@ -1945,12 +1961,27 @@ fn timeline(state: tauri::State<'_, App>, samples: usize) -> Result<TimelineDto,
 }
 
 #[derive(Serialize, Clone)]
+struct NoteQuadDto {
+    /// Index into this side's note list.
+    i: u32,
+    /// Four screen-space corners in preview pixels (TL, TR, BR, BL).
+    pts: [[f32; 2]; 4],
+    /// Approach depth — 0 at the hit plane.
+    depth: f32,
+}
+
+#[derive(Serialize, Clone)]
 struct SideProjDto {
     /// Viewport x offset and width in preview pixels.
     x: u32,
     w: u32,
     /// Column-major 4×4 view-projection matrix.
     m: [[f32; 4]; 4],
+    /// Notes on screen right now, exactly as the renderer draws them —
+    /// the overlay traces these instead of guessing a grid cell.
+    notes: Vec<NoteQuadDto>,
+    /// Playfield border quad; overlays clip to it.
+    field: [[f32; 2]; 4],
 }
 
 #[derive(Serialize, Clone)]
@@ -1995,10 +2026,12 @@ fn render_preview_frame(app: &App, time_ms: f64) -> Result<PreviewFrameDto, Stri
             let cfg = effective_config(&inner);
             // The preview mirrors the OUTPUT's orientation: editing a
             // vertical (Shorts) render needs a vertical live preview.
+            // (0 only if a future Default sneaks past the initializer)
+            let base_h = if inner.preview_height >= 240 { inner.preview_height } else { PREVIEW_H };
             let (pw, ph) = if inner.settings.height > inner.settings.width {
-                (PREVIEW_H * inner.settings.width / inner.settings.height, PREVIEW_H)
+                (base_h * inner.settings.width / inner.settings.height, base_h)
             } else {
-                (PREVIEW_W, PREVIEW_H)
+                (base_h * PREVIEW_W / PREVIEW_H, base_h)
             };
             let renderer = rhythia_render::Renderer::new(pw.max(64), ph, cfg.hud_font.as_deref())
                 .map_err(err_str)?;
@@ -2113,7 +2146,27 @@ fn render_preview_frame(app: &App, time_ms: f64) -> Result<PreviewFrameDto, Stri
                 time_ms,
             )
             .into_iter()
-            .map(|((x, w), m)| SideProjDto { x, w, m })
+            .enumerate()
+            .map(|(i, ((x, w), m))| {
+                // Each side draws its own map with its own params (a ghost
+                // may play mirrored or on a wider hardrock grid).
+                let (params, map, replay) = match (i, ctx.ghost.as_ref()) {
+                    (1, Some(g)) => {
+                        let mut p = ctx.params;
+                        p.grid_scale = g.grid_scale;
+                        (p, &g.map, &g.replay)
+                    }
+                    _ => (ctx.params, &ctx.map, r),
+                };
+                let notes = ctx
+                    .renderer
+                    .note_screen_quads(&params, map, replay, time_ms, (x, w))
+                    .into_iter()
+                    .map(|(i, pts, depth)| NoteQuadDto { i: i as u32, pts, depth })
+                    .collect();
+                let field = ctx.renderer.playfield_quad(&params, replay, time_ms, (x, w));
+                SideProjDto { x, w, m, notes, field }
+            })
             .collect();
         Ok(PreviewFrameDto { img, w: pw, h: ph, sides })
     }
@@ -2164,6 +2217,53 @@ async fn analysis_data(state: tauri::State<'_, App>) -> Result<AnalysisDto, Stri
     })
     .await
     .map_err(err_str)?
+}
+
+/// Render size of the live preview. The Analyze window raises this so a
+/// full-screen replay stays sharp; closing it drops back to the default.
+#[tauri::command]
+fn set_preview_quality(state: tauri::State<'_, App>, height: u32) -> Result<StatusDto, String> {
+    let app = state.inner();
+    let mut inner = app.lock();
+    let h = height.clamp(480, 2160);
+    if inner.preview_height != h {
+        inner.preview_height = h;
+        invalidate_preview(&mut inner);
+    }
+    Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
+}
+
+/// Opens (or focuses) the Analyze window — a second webview showing the
+/// replay full size with its own controls.
+#[tauri::command]
+fn open_analyze_window(app_handle: tauri::AppHandle) -> Result<(), String> {
+    use tauri::{WebviewUrl, WebviewWindowBuilder};
+    if let Some(w) = app_handle.get_webview_window("analyze") {
+        let _ = w.unminimize();
+        let _ = w.show();
+        let _ = w.set_focus();
+        return Ok(());
+    }
+    let win = WebviewWindowBuilder::new(&app_handle, "analyze", WebviewUrl::App("analyze.html".into()))
+        .title("rhythr — Analyze")
+        .inner_size(1280.0, 800.0)
+        .min_inner_size(760.0, 520.0)
+        .build()
+        .map_err(err_str)?;
+    // Closing it drops the preview back to its normal size.
+    let handle = app_handle.clone();
+    win.on_window_event(move |e| {
+        if matches!(e, tauri::WindowEvent::Destroyed) {
+            if let Some(app) = handle.try_state::<App>() {
+                let mut inner = app.lock();
+                if inner.preview_height != PREVIEW_H {
+                    inner.preview_height = PREVIEW_H;
+                    invalidate_preview(&mut inner);
+                }
+            }
+        }
+    });
+    Ok(())
 }
 
 /// Writes a text export (JSON/CSV) to a user-chosen path.
@@ -2572,6 +2672,7 @@ fn main() {
     let shared: App = Arc::new(Shared {
         inner: Mutex::new(Inner {
             settings: Settings::load(),
+            preview_height: PREVIEW_H,
             ..Inner::default()
         }),
         cancel: AtomicBool::new(false),
@@ -2682,6 +2783,8 @@ fn main() {
             analysis_data,
             save_text_file,
             save_data_url,
+            set_preview_quality,
+            open_analyze_window,
             set_clip,
             clear_clip,
             reset_hud_layout,

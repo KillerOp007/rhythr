@@ -631,6 +631,93 @@ impl Renderer {
     }
 
     /// The render target's (width, height) in pixels.
+    /// The notes visible at `song_time_ms`, as screen-space quads in the
+    /// given viewport — the exact geometry the renderer draws (approach
+    /// depth, note radius, camera), so an overlay can trace the note (and
+    /// therefore its hit area) instead of guessing a fixed grid cell.
+    /// Returns `(note index, four corners in px, depth)`, far notes first.
+    pub fn note_screen_quads(
+        &self,
+        params: &SceneParams,
+        map: &Map,
+        replay: &Replay,
+        song_time_ms: f64,
+        viewport: (u32, u32),
+    ) -> Vec<(usize, [[f32; 2]; 4], f32)> {
+        let (vp_x, vp_w) = viewport;
+        let aspect = vp_w as f32 / self.height as f32;
+        let cursor = replay.cursor_at(song_time_ms);
+        let vp = params.view_proj(aspect, self.portrait_output(), cursor);
+        let project = |p: glam::Vec4| -> Option<[f32; 2]> {
+            let c = vp * p;
+            if c.w <= 1e-6 {
+                return None;
+            }
+            let ndc = c.truncate() / c.w;
+            Some([
+                (ndc.x * 0.5 + 0.5) * vp_w as f32 + vp_x as f32,
+                (0.5 - ndc.y * 0.5) * self.height as f32,
+            ])
+        };
+        let mut out = Vec::new();
+        for (i, n) in map.notes.iter().enumerate() {
+            let Some(depth) = params.note_depth(n.time_ms as f64, song_time_ms) else {
+                continue;
+            };
+            let m = params.note_model(n.x, n.y, depth);
+            let corners = [
+                glam::Vec4::new(-1.0, 1.0, 0.0, 1.0),
+                glam::Vec4::new(1.0, 1.0, 0.0, 1.0),
+                glam::Vec4::new(1.0, -1.0, 0.0, 1.0),
+                glam::Vec4::new(-1.0, -1.0, 0.0, 1.0),
+            ];
+            let mut pts = [[0.0f32; 2]; 4];
+            let mut ok = true;
+            for (k, c) in corners.iter().enumerate() {
+                match project(m * *c) {
+                    Some(p) => pts[k] = p,
+                    None => {
+                        ok = false;
+                        break;
+                    }
+                }
+            }
+            if ok {
+                out.push((i, pts, depth));
+            }
+        }
+        // Far notes first so a nearer note draws over them.
+        out.sort_by(|a, b| b.2.total_cmp(&a.2));
+        out
+    }
+
+    /// The playfield border as a screen-space quad — overlays clip to it
+    /// so nothing spills outside the field.
+    pub fn playfield_quad(
+        &self,
+        params: &SceneParams,
+        replay: &Replay,
+        song_time_ms: f64,
+        viewport: (u32, u32),
+    ) -> [[f32; 2]; 4] {
+        let (vp_x, vp_w) = viewport;
+        let aspect = vp_w as f32 / self.height as f32;
+        let cursor = replay.cursor_at(song_time_ms);
+        let vp = params.view_proj(aspect, self.portrait_output(), cursor);
+        let h = params.playfield_half();
+        let mut pts = [[0.0f32; 2]; 4];
+        for (k, (x, y)) in [(-h, h), (h, h), (h, -h), (-h, -h)].iter().enumerate() {
+            let c = vp * glam::Vec4::new(*x, *y, 0.0, 1.0);
+            let w = if c.w.abs() < 1e-6 { 1e-6 } else { c.w };
+            let ndc = c.truncate() / w;
+            pts[k] = [
+                (ndc.x * 0.5 + 0.5) * vp_w as f32 + vp_x as f32,
+                (0.5 - ndc.y * 0.5) * self.height as f32,
+            ];
+        }
+        pts
+    }
+
     /// Screen mapping for the analyze overlay: one entry per rendered
     /// side — viewport (x, width in px) and the view-projection matrix at
     /// `song_time_ms`, exactly as [`Self::submit_side`] builds the camera
