@@ -38,6 +38,9 @@ fn main() {
     println!("cargo:rerun-if-changed=ui");
     let src = Path::new("ui");
     let dist = Path::new("ui-dist");
+    // Start clean: a file deleted from ui/ must not keep shipping inside
+    // the exe from an earlier build.
+    let _ = fs::remove_dir_all(dist);
     fs::create_dir_all(dist).expect("create ui-dist");
     for entry in fs::read_dir(src).expect("read ui/") {
         let entry = entry.expect("dir entry");

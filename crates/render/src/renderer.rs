@@ -643,6 +643,10 @@ impl Renderer {
         replay: &Replay,
         song_time_ms: f64,
         viewport: (u32, u32),
+        // With PushBack the render keeps a MISSED note flying toward the
+        // camera past the hit plane — those quads must exist too, or the
+        // overlay loses exactly the notes an analysis cares about.
+        push_back: Option<&crate::hud::HudState>,
     ) -> Vec<(usize, [[f32; 2]; 4], f32)> {
         let (vp_x, vp_w) = viewport;
         let aspect = vp_w as f32 / self.height as f32;
@@ -659,10 +663,23 @@ impl Renderer {
                 (0.5 - ndc.y * 0.5) * self.height as f32,
             ])
         };
+        let results = push_back.map(|st| st.results());
         let mut out = Vec::new();
         for (i, n) in map.notes.iter().enumerate() {
-            let Some(depth) = params.note_depth(n.time_ms as f64, song_time_ms) else {
-                continue;
+            let note_t = n.time_ms as f64;
+            let depth = match params.note_depth(note_t, song_time_ms) {
+                Some(d) => d,
+                None => {
+                    // Mirror submit_side's push-back branch exactly: a
+                    // MISSED note keeps drifting 2.5 units past the plane.
+                    let behind = ((note_t - song_time_ms) / 1000.0) as f32 * params.approach_rate;
+                    let missed = results.map(|h| !h[i].hit).unwrap_or(false);
+                    if missed && (-2.5..0.0).contains(&behind) {
+                        behind
+                    } else {
+                        continue;
+                    }
+                }
             };
             let m = params.note_model(n.x, n.y, depth);
             let corners = [

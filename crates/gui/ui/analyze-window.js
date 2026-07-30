@@ -43,6 +43,8 @@ let previewTimer = null;
 const play = { on: false, factor: 1, last: 0, gen: 0 };
 let heatCanvases = { main: null, ghost: null };
 let hideChromeTimer = null;
+// Set by render events; status polling alone lags a whole render behind.
+let renderBusy = false;
 
 // ------------------------------------------------------------ helpers
 
@@ -109,7 +111,7 @@ async function runPreview() {
     updateTime();
     requestAnimationFrame(() => {
       drawOverlay();
-      drawSection();
+      refreshLive();
     });
   } catch (e) {
     msg(String(e));
@@ -207,35 +209,60 @@ function drawOverlay() {
     const color = si === 0 ? ACCENT : GHOST;
     if (!a) return;
 
+    // Two clips: the side's viewport (split halves must never bleed into
+    // each other) and, for the field-bound layers, the playfield border.
+    const clipSide = () => {
+      ctx.beginPath();
+      ctx.rect(side.x, 0, side.w, lastFrame.h);
+      ctx.clip();
+    };
     ctx.save();
-    // Everything stays inside the playfield — the field quad is the clip.
+    clipSide();
     pathFrom(ctx, side.field);
     ctx.clip();
 
     if (opt.heatmap) {
       const hc = heatCanvases[si === 0 ? "main" : "ghost"];
       if (hc) {
+        // Projection is perspective (and rotates under SpinCamera), so a
+        // single affine would skew the map. Tile it: each cell gets its
+        // own transform from its own projected corners.
         const e = a.heatmap.extent;
-        const tl = projectPx(side, -e, e);
-        const tr = projectPx(side, e, e);
-        const bl = projectPx(side, -e, -e);
-        if (tl && tr && bl) {
-          ctx.save();
-          ctx.transform(
-            (tr[0] - tl[0]) / hc.width,
-            (tr[1] - tl[1]) / hc.width,
-            (bl[0] - tl[0]) / hc.height,
-            (bl[1] - tl[1]) / hc.height,
-            tl[0],
-            tl[1],
-          );
-          ctx.drawImage(hc, 0, 0);
-          ctx.restore();
+        const N = 8;
+        const step = (2 * e) / N;
+        const sw = hc.width / N;
+        const sh = hc.height / N;
+        for (let gy = 0; gy < N; gy++) {
+          for (let gx = 0; gx < N; gx++) {
+            const x0 = -e + gx * step;
+            const y1 = e - gy * step;
+            const tl = projectPx(side, x0, y1);
+            const tr = projectPx(side, x0 + step, y1);
+            const bl = projectPx(side, x0, y1 - step);
+            if (!tl || !tr || !bl) continue;
+            ctx.save();
+            ctx.transform(
+              (tr[0] - tl[0]) / sw,
+              (tr[1] - tl[1]) / sw,
+              (bl[0] - tl[0]) / sh,
+              (bl[1] - tl[1]) / sh,
+              tl[0],
+              tl[1],
+            );
+            // Half-pixel overlap hides seams between the tiles.
+            ctx.drawImage(hc, gx * sw, gy * sh, sw, sh, 0, 0, sw + 0.5, sh + 0.5);
+            ctx.restore();
+          }
         }
       }
     }
 
     if (opt.hitboxes) {
+      // Notes may poke past the border (the render draws them un-clipped),
+      // so their boxes only obey the viewport clip.
+      ctx.restore();
+      ctx.save();
+      clipSide();
       // The backend hands us the note quads exactly as the renderer draws
       // them, so the box sits on the approaching note and shrinks with it.
       for (const q of side.notes) {
@@ -253,6 +280,11 @@ function drawOverlay() {
           ctx.fill();
         }
       }
+      ctx.restore();
+      ctx.save();
+      clipSide();
+      pathFrom(ctx, side.field);
+      ctx.clip();
     }
 
     const ft = a.frames.t;
@@ -393,7 +425,7 @@ function setPlaying(on) {
 
 async function pump(gen) {
   if (gen !== play.gen || !play.on) return;
-  if (status?.rendering) {
+  if (renderBusy || status?.rendering) {
     setPlaying(false);
     msg("Paused — a video render is using the renderer.");
     return;
@@ -470,6 +502,7 @@ function drawSection() {
     body.innerHTML = `<p class="hint">${loading ? "Analyzing replay…" : "Load a replay in the main window."}</p>`;
     return;
   }
+  if (opt.section === "ghost" && !data.ghost) opt.section = "overlays";
   const a = data.main;
   let html = "";
 
@@ -501,7 +534,7 @@ function drawSection() {
     const i = Math.max(0, lastIndexLE(t, currentMs));
     html += card(
       "Speed",
-      kv("Now", t.length ? `${fmt1(a.speed_series.v[i])} cells/s` : "–") +
+      kv("Now", `<span id="an-live-speed">${t.length ? `${fmt1(a.speed_series.v[i])} cells/s` : "–"}</span>`) +
         kv("Average / p95", `${fmt1(c.avg_speed)} / ${fmt1(c.p95_speed)} cells/s`) +
         kv("Max", `<a class="an-jump" data-t="${c.max_speed.t}">${fmt1(c.max_speed.v)} @ ${fmtMs(c.max_speed.t)}</a>`) +
         kv("Max accel", `<a class="an-jump" data-t="${c.max_accel.t}">${fmt1(c.max_accel.v)} cells/s²</a>`) +
@@ -660,6 +693,43 @@ function drawSection() {
   wireSection();
 }
 
+/// Per-frame update of the drawer: canvases and live readouts only —
+/// rebuilding the DOM here would swallow clicks and abort slider drags.
+function refreshLive() {
+  if ($("an-options").hidden || !data) return;
+  redrawGraphs();
+  const live = $("an-live-speed");
+  if (live) {
+    const t = data.main.speed_series.t;
+    const i = Math.max(0, lastIndexLE(t, currentMs));
+    live.textContent = t.length ? `${fmt1(data.main.speed_series.v[i])} cells/s` : "–";
+  }
+}
+
+function redrawGraphs() {
+  const body = $("an-secbody");
+  body.querySelectorAll("canvas[data-series]").forEach((cv) => {
+    const key = cv.dataset.series;
+    const s =
+      key === "speed" ? data.main.speed_series : key === "rollur" ? data.main.rolling_ur : data.ghost_distance;
+    drawSeries(cv, s, { color: key === "ghostdist" ? GHOST : ACCENT });
+  });
+  body.querySelectorAll("canvas[data-hist]").forEach((cv) => {
+    if (cv.dataset.hist === "timing") {
+      const tm = data.main.timing;
+      drawHist(cv, tm.hist, {
+        zeroAt: -tm.hist_start_ms / (tm.hist.length * tm.hist_bin_ms),
+        left: "early",
+        right: "late",
+      });
+    } else {
+      drawHist(cv, data.main.frame_deltas.hist, { left: "0 ms", right: "40+ ms" });
+    }
+  });
+  const sc = body.querySelector(".an-scatter");
+  if (sc) drawScatter(sc, data.main.notes);
+}
+
 function wireSection() {
   const body = $("an-secbody");
   body.querySelectorAll("input[data-opt]").forEach((cb) => {
@@ -694,9 +764,6 @@ function wireSection() {
   $("exp-json")?.addEventListener("click", exportJson);
   $("exp-csv")?.addEventListener("click", exportCsv);
   body.querySelectorAll("canvas[data-series]").forEach((cv) => {
-    const key = cv.dataset.series;
-    const s = key === "speed" ? data.main.speed_series : key === "rollur" ? data.main.rolling_ur : data.ghost_distance;
-    drawSeries(cv, s, { color: key === "ghostdist" ? GHOST : ACCENT });
     cv.addEventListener("click", (e) => {
       const t1 = runEnd();
       if (!t1) return;
@@ -705,20 +772,7 @@ function wireSection() {
     });
     cv.style.cursor = "crosshair";
   });
-  body.querySelectorAll("canvas[data-hist]").forEach((cv) => {
-    if (cv.dataset.hist === "timing") {
-      const tm = data.main.timing;
-      drawHist(cv, tm.hist, {
-        zeroAt: -tm.hist_start_ms / (tm.hist.length * tm.hist_bin_ms),
-        left: "early",
-        right: "late",
-      });
-    } else {
-      drawHist(cv, data.main.frame_deltas.hist, { left: "0 ms", right: "40+ ms" });
-    }
-  });
-  const sc = body.querySelector(".an-scatter");
-  if (sc) drawScatter(sc, data.main.notes);
+  redrawGraphs();
 }
 
 // ------------------------------------------------------------ graphs
@@ -985,6 +1039,7 @@ async function refresh() {
   if (!status?.replay || !status?.map) {
     data = null;
     dataKey = "";
+    $("an-chip").hidden = true;
     setPlaying(false);
     msg("Load a replay (and its map) in the main window — this view follows it.");
     drawSection();
@@ -1000,6 +1055,7 @@ async function loadData(key) {
   loading = true;
   data = null;
   selNote = -1;
+  $("an-chip").hidden = true;
   drawSection();
   msg("Analyzing replay…");
   let fresh = null;
@@ -1071,7 +1127,10 @@ window.addEventListener("DOMContentLoaded", async () => {
   $("an-back").addEventListener("click", () => stepFrame(-1));
   $("an-fwd").addEventListener("click", () => stepFrame(1));
   $("an-speed").addEventListener("input", () => setSpeed(Number($("an-speed").value) / 100));
-  $("an-speed-num").addEventListener("change", () => setSpeed(Number($("an-speed-num").value)));
+  $("an-speed-num").addEventListener("change", () => {
+    const v = parseFloat(String($("an-speed-num").value).replace(",", "."));
+    setSpeed(Number.isFinite(v) && v > 0 ? v : play.factor);
+  });
   $("an-speed-reset").addEventListener("click", () => setSpeed(1));
   $("an-overlay").addEventListener("click", pickNote);
   $("an-secnav").addEventListener("click", (e) => {
@@ -1135,8 +1194,18 @@ window.addEventListener("DOMContentLoaded", async () => {
   $("an-img").addEventListener("load", () => drawOverlay());
 
   // The main window drives which replay is loaded; follow its changes.
-  for (const ev of ["sources-changed", "render-done", "render-cancelled", "render-error"]) {
-    listen(ev, () => refresh()).catch(() => {});
+  listen("sources-changed", () => refresh()).catch(() => {});
+  listen("render-stage", () => {
+    renderBusy = true;
+    setPlaying(false);
+  }).catch(() => {});
+  for (const ev of ["render-done", "render-cancelled", "render-error"]) {
+    listen(ev, () => {
+      renderBusy = false;
+      msg("");
+      refresh();
+      schedulePreview();
+    }).catch(() => {});
   }
   // Backstop for anything that changes without an event (a render
   // finishing mid-playback, say) — the event above does the real work.

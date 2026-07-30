@@ -1060,7 +1060,10 @@ fn load_map(state: tauri::State<'_, App>, path: String, app_handle: tauri::AppHa
 }
 
 #[tauri::command]
-async fn download_map(state: tauri::State<'_, App>) -> Result<StatusDto, String> {
+async fn download_map(
+    state: tauri::State<'_, App>,
+    app_handle: tauri::AppHandle,
+) -> Result<StatusDto, String> {
     let app = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let (map_id, replay_hash) = {
@@ -1139,6 +1142,7 @@ async fn download_map(state: tauri::State<'_, App>) -> Result<StatusDto, String>
     })
     .await
     .map_err(err_str)?
+    .inspect(|_| notify_sources_changed(&app_handle))
 }
 
 #[tauri::command]
@@ -2158,9 +2162,20 @@ fn render_preview_frame(app: &App, time_ms: f64) -> Result<PreviewFrameDto, Stri
                     }
                     _ => (ctx.params, &ctx.map, r),
                 };
+                let hud = match (i, ctx.ghost.as_ref()) {
+                    (1, Some(g)) => &g.state,
+                    _ => &ctx.hud,
+                };
                 let notes = ctx
                     .renderer
-                    .note_screen_quads(&params, map, replay, time_ms, (x, w))
+                    .note_screen_quads(
+                        &params,
+                        map,
+                        replay,
+                        time_ms,
+                        (x, w),
+                        ctx.cfg.push_back.then_some(hud),
+                    )
                     .into_iter()
                     .map(|(i, pts, depth)| NoteQuadDto { i: i as u32, pts, depth })
                     .collect();
@@ -2236,13 +2251,24 @@ fn set_preview_quality(state: tauri::State<'_, App>, height: u32) -> Result<Stat
 /// Opens (or focuses) the Analyze window — a second webview showing the
 /// replay full size with its own controls.
 #[tauri::command]
-fn open_analyze_window(app_handle: tauri::AppHandle) -> Result<(), String> {
+async fn open_analyze_window(app_handle: tauri::AppHandle) -> Result<(), String> {
     use tauri::{WebviewUrl, WebviewWindowBuilder};
     if let Some(w) = app_handle.get_webview_window("analyze") {
         let _ = w.unminimize();
         let _ = w.show();
         let _ = w.set_focus();
         return Ok(());
+    }
+    // The main window owns the session: if it goes, this one goes too.
+    if let Some(main) = app_handle.get_webview_window("main") {
+        let handle = app_handle.clone();
+        main.on_window_event(move |e| {
+            if matches!(e, tauri::WindowEvent::Destroyed) {
+                if let Some(w) = handle.get_webview_window("analyze") {
+                    let _ = w.close();
+                }
+            }
+        });
     }
     let win = WebviewWindowBuilder::new(&app_handle, "analyze", WebviewUrl::App("analyze.html".into()))
         .title("rhythr — Analyze")
