@@ -309,6 +309,9 @@ struct Inner {
     /// Height the live preview renders at; the Analyze window raises it
     /// so a full-screen replay stays sharp.
     preview_height: u32,
+    /// Bumped with every preview invalidation; cached frames from an
+    /// older generation are dropped.
+    frame_gen: u64,
     /// Multi-step layout history (Ctrl+Z / Ctrl+Y): snapshots taken
     /// before each editor action/gesture.
     undo_stack: Vec<LayoutPreset>,
@@ -323,10 +326,40 @@ struct Inner {
     preview: Option<PreviewCtx>,
 }
 
+/// Rendered preview frames, keyed by whole song ms. The Analyze window
+/// pulls frames through a custom URI scheme (no base64, no IPC) and asks
+/// for them to be rendered AHEAD of the playhead, so playback displays
+/// finished PNGs instead of waiting on the GPU per frame.
+#[derive(Default)]
+struct FrameCache {
+    /// Bumped whenever the preview pipeline changes; stale entries die.
+    gen: u64,
+    frames: std::collections::BTreeMap<i64, Arc<Vec<u8>>>,
+}
+
+impl FrameCache {
+    /// ~4 s of 60 fps playback; a 1080p PNG is ~130 KiB, so ~30 MiB.
+    const CAP: usize = 240;
+
+    fn insert(&mut self, t: i64, png: Arc<Vec<u8>>, around: i64) {
+        self.frames.insert(t, png);
+        while self.frames.len() > Self::CAP {
+            // Drop whatever sits furthest from the playhead.
+            let lo = *self.frames.keys().next().unwrap();
+            let hi = *self.frames.keys().next_back().unwrap();
+            let drop_key = if (around - lo).abs() >= (hi - around).abs() { lo } else { hi };
+            self.frames.remove(&drop_key);
+        }
+    }
+}
+
 struct Shared {
     inner: Mutex<Inner>,
     cancel: AtomicBool,
     rendering: AtomicBool,
+    frames: Mutex<FrameCache>,
+    /// Newest prefetch request; older workers see the bump and stop.
+    prefetch_gen: std::sync::atomic::AtomicU64,
     /// Join handle of the active render thread (used on app exit).
     render_thread: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
@@ -874,7 +907,7 @@ fn assemble_status(inner: &Inner, rendering: bool) -> StatusDto {
     }
 }
 
-fn png_data_url(rgba: &[u8], w: u32, h: u32) -> Result<String, String> {
+fn png_bytes(rgba: &[u8], w: u32, h: u32) -> Result<Vec<u8>, String> {
     let mut buf = Vec::new();
     {
         let mut enc = png::Encoder::new(std::io::Cursor::new(&mut buf), w, h);
@@ -883,6 +916,11 @@ fn png_data_url(rgba: &[u8], w: u32, h: u32) -> Result<String, String> {
         let mut writer = enc.write_header().map_err(err_str)?;
         writer.write_image_data(rgba).map_err(err_str)?;
     }
+    Ok(buf)
+}
+
+fn png_data_url(rgba: &[u8], w: u32, h: u32) -> Result<String, String> {
+    let buf = png_bytes(rgba, w, h)?;
     Ok(format!(
         "data:image/png;base64,{}",
         base64::engine::general_purpose::STANDARD.encode(&buf)
@@ -978,6 +1016,7 @@ fn normalize_time_bases(inner: &mut Inner) {
 
 fn invalidate_preview(inner: &mut Inner) {
     inner.preview = None;
+    inner.frame_gen = inner.frame_gen.wrapping_add(1);
 }
 
 // ---------------------------------------------------------------- commands
@@ -1999,25 +2038,108 @@ struct PreviewFrameDto {
 #[tauri::command]
 async fn preview(state: tauri::State<'_, App>, time_ms: f64) -> Result<String, String> {
     let app = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || render_preview_frame(&app, time_ms).map(|d| d.img))
-        .await
-        .map_err(err_str)?
+    tauri::async_runtime::spawn_blocking(move || {
+        ensure_preview_ctx(&app, time_ms)?;
+        let png = render_frame_png(&app, time_ms)?;
+        use base64::Engine as _;
+        Ok(format!(
+            "data:image/png;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(png.as_slice())
+        ))
+    })
+    .await
+    .map_err(err_str)?
 }
 
-/// Preview frame plus the per-side field projections the analyze overlay
-/// needs to map world points onto the image.
+/// On-screen geometry for the Analyze overlay. The frame image itself
+/// travels through the `rhframe` URI scheme, so this stays tiny and both
+/// can be fetched at once.
 #[tauri::command]
-async fn preview_analyze(
+async fn frame_geometry(
     state: tauri::State<'_, App>,
     time_ms: f64,
 ) -> Result<PreviewFrameDto, String> {
     let app = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || render_preview_frame(&app, time_ms))
-        .await
-        .map_err(err_str)?
+    tauri::async_runtime::spawn_blocking(move || {
+        ensure_preview_ctx(&app, time_ms)?;
+        frame_sides(&app, time_ms)
+    })
+    .await
+    .map_err(err_str)?
 }
 
-fn render_preview_frame(app: &App, time_ms: f64) -> Result<PreviewFrameDto, String> {
+/// Geometry for a whole run of upcoming frames in ONE round trip —
+/// playback must not pay IPC latency per frame.
+#[tauri::command]
+async fn frame_geometry_batch(
+    state: tauri::State<'_, App>,
+    times: Vec<f64>,
+) -> Result<Vec<PreviewFrameDto>, String> {
+    let app = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(&first) = times.first() else {
+            return Ok(Vec::new());
+        };
+        ensure_preview_ctx(&app, first)?;
+        times.iter().map(|t| frame_sides(&app, *t)).collect()
+    })
+    .await
+    .map_err(err_str)?
+}
+
+/// Renders frames AHEAD of the playhead into the cache so playback shows
+/// finished images instead of waiting on the GPU. Cheap to call often;
+/// a newer request cancels the older worker.
+#[tauri::command]
+fn prefetch_frames(
+    state: tauri::State<'_, App>,
+    from_ms: f64,
+    step_ms: f64,
+    count: u32,
+) -> Result<(), String> {
+    let app = state.inner().clone();
+    let gen = app.prefetch_gen.fetch_add(1, Ordering::SeqCst) + 1;
+    let step = if step_ms.abs() < 0.5 { 16.0 } else { step_ms };
+    let count = count.min(180);
+    std::thread::spawn(move || {
+        for k in 0..count {
+            if app.prefetch_gen.load(Ordering::SeqCst) != gen
+                || app.rendering.load(Ordering::SeqCst)
+            {
+                return;
+            }
+            // Same arithmetic as the frontend: round(from + step*k).
+            let t = from_ms + step * k as f64;
+            let key = t.round() as i64;
+            let want = {
+                let cache = app.frames.lock().unwrap_or_else(|p| p.into_inner());
+                !cache.frames.contains_key(&key)
+            };
+            if !want {
+                continue;
+            }
+            if ensure_preview_ctx(&app, t).is_err() {
+                return;
+            }
+            let cur_gen = app.lock().frame_gen;
+            match render_frame_png(&app, t) {
+                Ok(png) => {
+                    let mut cache = app.frames.lock().unwrap_or_else(|p| p.into_inner());
+                    if cache.gen != cur_gen {
+                        cache.frames.clear();
+                        cache.gen = cur_gen;
+                    }
+                    cache.insert(key, png, from_ms.round() as i64);
+                }
+                Err(_) => return,
+            }
+        }
+    });
+    Ok(())
+}
+
+/// Builds the preview pipeline if needed. Callers hold no other lock.
+fn ensure_preview_ctx(app: &App, time_ms: f64) -> Result<(), String> {
     {
         if app.rendering.load(Ordering::SeqCst) {
             return Err("rendering in progress".to_string());
@@ -2099,9 +2221,17 @@ fn render_preview_frame(app: &App, time_ms: f64) -> Result<PreviewFrameDto, Stri
                 apply_hud_settings(&mut ctx.cfg, base_config, settings);
             }
         }
-        let inner = &*inner;
-        let ctx = inner.preview.as_ref().unwrap();
-        let (_, r) = inner.replay.as_ref().unwrap();
+    }
+    Ok(())
+}
+
+/// Renders one preview frame to PNG bytes. The pipeline must exist
+/// ([`ensure_preview_ctx`]).
+fn render_frame_png(app: &App, time_ms: f64) -> Result<Arc<Vec<u8>>, String> {
+    {
+        let inner = app.lock();
+        let ctx = inner.preview.as_ref().ok_or("no preview")?;
+        let (_, r) = inner.replay.as_ref().ok_or("no replay")?;
         if let Some((p, dur)) = &ctx.bg_video {
             // Match the render: the background video runs at wall-clock
             // speed of the OUTPUT, looped over its own duration. In
@@ -2140,7 +2270,19 @@ fn render_preview_frame(app: &App, time_ms: f64) -> Result<PreviewFrameDto, Stri
             )
             .map_err(err_str)?;
         let (pw, ph) = ctx.renderer.dimensions();
-        let img = png_data_url(&pixels, pw, ph)?;
+        return png_bytes(&pixels, pw, ph).map(Arc::new);
+    }
+}
+
+/// The on-screen geometry for `time_ms` — pure CPU math, no GPU work, so
+/// the overlay can be fetched in parallel with the frame image.
+fn frame_sides(app: &App, time_ms: f64) -> Result<PreviewFrameDto, String> {
+    {
+        let inner = app.lock();
+        let ctx = inner.preview.as_ref().ok_or("no preview")?;
+        let (_, r) = inner.replay.as_ref().ok_or("no replay")?;
+        let (pw, ph) = ctx.renderer.dimensions();
+        let img = String::new();
         let sides = ctx
             .renderer
             .field_projections(
@@ -2703,6 +2845,8 @@ fn main() {
         }),
         cancel: AtomicBool::new(false),
         rendering: AtomicBool::new(false),
+        frames: Mutex::new(FrameCache::default()),
+        prefetch_gen: std::sync::atomic::AtomicU64::new(0),
         render_thread: Mutex::new(None),
     });
 
@@ -2741,6 +2885,69 @@ fn main() {
     }
 
     tauri::Builder::default()
+        // Frame channel for the Analyze window: PNG bytes straight into
+        // the webview's image decoder — no base64, no JSON, no IPC. Served
+        // off-thread; the handler must always respond or the image hangs.
+        .register_asynchronous_uri_scheme_protocol("rhframe", |ctx, req, responder| {
+            let app_handle = ctx.app_handle().clone();
+            std::thread::spawn(move || {
+                let reply = |status: tauri::http::StatusCode, ct: &str, body: Vec<u8>| {
+                    let _ = tauri::http::Response::builder()
+                        .status(status)
+                        .header(tauri::http::header::CONTENT_TYPE, ct)
+                        .header(tauri::http::header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                        .header(tauri::http::header::CACHE_CONTROL, "no-store")
+                        .body(body)
+                        .map(|r| responder.respond(r));
+                };
+                let query = req.uri().query().unwrap_or("").to_string();
+                let time_ms = query
+                    .split('&')
+                    .find_map(|kv| kv.strip_prefix("t="))
+                    .and_then(|v| v.parse::<f64>().ok());
+                let Some(time_ms) = time_ms else {
+                    reply(tauri::http::StatusCode::BAD_REQUEST, "text/plain", b"missing t".to_vec());
+                    return;
+                };
+                let Some(app) = app_handle.try_state::<App>() else {
+                    reply(tauri::http::StatusCode::SERVICE_UNAVAILABLE, "text/plain", Vec::new());
+                    return;
+                };
+                let app: App = (*app).clone();
+                let key = time_ms.round() as i64;
+                // A prefetched frame answers instantly.
+                let cur_gen = { app.lock().frame_gen };
+                {
+                    let mut cache = app.frames.lock().unwrap_or_else(|p| p.into_inner());
+                    if cache.gen != cur_gen {
+                        cache.frames.clear();
+                        cache.gen = cur_gen;
+                    }
+                    if let Some(png) = cache.frames.get(&key) {
+                        reply(tauri::http::StatusCode::OK, "image/png", png.as_ref().clone());
+                        return;
+                    }
+                }
+                let rendered = ensure_preview_ctx(&app, time_ms)
+                    .and_then(|_| render_frame_png(&app, time_ms));
+                match rendered {
+                    Ok(png) => {
+                        {
+                            let mut cache = app.frames.lock().unwrap_or_else(|p| p.into_inner());
+                            if cache.gen == cur_gen {
+                                cache.insert(key, png.clone(), key);
+                            }
+                        }
+                        reply(tauri::http::StatusCode::OK, "image/png", png.as_ref().clone());
+                    }
+                    Err(e) => reply(
+                        tauri::http::StatusCode::INTERNAL_SERVER_ERROR,
+                        "text/plain",
+                        e.into_bytes(),
+                    ),
+                }
+            });
+        })
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             // A .rhr double-click while the app runs lands here as a second
             // instance's argv — forward it and pull the window up.
@@ -2805,7 +3012,9 @@ fn main() {
             undo_layout,
             redo_layout,
             mark_undo,
-            preview_analyze,
+            frame_geometry,
+            frame_geometry_batch,
+            prefetch_frames,
             analysis_data,
             save_text_file,
             save_data_url,

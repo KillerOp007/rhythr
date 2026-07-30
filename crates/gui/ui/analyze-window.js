@@ -24,7 +24,7 @@ const opt = {
   hitboxes: true,
   heatmap: false,
   pathWindow: 600,
-  quality: 1080,
+  quality: "auto",
   immersive: true,
   section: "overlays",
 };
@@ -40,8 +40,26 @@ let selNote = -1;
 let busy = false;
 let wanted = false;
 let previewTimer = null;
-const play = { on: false, factor: 1, last: 0, gen: 0 };
+let shownMs = -1; // song time currently on screen
+let fps = 0;
+const play = { on: false, factor: 1, last: 0, gen: 0, startWall: 0, startMs: 0, k: 0 };
+
+// Frames travel through a custom URI scheme: the webview decodes PNG
+// bytes natively instead of parsing a base64 string out of an IPC reply.
+const frameUrl = (t) => {
+  const q = `t=${Math.round(t)}`;
+  const win = navigator.userAgent.includes("Windows");
+  return win ? `http://rhframe.localhost/f.png?${q}` : `rhframe://localhost/f.png?${q}`;
+};
 let heatCanvases = { main: null, ghost: null };
+let currentBitmap = null;
+let lastRenderH = 0;
+// Auto mode measures the first second of playback and drops the render
+// scale once if the machine cannot hold ~55 fps. It never changes back
+// mid-playback (a resize rebuilds the GPU pipeline).
+let autoScale = 100;
+let autoChecked = false;
+let playbackScale = false;
 let hideChromeTimer = null;
 // Set by render events; status polling alone lags a whole render behind.
 let renderBusy = false;
@@ -98,21 +116,68 @@ function schedulePreview() {
   previewTimer = setTimeout(runPreview, 40);
 }
 
+// Geometry for upcoming frames, fetched in batches so playback needs no
+// IPC round trip per frame.
+const geoCache = new Map();
+let geoPending = null;
+
+async function geometryFor(t) {
+  const key = Math.round(t);
+  const hit = geoCache.get(key);
+  if (hit) return hit;
+  const g = await invoke("frame_geometry", { timeMs: t });
+  geoCache.set(key, g);
+  return g;
+}
+
+function primeGeometry(fromMs, step, count) {
+  if (geoPending) return;
+  const times = [];
+  for (let k = 0; k < count; k++) {
+    const key = Math.round(fromMs + step * k);
+    if (!geoCache.has(key)) times.push(key);
+  }
+  if (!times.length) return;
+  geoPending = invoke("frame_geometry_batch", { times })
+    .then((list) => {
+      list.forEach((g, i) => geoCache.set(times[i], g));
+      // Keep the map from growing without bound over a long session.
+      if (geoCache.size > 600) {
+        const keys = [...geoCache.keys()].sort((a, b) => Math.abs(a - fromMs) - Math.abs(b - fromMs));
+        keys.slice(400).forEach((k) => geoCache.delete(k));
+      }
+    })
+    .catch(() => {})
+    .finally(() => {
+      geoPending = null;
+    });
+}
+
+/// Fetches a frame's PNG and decodes it off the main thread.
+async function fetchBitmap(t) {
+  const res = await fetch(frameUrl(t));
+  if (!res.ok) throw new Error(await res.text());
+  return createImageBitmap(await res.blob());
+}
+
+async function showFrame(t) {
+  const [bmp, geo] = await Promise.all([fetchBitmap(t), geometryFor(t)]);
+  lastFrame = geo;
+  currentBitmap?.close?.();
+  currentBitmap = bmp;
+  shownMs = t;
+  msg("");
+  updateTime();
+  drawFrame();
+  refreshLive();
+}
+
 async function runPreview() {
   if (busy || !wanted) return;
   wanted = false;
   busy = true;
   try {
-    const d = await invoke("preview_analyze", { timeMs: currentMs });
-    lastFrame = d;
-    const img = $("an-img");
-    img.src = d.img;
-    msg("");
-    updateTime();
-    requestAnimationFrame(() => {
-      drawOverlay();
-      refreshLive();
-    });
+    await showFrame(currentMs);
   } catch (e) {
     msg(String(e));
   } finally {
@@ -123,36 +188,52 @@ async function runPreview() {
 
 function seek(t) {
   currentMs = clamp(t, 0, runEnd());
+  play.startWall = performance.now();
+  play.startMs = currentMs;
+  play.k = 0;
   updateTime();
   drawScrub();
   schedulePreview();
 }
 
 function updateTime() {
-  $("an-time").textContent = fmtMsFull(currentMs);
+  $("an-time").textContent = fmtMsFull(currentMs) + (fps ? `  [${Math.round(fps)} fps]` : "");
   $("an-total").textContent = fmtMs(runEnd());
 }
 
 // ------------------------------------------------------------ overlay
 
+/// Fits the canvas into the stage at the frame's aspect ratio, in real
+/// device pixels — the backend renders at exactly this size, so nothing
+/// is scaled and everything stays sharp.
 function syncCanvas() {
-  const img = $("an-img");
-  const cv = $("an-overlay");
-  if (!img.naturalWidth) return false;
-  const r = img.getBoundingClientRect();
-  const s = $("stage").getBoundingClientRect();
-  cv.style.left = `${r.left - s.left}px`;
-  cv.style.top = `${r.top - s.top}px`;
-  cv.style.width = `${r.width}px`;
-  cv.style.height = `${r.height}px`;
-  const dpr = window.devicePixelRatio || 1;
-  const w = Math.max(1, Math.round(r.width * dpr));
-  const h = Math.max(1, Math.round(r.height * dpr));
+  const cv = $("an-canvas");
+  const stage = $("stage").getBoundingClientRect();
+  if (!currentBitmap || !stage.width || !stage.height) return false;
+  const ar = currentBitmap.width / currentBitmap.height;
+  let cssW = stage.width;
+  let cssH = cssW / ar;
+  if (cssH > stage.height) {
+    cssH = stage.height;
+    cssW = cssH * ar;
+  }
+  cv.style.width = `${Math.floor(cssW)}px`;
+  cv.style.height = `${Math.floor(cssH)}px`;
+  const w = currentBitmap.width;
+  const h = currentBitmap.height;
   if (cv.width !== w || cv.height !== h) {
     cv.width = w;
     cv.height = h;
   }
   return true;
+}
+
+function drawFrame() {
+  if (!syncCanvas()) return;
+  const ctx = $("an-canvas").getContext("2d");
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.drawImage(currentBitmap, 0, 0);
+  drawOverlay();
 }
 
 function projectPx(side, wx, wy) {
@@ -191,15 +272,13 @@ function pathFrom(ctx, pts) {
 }
 
 function drawOverlay() {
-  const cv = $("an-overlay");
+  const cv = $("an-canvas");
   const ctx = cv.getContext("2d");
+  if (!data || !lastFrame || !currentBitmap) return;
   ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.clearRect(0, 0, cv.width, cv.height);
-  if (!syncCanvas() || !data || !lastFrame) return;
-  const img = $("an-img");
-  const dpr = window.devicePixelRatio || 1;
-  const r = img.getBoundingClientRect();
-  ctx.scale((r.width * dpr) / lastFrame.w, (r.height * dpr) / lastFrame.h);
+  // Geometry arrives in the frame's own pixels; the canvas IS that size,
+  // except when a resize outran the renderer.
+  ctx.scale(cv.width / lastFrame.w, cv.height / lastFrame.h);
   ctx.lineJoin = "round";
   ctx.lineCap = "round";
   const t = currentMs;
@@ -354,7 +433,7 @@ function drawOverlay() {
 
 function pickNote(ev) {
   if (!data || !lastFrame) return;
-  const cv = $("an-overlay");
+  const cv = $("an-canvas");
   const rect = cv.getBoundingClientRect();
   const mx = ((ev.clientX - rect.left) / rect.width) * lastFrame.w;
   const my = ((ev.clientY - rect.top) / rect.height) * lastFrame.h;
@@ -410,15 +489,78 @@ function drawScrub() {
 
 // ------------------------------------------------------------ playback
 
+/// Song ms per displayed frame at the current speed (60 fps grid).
+function frameStep() {
+  const sp = clamp(status?.replay?.speed || 1, 0.25, 3);
+  return (1000 / 60) * play.factor * sp;
+}
+
+/// Asks the backend to render at the stage's real pixel size (capped),
+/// so no frame is scaled and playback stays cheap.
+/// Full size for still frames, the learned scale while playing.
+function scalePct() {
+  if (opt.quality !== "auto") return Number(opt.quality);
+  return playbackScale ? autoScale : 100;
+}
+
+async function syncRenderSize() {
+  const stage = $("stage").getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  const want = Math.round(clamp(stage.height * dpr * (scalePct() / 100), 400, 2160));
+  if (want === lastRenderH) return;
+  lastRenderH = want;
+  try {
+    status = await invoke("set_preview_quality", { height: want });
+    geoCache.clear();
+    schedulePreview();
+  } catch (e) {
+    /* keep the current size */
+  }
+}
+
+// The backend keys frames by round(from + step*k) — the frontend must use
+// the exact same base and step or every request misses the cache.
+function prefetch(fromMs) {
+  invoke("prefetch_frames", { fromMs, stepMs: frameStep(), count: 90 }).catch(() => {});
+}
+
+let stillTimer = null;
+
 function setPlaying(on) {
   if (on && (!data || !status?.replay)) return;
   play.on = on;
   play.gen++;
   $("an-play").textContent = on ? "⏸" : "▶";
   document.body.classList.toggle("an-immersive", on && opt.immersive);
+  clearTimeout(stillTimer);
+  if (opt.quality === "auto" && autoScale < 100) {
+    if (on) {
+      // Playback resumes at the scale this machine can hold.
+      playbackScale = true;
+      lastRenderH = 0;
+      syncRenderSize();
+    } else {
+      // Paused for a closer look: back to full sharpness shortly after.
+      stillTimer = setTimeout(() => {
+        playbackScale = false;
+        lastRenderH = 0;
+        syncRenderSize();
+      }, 400);
+    }
+  }
   if (on) {
     if (currentMs >= runEnd() - 1) currentMs = 0;
-    play.last = performance.now();
+    play.startWall = performance.now();
+    // Whole-ms base: the cache is keyed by rounded times.
+    play.startMs = Math.round(currentMs);
+    currentMs = play.startMs;
+    play.k = 0;
+    fps = 0;
+    // The learned scale carries across the session; only re-measure
+    // while we are still at full size.
+    autoChecked = autoScale < 100;
+    prefetch(play.startMs);
+    primeGeometry(play.startMs, frameStep(), 60);
     pump(play.gen);
   }
 }
@@ -430,26 +572,48 @@ async function pump(gen) {
     msg("Paused — a video render is using the renderer.");
     return;
   }
-  const now = performance.now();
-  const sp = clamp(status?.replay?.speed || 1, 0.25, 3);
-  currentMs = Math.min(currentMs + (now - play.last) * play.factor * sp, runEnd());
-  play.last = now;
+  const step = frameStep();
+  // Time comes from the wall clock, quantized to the frame grid the
+  // prefetcher renders — so playback keeps real time even if a frame is
+  // slow, and every request hits a ready image.
+  const elapsed = performance.now() - play.startWall;
+  const k = Math.max(play.k + 1, Math.round((elapsed * play.factor * clamp(status?.replay?.speed || 1, 0.25, 3)) / step));
+  play.k = k;
+  currentMs = Math.min(play.startMs + k * step, runEnd());
   updateTime();
   drawScrub();
   const t0 = performance.now();
   try {
-    wanted = true;
-    await runPreview();
+    await showFrame(currentMs);
   } catch (e) {
     /* transient — keep the loop alive */
   }
-  if (performance.now() - t0 < 8) await new Promise((r) => setTimeout(r, 8));
+  const dt = performance.now() - t0;
+  fps = fps ? fps * 0.9 + (1000 / Math.max(1, dt)) * 0.1 : 1000 / Math.max(1, dt);
+  // Auto resolution: after a second of playback, drop the scale once if
+  // this machine cannot keep up at the current size.
+  // (k can skip values when a frame is slow — hence >=, not ==)
+  if (opt.quality === "auto" && !autoChecked && k >= 60) {
+    autoChecked = true;
+    if (fps < 50) {
+      autoScale = fps < 30 ? 50 : 70;
+      playbackScale = true;
+      lastRenderH = 0;
+      syncRenderSize();
+    }
+  }
+  // Keep frames and geometry a second ahead of the playhead — on the
+  // same grid points the playback will ask for.
+  if (k % 30 === 0) {
+    prefetch(play.startMs + (k + 15) * step);
+    primeGeometry(play.startMs + k * step, step, 60);
+  }
   if (gen !== play.gen) return;
   if (currentMs >= runEnd()) {
     setPlaying(false);
     return;
   }
-  pump(gen);
+  requestAnimationFrame(() => pump(gen));
 }
 
 function stepFrame(dir) {
@@ -668,15 +832,22 @@ function drawSection() {
     );
   } else if (opt.section === "view") {
     html += card(
-      "Preview quality",
+      "Render resolution",
       `<div class="an-toggles">
-        ${[720, 1080, 1440]
+        ${[
+          ["auto", "Auto"],
+          [100, "Native"],
+          [70, "70%"],
+          [50, "Half"],
+        ]
           .map(
-            (q) =>
-              `<label class="an-tog"><input type="radio" name="q" data-q="${q}"${opt.quality === q ? " checked" : ""}> ${q}p</label>`,
+            ([q, label]) =>
+              `<label class="an-tog"><input type="radio" name="q" data-q="${q}"${String(opt.quality) === String(q) ? " checked" : ""}> ${label}</label>`,
           )
           .join("")}
-      </div><p class="hint">Higher is sharper on a big screen and slower to play back. The main window's preview uses the same setting.</p>`,
+      </div><p class="hint">Frames render at the window's own pixel size — nothing is scaled, so Native is the sharpest AND the cheapest way to fill the window. Auto starts there and steps down once if playback can't hold ~55 fps${
+        fps ? ` (currently ${Math.round(fps)} fps at ${scalePct()}%)` : ""
+      }.</p>`,
     );
     html += card(
       "While playing",
@@ -750,14 +921,12 @@ function wireSection() {
     });
   }
   body.querySelectorAll("input[data-q]").forEach((rb) => {
-    rb.addEventListener("change", async () => {
-      opt.quality = Number(rb.dataset.q);
-      try {
-        status = await invoke("set_preview_quality", { height: opt.quality });
-        schedulePreview();
-      } catch (e) {
-        msg(String(e));
-      }
+    rb.addEventListener("change", () => {
+      opt.quality = rb.dataset.q === "auto" ? "auto" : Number(rb.dataset.q);
+      autoScale = 100;
+      autoChecked = false;
+      lastRenderH = 0;
+      syncRenderSize();
     });
   });
   $("exp-card")?.addEventListener("click", exportCard);
@@ -1120,6 +1289,11 @@ function toggleOptions(show) {
 
 // ------------------------------------------------------------ boot
 
+// A silent exception used to kill the playback loop without a trace;
+// surface it instead.
+window.addEventListener("error", (e) => msg(`Error: ${e.message}`));
+window.addEventListener("unhandledrejection", (e) => msg(`Error: ${e.reason}`));
+
 window.addEventListener("DOMContentLoaded", async () => {
   $("an-gear").addEventListener("click", () => toggleOptions());
   $("an-close").addEventListener("click", () => toggleOptions(false));
@@ -1132,7 +1306,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     setSpeed(Number.isFinite(v) && v > 0 ? v : play.factor);
   });
   $("an-speed-reset").addEventListener("click", () => setSpeed(1));
-  $("an-overlay").addEventListener("click", pickNote);
+  $("an-canvas").addEventListener("click", pickNote);
   $("an-secnav").addEventListener("click", (e) => {
     const b = e.target.closest("button[data-sec]");
     if (!b) return;
@@ -1187,11 +1361,15 @@ window.addEventListener("DOMContentLoaded", async () => {
     }
   });
 
+  // A resized window wants frames at its new pixel size: re-request the
+  // render resolution (debounced) and repaint what we have meanwhile.
+  let resizeTimer = null;
   new ResizeObserver(() => {
-    drawOverlay();
+    drawFrame();
     drawScrub();
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(syncRenderSize, 250);
   }).observe($("stage"));
-  $("an-img").addEventListener("load", () => drawOverlay());
 
   // The main window drives which replay is loaded; follow its changes.
   listen("sources-changed", () => refresh()).catch(() => {});
@@ -1214,11 +1392,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   }, 5000);
 
   setSpeed(1);
-  try {
-    status = await invoke("set_preview_quality", { height: opt.quality });
-  } catch (e) {
-    /* falls back to whatever the main window uses */
-  }
+  await syncRenderSize();
   await refresh();
   toggleOptions(true);
 });
