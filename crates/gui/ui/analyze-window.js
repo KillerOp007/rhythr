@@ -60,6 +60,9 @@ let lastRenderH = 0;
 let autoScale = 100;
 let autoChecked = false;
 let playbackScale = false;
+let loopFps = 0;
+let lastTick = 0;
+let lastPrefetchK = -1e9;
 let hideChromeTimer = null;
 // Set by render events; status polling alone lags a whole render behind.
 let renderBusy = false;
@@ -125,7 +128,9 @@ async function geometryFor(t) {
   const key = Math.round(t);
   const hit = geoCache.get(key);
   if (hit) return hit;
-  const g = await invoke("frame_geometry", { timeMs: t });
+  // Ask for the time the entry is keyed by, or the cached geometry would
+  // belong to a slightly different moment than the frame.
+  const g = await invoke("frame_geometry", { timeMs: key });
   geoCache.set(key, g);
   return g;
 }
@@ -160,8 +165,16 @@ async function fetchBitmap(t) {
   return createImageBitmap(await res.blob());
 }
 
+let frameReq = 0;
+
 async function showFrame(t) {
+  const req = ++frameReq;
   const [bmp, geo] = await Promise.all([fetchBitmap(t), geometryFor(t)]);
+  // A slower earlier request must not paint over a newer frame.
+  if (req !== frameReq) {
+    bmp.close?.();
+    return;
+  }
   lastFrame = geo;
   currentBitmap?.close?.();
   currentBitmap = bmp;
@@ -189,8 +202,10 @@ async function runPreview() {
 function seek(t) {
   currentMs = clamp(t, 0, runEnd());
   play.startWall = performance.now();
-  play.startMs = currentMs;
-  play.k = 0;
+  play.startMs = Math.round(currentMs);
+  play.k = -1;
+  lastPrefetchK = -1e9;
+  if (!play.on) cancelPrefetch();
   updateTime();
   drawScrub();
   schedulePreview();
@@ -454,7 +469,7 @@ function pickNote(ev) {
     }
   }
   selNote = best;
-  drawOverlay();
+  drawFrame(); // the merged canvas has no clear of its own
   if (opt.section === "notes") drawSection();
 }
 
@@ -506,7 +521,9 @@ function scalePct() {
 async function syncRenderSize() {
   const stage = $("stage").getBoundingClientRect();
   const dpr = window.devicePixelRatio || 1;
-  const want = Math.round(clamp(stage.height * dpr * (scalePct() / 100), 400, 2160));
+  // Capped: the preview pipeline is shared with the main window, and a
+  // 4K stage would make ITS preview expensive too.
+  const want = Math.round(clamp(stage.height * dpr * (scalePct() / 100), 400, 1600));
   if (want === lastRenderH) return;
   lastRenderH = want;
   try {
@@ -524,6 +541,12 @@ function prefetch(fromMs) {
   invoke("prefetch_frames", { fromMs, stepMs: frameStep(), count: 90 }).catch(() => {});
 }
 
+/// Stops the background renderer — it must not keep working for a
+/// playhead that moved on.
+function cancelPrefetch() {
+  invoke("cancel_prefetch").catch(() => {});
+}
+
 let stillTimer = null;
 
 function setPlaying(on) {
@@ -533,6 +556,7 @@ function setPlaying(on) {
   $("an-play").textContent = on ? "⏸" : "▶";
   document.body.classList.toggle("an-immersive", on && opt.immersive);
   clearTimeout(stillTimer);
+  if (!on) cancelPrefetch();
   if (opt.quality === "auto" && autoScale < 100) {
     if (on) {
       // Playback resumes at the scale this machine can hold.
@@ -554,8 +578,11 @@ function setPlaying(on) {
     // Whole-ms base: the cache is keyed by rounded times.
     play.startMs = Math.round(currentMs);
     currentMs = play.startMs;
-    play.k = 0;
+    play.k = -1; // the first tick (k = 0) still paints the start frame
     fps = 0;
+    loopFps = 0;
+    lastTick = 0;
+    lastPrefetchK = -1e9;
     // The learned scale carries across the session; only re-measure
     // while we are still at full size.
     autoChecked = autoScale < 100;
@@ -590,13 +617,22 @@ async function pump(gen) {
   }
   const dt = performance.now() - t0;
   fps = fps ? fps * 0.9 + (1000 / Math.max(1, dt)) * 0.1 : 1000 / Math.max(1, dt);
+  // Displayed frames per second of wall clock — that is what "smooth"
+  // means, and what the Auto scale must judge.
+  const now2 = performance.now();
+  if (lastTick) {
+    const inst = 1000 / Math.max(1, now2 - lastTick);
+    loopFps = loopFps ? loopFps * 0.9 + inst * 0.1 : inst;
+  }
+  lastTick = now2;
   // Auto resolution: after a second of playback, drop the scale once if
   // this machine cannot keep up at the current size.
   // (k can skip values when a frame is slow — hence >=, not ==)
-  if (opt.quality === "auto" && !autoChecked && k >= 60) {
+  // A stale iteration must never resize after playback stopped.
+  if (opt.quality === "auto" && !autoChecked && k >= 60 && play.on && gen === play.gen) {
     autoChecked = true;
-    if (fps < 50) {
-      autoScale = fps < 30 ? 50 : 70;
+    if (loopFps && loopFps < 50) {
+      autoScale = loopFps < 30 ? 50 : 70;
       playbackScale = true;
       lastRenderH = 0;
       syncRenderSize();
@@ -604,7 +640,9 @@ async function pump(gen) {
   }
   // Keep frames and geometry a second ahead of the playhead — on the
   // same grid points the playback will ask for.
-  if (k % 30 === 0) {
+  // Distance-based: a slow frame can skip right over any fixed multiple.
+  if (k - lastPrefetchK >= 30) {
+    lastPrefetchK = k;
     prefetch(play.startMs + (k + 15) * step);
     primeGeometry(play.startMs + k * step, step, 60);
   }
@@ -626,7 +664,17 @@ function stepFrame(dir) {
 }
 
 function setSpeed(v) {
-  play.factor = clamp(v, 0.01, 4);
+  const next = clamp(v, 0.01, 4);
+  if (play.on && next !== play.factor) {
+    // The grid changes with the speed: restart the clock from here, or the
+    // playhead jumps by (elapsed × speed difference).
+    play.startWall = performance.now();
+    play.startMs = Math.round(currentMs);
+    play.k = -1;
+    lastPrefetchK = -1e9;
+    cancelPrefetch();
+  }
+  play.factor = next;
   $("an-speed").value = String(Math.round(play.factor * 100));
   $("an-speed-num").value = String(Math.round(play.factor * 100) / 100);
 }
@@ -909,7 +957,7 @@ function wireSection() {
       if (cb.dataset.opt === "immersive") {
         document.body.classList.toggle("an-immersive", play.on && opt.immersive);
       }
-      drawOverlay();
+      drawFrame();
     });
   });
   const win = body.querySelector("#opt-window");
@@ -917,7 +965,7 @@ function wireSection() {
     win.addEventListener("input", () => {
       opt.pathWindow = Number(win.value);
       win.nextElementSibling.textContent = `${(opt.pathWindow / 1000).toFixed(2)}s`;
-      drawOverlay();
+      drawFrame();
     });
   }
   body.querySelectorAll("input[data-q]").forEach((rb) => {
@@ -1208,6 +1256,7 @@ async function refresh() {
   if (!status?.replay || !status?.map) {
     data = null;
     dataKey = "";
+    geoCache.clear();
     $("an-chip").hidden = true;
     setPlaying(false);
     msg("Load a replay (and its map) in the main window — this view follows it.");
@@ -1244,6 +1293,8 @@ async function loadData(key) {
   data = fresh;
   timeline = tl;
   dataKey = key;
+  // Geometry describes THIS replay on THIS field — never reuse it.
+  geoCache.clear();
   heatCanvases = {
     main: buildHeatCanvas(data.main.heatmap, ACCENT),
     ghost: data.ghost ? buildHeatCanvas(data.ghost.heatmap, GHOST) : null,
@@ -1334,6 +1385,9 @@ window.addEventListener("DOMContentLoaded", async () => {
   });
 
   document.addEventListener("mousemove", showChrome);
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden && play.on) setPlaying(false);
+  });
   document.addEventListener("keydown", (e) => {
     const t = document.activeElement;
     const typing = t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
@@ -1399,5 +1453,6 @@ window.addEventListener("DOMContentLoaded", async () => {
 
 window.addEventListener("beforeunload", () => {
   play.on = false;
+  cancelPrefetch();
   invoke("set_preview_quality", { height: 720 }).catch(() => {});
 });

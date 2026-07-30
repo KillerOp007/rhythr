@@ -335,21 +335,38 @@ struct FrameCache {
     /// Bumped whenever the preview pipeline changes; stale entries die.
     gen: u64,
     frames: std::collections::BTreeMap<i64, Arc<Vec<u8>>>,
+    bytes: usize,
 }
 
 impl FrameCache {
-    /// ~4 s of 60 fps playback; a 1080p PNG is ~130 KiB, so ~30 MiB.
-    const CAP: usize = 240;
+    /// Frame size scales with the window, so bound the cache by BYTES —
+    /// 96 MiB is ~2 s of 60 fps at 1440p and ~12 s at 720p.
+    const CAP_BYTES: usize = 96 * 1024 * 1024;
+    /// …and never keep more than a few seconds of frames anyway.
+    const CAP_FRAMES: usize = 400;
 
     fn insert(&mut self, t: i64, png: Arc<Vec<u8>>, around: i64) {
-        self.frames.insert(t, png);
-        while self.frames.len() > Self::CAP {
+        if let Some(old) = self.frames.insert(t, png.clone()) {
+            self.bytes -= old.len();
+        }
+        self.bytes += png.len();
+        while self.bytes > Self::CAP_BYTES || self.frames.len() > Self::CAP_FRAMES {
             // Drop whatever sits furthest from the playhead.
             let lo = *self.frames.keys().next().unwrap();
             let hi = *self.frames.keys().next_back().unwrap();
             let drop_key = if (around - lo).abs() >= (hi - around).abs() { lo } else { hi };
-            self.frames.remove(&drop_key);
+            if self.frames.len() <= 1 {
+                break;
+            }
+            if let Some(v) = self.frames.remove(&drop_key) {
+                self.bytes -= v.len();
+            }
         }
+    }
+
+    fn clear(&mut self) {
+        self.frames.clear();
+        self.bytes = 0;
     }
 }
 
@@ -1424,6 +1441,7 @@ fn set_hud_override(
         }
     }
     inner.settings.save();
+    touch_frames(&mut inner);
     Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
 }
 
@@ -1482,6 +1500,7 @@ fn set_hud_position(
     if commit.unwrap_or(true) {
         inner.settings.save();
     }
+    touch_frames(&mut inner);
     Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
 }
 
@@ -1505,6 +1524,7 @@ fn set_hud_scale(
     if commit.unwrap_or(true) {
         inner.settings.save();
     }
+    touch_frames(&mut inner);
     Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
 }
 
@@ -1609,6 +1629,7 @@ fn set_meter(
     if commit.unwrap_or(true) {
         inner.settings.save();
     }
+    touch_frames(&mut inner);
     Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
 }
 
@@ -1634,6 +1655,7 @@ fn reset_hud_layout(state: tauri::State<'_, App>) -> Result<StatusDto, String> {
     park(&mut inner.settings.aim_meter, MeterSettings::at(0.15, 0.32));
     park(&mut inner.settings.race_delta, MeterSettings::at(0.5, 0.095));
     inner.settings.save();
+    touch_frames(&mut inner);
     Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
 }
 
@@ -1803,6 +1825,7 @@ fn undo_layout(state: tauri::State<'_, App>) -> Result<StatusDto, String> {
     inner.redo_stack.push(now);
     apply_layout_only(&mut inner.settings, &p);
     inner.settings.save();
+    touch_frames(&mut inner);
     Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
 }
 
@@ -1820,6 +1843,7 @@ fn redo_layout(state: tauri::State<'_, App>) -> Result<StatusDto, String> {
     inner.undo_stack.push(now);
     apply_layout_only(&mut inner.settings, &p);
     inner.settings.save();
+    touch_frames(&mut inner);
     Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
 }
 
@@ -1859,6 +1883,7 @@ fn set_background_dim(state: tauri::State<'_, App>, pct: u32) -> Result<StatusDt
     let mut inner = app.lock();
     inner.settings.background_dim = pct.min(100);
     inner.settings.save();
+    touch_frames(&mut inner);
     Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
 }
 
@@ -1873,6 +1898,7 @@ fn reset_hud_overrides(state: tauri::State<'_, App>) -> Result<StatusDto, String
     inner.settings.hud_positions.clear();
     inner.settings.hud_scales.clear();
     inner.settings.save();
+    touch_frames(&mut inner);
     Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
 }
 
@@ -2039,8 +2065,16 @@ struct PreviewFrameDto {
 async fn preview(state: tauri::State<'_, App>, time_ms: f64) -> Result<String, String> {
     let app = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
+        // The pipeline can be invalidated between the two steps (a setting
+        // changed on another thread) — one retry covers that race.
         ensure_preview_ctx(&app, time_ms)?;
-        let png = render_frame_png(&app, time_ms)?;
+        let png = match render_frame_png(&app, time_ms) {
+            Ok(p) => p,
+            Err(_) => {
+                ensure_preview_ctx(&app, time_ms)?;
+                render_frame_png(&app, time_ms)?
+            }
+        };
         use base64::Engine as _;
         Ok(format!(
             "data:image/png;base64,{}",
@@ -2049,6 +2083,57 @@ async fn preview(state: tauri::State<'_, App>, time_ms: f64) -> Result<String, S
     })
     .await
     .map_err(err_str)?
+}
+
+/// Answers one `rhframe` request: a cached frame if the prefetcher got
+/// there first, otherwise a fresh render.
+fn serve_frame(app_handle: &tauri::AppHandle, query: &str) -> Result<Arc<Vec<u8>>, String> {
+    let time_ms = query
+        .split('&')
+        .find_map(|kv| kv.strip_prefix("t="))
+        .and_then(|v| v.parse::<f64>().ok())
+        .ok_or("missing t")?;
+    let app: App = (*app_handle.try_state::<App>().ok_or("app not ready")?).clone();
+    let key = time_ms.round() as i64;
+    let cur_gen = { app.lock().frame_gen };
+    {
+        let mut cache = app.frames.lock().unwrap_or_else(|p| p.into_inner());
+        if cache.gen != cur_gen {
+            cache.clear();
+            cache.gen = cur_gen;
+        }
+        if let Some(png) = cache.frames.get(&key) {
+            return Ok(png.clone());
+        }
+    }
+    ensure_preview_ctx(&app, time_ms)?;
+    let png = match render_frame_png(&app, time_ms) {
+        Ok(p) => p,
+        Err(_) => {
+            ensure_preview_ctx(&app, time_ms)?;
+            render_frame_png(&app, time_ms)?
+        }
+    };
+    {
+        let mut cache = app.frames.lock().unwrap_or_else(|p| p.into_inner());
+        if cache.gen == cur_gen {
+            cache.insert(key, png.clone(), key);
+        }
+    }
+    Ok(png)
+}
+
+/// Drops cached frames without tearing down the GPU pipeline — for the
+/// live-edit paths (HUD toggles, layout drags, background dim) that change
+/// what a frame LOOKS like while the pipeline itself stays valid.
+fn touch_frames(inner: &mut Inner) {
+    inner.frame_gen = inner.frame_gen.wrapping_add(1);
+}
+
+/// Stops the background prefetcher (pause, seek, window closing).
+#[tauri::command]
+fn cancel_prefetch(state: tauri::State<'_, App>) {
+    state.inner().prefetch_gen.fetch_add(1, Ordering::SeqCst);
 }
 
 /// On-screen geometry for the Analyze overlay. The frame image itself
@@ -2062,7 +2147,13 @@ async fn frame_geometry(
     let app = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         ensure_preview_ctx(&app, time_ms)?;
-        frame_sides(&app, time_ms)
+        match frame_sides(&app, time_ms) {
+            Ok(s) => Ok(s),
+            Err(_) => {
+                ensure_preview_ctx(&app, time_ms)?;
+                frame_sides(&app, time_ms)
+            }
+        }
     })
     .await
     .map_err(err_str)?
@@ -2126,7 +2217,7 @@ fn prefetch_frames(
                 Ok(png) => {
                     let mut cache = app.frames.lock().unwrap_or_else(|p| p.into_inner());
                     if cache.gen != cur_gen {
-                        cache.frames.clear();
+                        cache.clear();
                         cache.gen = cur_gen;
                     }
                     cache.insert(key, png, from_ms.round() as i64);
@@ -2891,59 +2982,37 @@ fn main() {
         .register_asynchronous_uri_scheme_protocol("rhframe", |ctx, req, responder| {
             let app_handle = ctx.app_handle().clone();
             std::thread::spawn(move || {
-                let reply = |status: tauri::http::StatusCode, ct: &str, body: Vec<u8>| {
-                    let _ = tauri::http::Response::builder()
-                        .status(status)
-                        .header(tauri::http::header::CONTENT_TYPE, ct)
-                        .header(tauri::http::header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-                        .header(tauri::http::header::CACHE_CONTROL, "no-store")
-                        .body(body)
-                        .map(|r| responder.respond(r));
-                };
-                let query = req.uri().query().unwrap_or("").to_string();
-                let time_ms = query
-                    .split('&')
-                    .find_map(|kv| kv.strip_prefix("t="))
-                    .and_then(|v| v.parse::<f64>().ok());
-                let Some(time_ms) = time_ms else {
-                    reply(tauri::http::StatusCode::BAD_REQUEST, "text/plain", b"missing t".to_vec());
-                    return;
-                };
-                let Some(app) = app_handle.try_state::<App>() else {
-                    reply(tauri::http::StatusCode::SERVICE_UNAVAILABLE, "text/plain", Vec::new());
-                    return;
-                };
-                let app: App = (*app).clone();
-                let key = time_ms.round() as i64;
-                // A prefetched frame answers instantly.
-                let cur_gen = { app.lock().frame_gen };
-                {
-                    let mut cache = app.frames.lock().unwrap_or_else(|p| p.into_inner());
-                    if cache.gen != cur_gen {
-                        cache.frames.clear();
-                        cache.gen = cur_gen;
-                    }
-                    if let Some(png) = cache.frames.get(&key) {
-                        reply(tauri::http::StatusCode::OK, "image/png", png.as_ref().clone());
-                        return;
-                    }
-                }
-                let rendered = ensure_preview_ctx(&app, time_ms)
-                    .and_then(|_| render_frame_png(&app, time_ms));
-                match rendered {
-                    Ok(png) => {
+                // The responder MUST be used: dropping it (a panic in the
+                // renderer, say) leaves the request pending forever and
+                // the window stops showing frames.
+                let responder = std::sync::Mutex::new(Some(responder));
+                let answer = |status: tauri::http::StatusCode, ct: &str, body: Vec<u8>| {
+                    if let Some(r) = responder.lock().ok().and_then(|mut g| g.take()) {
+                        if let Ok(resp) = tauri::http::Response::builder()
+                            .status(status)
+                            .header(tauri::http::header::CONTENT_TYPE, ct)
+                            .header(tauri::http::header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                            .header(tauri::http::header::CACHE_CONTROL, "no-store")
+                            .body(body)
                         {
-                            let mut cache = app.frames.lock().unwrap_or_else(|p| p.into_inner());
-                            if cache.gen == cur_gen {
-                                cache.insert(key, png.clone(), key);
-                            }
+                            r.respond(resp);
                         }
-                        reply(tauri::http::StatusCode::OK, "image/png", png.as_ref().clone());
                     }
-                    Err(e) => reply(
+                };
+                let work = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    serve_frame(&app_handle, req.uri().query().unwrap_or(""))
+                }));
+                match work {
+                    Ok(Ok(png)) => answer(tauri::http::StatusCode::OK, "image/png", png.as_ref().clone()),
+                    Ok(Err(e)) => answer(
                         tauri::http::StatusCode::INTERNAL_SERVER_ERROR,
                         "text/plain",
                         e.into_bytes(),
+                    ),
+                    Err(_) => answer(
+                        tauri::http::StatusCode::INTERNAL_SERVER_ERROR,
+                        "text/plain",
+                        b"frame renderer panicked".to_vec(),
                     ),
                 }
             });
@@ -3015,6 +3084,7 @@ fn main() {
             frame_geometry,
             frame_geometry_batch,
             prefetch_frames,
+            cancel_prefetch,
             analysis_data,
             save_text_file,
             save_data_url,
