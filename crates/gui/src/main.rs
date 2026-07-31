@@ -370,6 +370,25 @@ impl FrameCache {
     }
 }
 
+/// A rendered playback segment: real video the webview can play with
+/// hardware decoding, instead of streaming stills it has to decode one by
+/// one. `out_fps` frames per SONG second — raise it and the same span
+/// plays back slower while staying perfectly smooth.
+#[derive(Clone)]
+struct ReadySegment {
+    token: u64,
+    path: PathBuf,
+    start_ms: f64,
+    span_ms: f64,
+    out_fps: u32,
+}
+
+#[derive(Default)]
+struct SegmentState {
+    dir: Option<PathBuf>,
+    ready: Option<ReadySegment>,
+}
+
 struct Shared {
     inner: Mutex<Inner>,
     cancel: AtomicBool,
@@ -377,6 +396,9 @@ struct Shared {
     frames: Mutex<FrameCache>,
     /// Newest prefetch request; older workers see the bump and stop.
     prefetch_gen: std::sync::atomic::AtomicU64,
+    segment: Mutex<SegmentState>,
+    /// Newest segment request; an older render sees the bump and stops.
+    segment_gen: std::sync::atomic::AtomicU64,
     /// Frame requests being served right now. A burst (fast scrubbing)
     /// must not spawn unbounded threads, and the prefetcher steps aside
     /// while a live request waits for the renderer.
@@ -2093,6 +2115,183 @@ async fn preview(state: tauri::State<'_, App>, time_ms: f64) -> Result<String, S
     .map_err(err_str)?
 }
 
+/// Renders a stretch of the replay to a real video file the Analyze
+/// window can play back smoothly. `span_ms` of song time at `out_fps`
+/// frames per song second: at 60 that is real time, at 240 it plays four
+/// times slower without losing a single frame.
+#[tauri::command]
+fn prepare_segment(
+    state: tauri::State<'_, App>,
+    app_handle: tauri::AppHandle,
+    start_ms: f64,
+    span_ms: f64,
+    height: u32,
+    out_fps: u32,
+) -> Result<u64, String> {
+    let app = state.inner().clone();
+    let token = app.segment_gen.fetch_add(1, Ordering::SeqCst) + 1;
+    // Everything the render needs, copied out so the renderer never holds
+    // the lock the still frames and the UI need.
+    let (replay, map, cfg, mut params, ghost, ffmpeg, settings_w, settings_h, encoder, clip) = {
+        let inner = app.lock();
+        let (_, r) = inner.replay.as_ref().ok_or("no replay loaded")?;
+        let (_, m) = inner.map.as_ref().ok_or("no map loaded")?;
+        let cfg = effective_config(&inner);
+        let params = SceneParams::from(&cfg);
+        let ghost = inner.ghost.as_ref().map(|(_, g)| g.clone());
+        (
+            r.clone(),
+            m.clone(),
+            cfg,
+            params,
+            ghost,
+            resolve_ffmpeg(&inner.settings),
+            inner.settings.width,
+            inner.settings.height,
+            inner.settings.encoder.clone(),
+            inner.clip,
+        )
+    };
+    let (main_map, main_mods) = rhythia_render::mods::map_for_replay(&map, &replay);
+    params.grid_scale = main_mods.grid_scale;
+    params.apply_speed(replay.speed);
+
+    let h = (height.clamp(360, 2160) / 2) * 2;
+    let w = if settings_h > settings_w {
+        ((h * settings_w / settings_h) / 2) * 2
+    } else {
+        ((h * 16 / 9) / 2) * 2
+    };
+    let fps = out_fps.clamp(30, 480);
+    let run_end = clip.map(|c| c.1).unwrap_or(f64::INFINITY);
+    let start = start_ms.max(0.0);
+    let end = (start + span_ms.max(200.0)).min(run_end.max(start + 200.0));
+
+    let dir = {
+        let mut seg = app.segment.lock().unwrap_or_else(|p| p.into_inner());
+        if seg.dir.is_none() {
+            let d = std::env::temp_dir().join(format!("rhythr-segments-{}", std::process::id()));
+            let _ = std::fs::create_dir_all(&d);
+            seg.dir = Some(d);
+        }
+        seg.dir.clone().unwrap()
+    };
+    let out = dir.join(format!("seg{token}.mp4"));
+
+    std::thread::spawn(move || {
+        let emit_err = |msg: String| {
+            let _ = app_handle.emit("segment-error", serde_json::json!({"token": token, "message": msg}));
+        };
+        let renderer = match rhythia_render::Renderer::new(w, h, cfg.hud_font.as_deref()) {
+            Ok(r) => r,
+            Err(e) => return emit_err(e.to_string()),
+        };
+        let ghost_opts = ghost.map(|g| rhythia_render::video::GhostOptions {
+            replay: g,
+            color: GHOST_COLOR,
+        });
+        let opts = rhythia_render::video::VideoOptions {
+            fps,
+            start_ms: start,
+            end_ms: end,
+            ffmpeg,
+            audio: None,
+            crf: 20,
+            preset: "ultrafast".into(),
+            encoder,
+            results_secs: 0.0,
+            motion_blur: 0,
+            music_volume: 0.0,
+            hitsounds: None,
+            ghost: ghost_opts,
+            // Starts instantly and seeks anywhere: the moov atom up front
+            // and a keyframe twice a second.
+            extra_output_args: vec![
+                "-movflags".into(),
+                "+faststart".into(),
+                "-g".into(),
+                (fps / 2).max(1).to_string(),
+            ],
+            background_video: None,
+        };
+        let app2 = app.clone();
+        let handle2 = app_handle.clone();
+        let mut last_pct = u64::MAX;
+        let res = rhythia_render::video::render_video(
+            &renderer,
+            &params,
+            &cfg,
+            &replay,
+            &main_map,
+            &out,
+            &opts,
+            move |done, total| {
+                if app2.segment_gen.load(Ordering::SeqCst) != token {
+                    return false; // superseded — stop rendering
+                }
+                let pct = if total > 0 { done * 100 / total } else { 0 };
+                if pct != last_pct {
+                    last_pct = pct;
+                    let _ = handle2.emit(
+                        "segment-progress",
+                        serde_json::json!({"token": token, "pct": pct}),
+                    );
+                }
+                true
+            },
+        );
+        if app.segment_gen.load(Ordering::SeqCst) != token {
+            let _ = std::fs::remove_file(&out);
+            return;
+        }
+        match res {
+            Ok(()) => {
+                {
+                    let mut seg = app.segment.lock().unwrap_or_else(|p| p.into_inner());
+                    if let Some(old) = seg.ready.take() {
+                        let _ = std::fs::remove_file(&old.path);
+                    }
+                    seg.ready = Some(ReadySegment {
+                        token,
+                        path: out.clone(),
+                        start_ms: start,
+                        span_ms: end - start,
+                        out_fps: fps,
+                    });
+                }
+                let _ = app_handle.emit(
+                    "segment-ready",
+                    serde_json::json!({
+                        "token": token,
+                        "startMs": start,
+                        "spanMs": end - start,
+                        "outFps": fps,
+                    }),
+                );
+            }
+            Err(rhythia_render::Error::Cancelled) => {
+                let _ = std::fs::remove_file(&out);
+            }
+            Err(e) => {
+                let _ = std::fs::remove_file(&out);
+                emit_err(e.to_string());
+            }
+        }
+    });
+    Ok(token)
+}
+
+/// Drops the prepared segment (playback stopped, sources changed).
+#[tauri::command]
+fn cancel_segment(state: tauri::State<'_, App>) {
+    let app = state.inner();
+    app.segment_gen.fetch_add(1, Ordering::SeqCst);
+    let mut seg = app.segment.lock().unwrap_or_else(|p| p.into_inner());
+    if let Some(old) = seg.ready.take() {
+        let _ = std::fs::remove_file(&old.path);
+    }
+}
+
 /// Answers one `rhframe` request: a cached frame if the prefetcher got
 /// there first, otherwise a fresh render.
 fn serve_frame(app_handle: &tauri::AppHandle, query: &str) -> Result<Arc<Vec<u8>>, String> {
@@ -2870,6 +3069,7 @@ fn run_render_job(
         None => (0.0, run_end),
     };
     let opts = rhythia_render::video::VideoOptions {
+        extra_output_args: Vec::new(),
         fps: job.fps,
         start_ms,
         end_ms,
@@ -2994,6 +3194,8 @@ fn main() {
         frames: Mutex::new(FrameCache::default()),
         prefetch_gen: std::sync::atomic::AtomicU64::new(0),
         frame_jobs: std::sync::atomic::AtomicUsize::new(0),
+        segment: Mutex::new(SegmentState::default()),
+        segment_gen: std::sync::atomic::AtomicU64::new(0),
         render_thread: Mutex::new(None),
     });
 
@@ -3027,6 +3229,16 @@ fn main() {
                 }
                 inner.replay = Some((PathBuf::from(path), replay));
                 normalize_time_bases(&mut inner);
+            }
+        }
+    }
+
+    // Segments from a previous run (a crash, a kill) are dead weight.
+    if let Ok(rd) = std::fs::read_dir(std::env::temp_dir()) {
+        for e in rd.flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if name.starts_with("rhythr-segments-") {
+                let _ = std::fs::remove_dir_all(e.path());
             }
         }
     }
@@ -3070,6 +3282,71 @@ fn main() {
                         "text/plain",
                         b"frame renderer panicked".to_vec(),
                     ),
+                }
+            });
+        })
+        // Playback segments: a real video file, served with byte ranges
+        // because that is what a <video> element needs to start and seek.
+        .register_asynchronous_uri_scheme_protocol("rhvideo", |ctx, req, responder| {
+            let app_handle = ctx.app_handle().clone();
+            let range = req
+                .headers()
+                .get(tauri::http::header::RANGE)
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string());
+            std::thread::spawn(move || {
+                let responder = std::sync::Mutex::new(Some(responder));
+                let answer = |status: tauri::http::StatusCode,
+                              body: Vec<u8>,
+                              content_range: Option<String>| {
+                    if let Some(r) = responder.lock().ok().and_then(|mut g| g.take()) {
+                        let mut b = tauri::http::Response::builder()
+                            .status(status)
+                            .header(tauri::http::header::CONTENT_TYPE, "video/mp4")
+                            .header(tauri::http::header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                            .header(tauri::http::header::ACCEPT_RANGES, "bytes")
+                            .header(tauri::http::header::CACHE_CONTROL, "no-store");
+                        if let Some(cr) = content_range {
+                            b = b.header(tauri::http::header::CONTENT_RANGE, cr);
+                        }
+                        if let Ok(resp) = b.body(body) {
+                            r.respond(resp);
+                        }
+                    }
+                };
+                let path = app_handle.try_state::<App>().and_then(|app| {
+                    let seg = app.segment.lock().unwrap_or_else(|p| p.into_inner());
+                    seg.ready.as_ref().map(|s| s.path.clone())
+                });
+                let Some(path) = path else {
+                    return answer(tauri::http::StatusCode::NOT_FOUND, Vec::new(), None);
+                };
+                let Ok(bytes) = std::fs::read(&path) else {
+                    return answer(tauri::http::StatusCode::NOT_FOUND, Vec::new(), None);
+                };
+                let total = bytes.len() as u64;
+                match range
+                    .as_deref()
+                    .and_then(|r| r.strip_prefix("bytes="))
+                    .map(|r| {
+                        let mut it = r.split('-');
+                        let s = it.next().unwrap_or("").parse::<u64>().unwrap_or(0);
+                        let e = it
+                            .next()
+                            .filter(|v| !v.is_empty())
+                            .and_then(|v| v.parse::<u64>().ok())
+                            .unwrap_or(total.saturating_sub(1));
+                        (s.min(total.saturating_sub(1)), e.min(total.saturating_sub(1)))
+                    }) {
+                    Some((s, e)) if total > 0 => {
+                        let slice = bytes[s as usize..=e as usize].to_vec();
+                        answer(
+                            tauri::http::StatusCode::PARTIAL_CONTENT,
+                            slice,
+                            Some(format!("bytes {s}-{e}/{total}")),
+                        )
+                    }
+                    _ => answer(tauri::http::StatusCode::OK, bytes, None),
                 }
             });
         })
@@ -3141,6 +3418,8 @@ fn main() {
             frame_geometry_batch,
             prefetch_frames,
             cancel_prefetch,
+            prepare_segment,
+            cancel_segment,
             analysis_data,
             save_text_file,
             save_data_url,

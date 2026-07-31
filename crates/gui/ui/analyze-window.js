@@ -63,7 +63,247 @@ let playbackScale = false;
 let loopFps = 0;
 let lastTick = 0;
 let lastPrefetchK = -1e9;
+// Which playback engine this machine can actually use. "video" plays a
+// rendered segment (smooth at any size); "stream" pushes single frames
+// (works everywhere, costs more per pixel). Chosen automatically.
+let engine = "video";
+// Short trace of what the playback engine did last — visible under
+// View -> Diagnostics, so a problem report says where it went wrong.
+const trace = [];
+function tr(s) {
+  trace.push(s);
+  if (trace.length > 6) trace.shift();
+}
 let loopFails = 0;
+
+// Playback runs on a real video the renderer produced: the webview
+// decodes it in hardware, which is the only way to get a genuinely
+// smooth picture at full window size. Stills (paused, stepping,
+// scrubbing) keep using the on-demand renderer, which is exact and
+// instant.
+const seg = {
+  token: 0,
+  startMs: 0,
+  spanMs: 0,
+  outFps: 60,
+  ready: false,
+  preparing: false,
+  wantPlay: false,
+  spanSetting: 12000, // song ms per segment
+};
+
+const videoUrl = (token) => {
+  const q = `v=${token}`;
+  return navigator.userAgent.includes("Windows")
+    ? `http://rhvideo.localhost/seg.mp4?${q}`
+    : `rhvideo://localhost/seg.mp4?${q}`;
+};
+
+/// Frames per SONG second the renderer must produce so that playing the
+/// result at `speed` still shows ~60 frames a second: at 1x that is 60,
+/// at 0.25x it is 240. Every displayed frame is then a real rendered
+/// frame — no duplicates, no stutter.
+function segmentFps() {
+  return Math.round(clamp(60 / clamp(play.factor, 0.0625, 4), 60, 480));
+}
+
+/// What the video element runs at. Its duration equals the song span, so
+/// the rate IS the playback speed.
+function videoRate() {
+  return clamp(play.factor, 0.0625, 4);
+}
+
+/// How much song time to prepare: enough to be useful, capped so the
+/// wait stays short at slow speeds (they need far more frames).
+function segmentSpan() {
+  const frames = 900; // ~10 s of rendering on a mid-range GPU
+  return clamp((frames / segmentFps()) * 1000, 1500, seg.spanSetting);
+}
+
+function segmentCovers(t) {
+  return seg.ready && t >= seg.startMs - 1 && t < seg.startMs + seg.spanMs - 60;
+}
+
+function showPrep(on, text) {
+  $("an-prep").hidden = !on;
+  if (text) $("an-prep-text").textContent = text;
+  if (!on) $("an-prep-fill").style.width = "0%";
+}
+
+function requestSegment(fromMs, autoPlay) {
+  seg.ready = false;
+  seg.preparing = true;
+  seg.wantPlay = autoPlay;
+  showPrep(true, `Preparing ${(segmentSpan() / 1000).toFixed(1)} s at ${play.factor}×…`);
+  invoke("prepare_segment", {
+    startMs: Math.round(fromMs),
+    spanMs: segmentSpan(),
+    height: lastRenderH || 720,
+    outFps: segmentFps(),
+  })
+    .then((token) => {
+      seg.token = token;
+    })
+    .catch((e) => {
+      seg.preparing = false;
+      showPrep(false);
+      msg(`Could not prepare playback: ${e}`);
+    });
+}
+
+// Overlay geometry for the whole segment, on the video's own frame grid
+// so the boxes never lag the picture. Fetched once per segment; nothing
+// crosses the IPC boundary during playback.
+let segGeo = { times: [], list: [] };
+
+async function primeSegmentGeometry() {
+  const stepMs = 1000 / seg.outFps;
+  const count = Math.min(1200, Math.round(seg.spanMs / stepMs));
+  const times = [];
+  for (let i = 0; i < count; i++) times.push(seg.startMs + i * stepMs);
+  segGeo = { times: [], list: [] };
+  for (let i = 0; i < times.length; i += 300) {
+    const chunk = times.slice(i, i + 300);
+    try {
+      const got = await invoke("frame_geometry_batch", { times: chunk });
+      segGeo.times.push(...chunk);
+      segGeo.list.push(...got);
+    } catch (e) {
+      break;
+    }
+  }
+}
+
+function geometryNear(t) {
+  const a = segGeo.times;
+  if (!a.length) return null;
+  let lo = 0;
+  let hi = a.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (a[mid] < t) lo = mid + 1;
+    else hi = mid;
+  }
+  const cand = lo > 0 && Math.abs(a[lo - 1] - t) < Math.abs(a[lo] - t) ? lo - 1 : lo;
+  return segGeo.list[cand] || null;
+}
+
+function dropSegment() {
+  seg.ready = false;
+  seg.preparing = false;
+  seg.wantPlay = false;
+  segGeo = { times: [], list: [] };
+  showPrep(false);
+  const v = $("an-video");
+  v.pause();
+  v.removeAttribute("src");
+  v.load();
+  if (segObjectUrl) {
+    URL.revokeObjectURL(segObjectUrl);
+    segObjectUrl = null;
+  }
+  invoke("cancel_segment").catch(() => {});
+}
+
+// The video holds `span` song-seconds at `outFps` frames each, so its
+// duration is exactly the song span: video seconds ARE song seconds.
+async function startVideoPlayback() {
+  const v = $("an-video");
+  // Wait for real data: some webviews accept the source and then never
+  // decode anything, which would look like a frozen picture.
+  if (v.readyState < 2) {
+    const ok = await new Promise((resolve) => {
+      let done = false;
+      const finish = (val) => {
+        if (done) return;
+        done = true;
+        clearTimeout(t);
+        v.removeEventListener("loadeddata", onOk);
+        v.removeEventListener("error", onErr);
+        resolve(val);
+      };
+      const onOk = () => finish(true);
+      const onErr = () => finish(false);
+      const t = setTimeout(() => finish(false), 5000);
+      v.addEventListener("loadeddata", onOk);
+      v.addEventListener("error", onErr);
+    });
+    if (!ok) {
+      fallbackToStreaming(v.error ? `decoder error ${v.error.code}` : "no data");
+      return;
+    }
+  }
+  tr("video play");
+  document.body.classList.add("an-playing");
+  v.hidden = false;
+  $("an-canvas").style.left = "";
+  v.currentTime = clamp((currentMs - seg.startMs) / 1000, 0, Math.max(0, (seg.spanMs - 40) / 1000));
+  v.playbackRate = videoRate();
+  // Do not await play(): some engines never resolve that promise even
+  // though playback starts, which would leave the overlay loop dead.
+  v.play().catch((e) => fallbackToStreaming(String(e)));
+  // Watchdog: an engine can accept the source, decode a frame and still
+  // never advance. Only real movement counts as working playback.
+  const t0 = v.currentTime;
+  clearTimeout(watchdog);
+  watchdog = setTimeout(() => {
+    if (play.on && engine === "video" && !v.hidden && v.currentTime <= t0 + 0.01) {
+      fallbackToStreaming("video did not advance");
+    }
+  }, 1500);
+  videoTick();
+}
+
+/// The overlay follows the video's own clock — one callback per decoded
+/// frame, so it can never drift from the picture.
+function videoTick() {
+  const v = $("an-video");
+  if (!play.on || v.hidden) return;
+  currentMs = seg.startMs + v.currentTime * 1000;
+  updateTime();
+  drawScrub();
+  syncOverlayToVideo();
+  const geo = geometryNear(currentMs);
+  if (geo) lastFrame = geo;
+  const cv = $("an-canvas");
+  cv.getContext("2d").clearRect(0, 0, cv.width, cv.height);
+  drawOverlay();
+  refreshLive();
+  // Prepare the next stretch while this one still plays.
+  if (!seg.preparing && v.duration && v.currentTime > v.duration * 0.6) {
+    requestSegment(seg.startMs + seg.spanMs, false);
+  }
+  if (v.ended) {
+    if (seg.ready && seg.startMs > currentMs - 10) {
+      // The next stretch arrived — carry straight on.
+      startVideoPlayback();
+      return;
+    }
+    if (!seg.preparing) requestSegment(currentMs, true);
+    return;
+  }
+  // Plain rAF: requestVideoFrameCallback exists on some engines but
+  // never fires there, which would stop the overlay after one frame.
+  requestAnimationFrame(videoTick);
+}
+
+/// The overlay canvas must sit exactly on the video picture.
+function syncOverlayToVideo() {
+  const v = $("an-video");
+  const cv = $("an-canvas");
+  const r = v.getBoundingClientRect();
+  const s = $("stage").getBoundingClientRect();
+  cv.style.left = `${r.left - s.left}px`;
+  cv.style.top = `${r.top - s.top}px`;
+  cv.style.width = `${r.width}px`;
+  cv.style.height = `${r.height}px`;
+  const w = v.videoWidth || 1;
+  const h = v.videoHeight || 1;
+  if (cv.width !== w || cv.height !== h) {
+    cv.width = w;
+    cv.height = h;
+  }
+}
 let hideChromeTimer = null;
 // Set by render events; status polling alone lags a whole render behind.
 let renderBusy = false;
@@ -266,13 +506,18 @@ async function runPreview() {
 
 function seek(t) {
   currentMs = clamp(t, 0, runEnd());
-  play.startWall = performance.now();
-  play.startMs = Math.round(currentMs);
-  play.k = -1;
-  lastPrefetchK = -1e9;
-  if (!play.on) cancelPrefetch();
   updateTime();
   drawScrub();
+  if (play.on && segmentCovers(currentMs) && !$("an-video").hidden) {
+    // Inside the prepared stretch: instant, no re-render.
+    $("an-video").currentTime = (currentMs - seg.startMs) / 1000;
+    return;
+  }
+  if (play.on) {
+    requestSegment(currentMs, true);
+    return;
+  }
+  cancelPrefetch();
   schedulePreview();
 }
 
@@ -288,6 +533,8 @@ function updateTime() {
 /// is scaled and everything stays sharp.
 function syncCanvas() {
   const cv = $("an-canvas");
+  cv.style.left = "";
+  cv.style.top = "";
   const stage = $("stage").getBoundingClientRect();
   if (!currentBitmap || !stage.width || !stage.height) return false;
   const ar = currentBitmap.width / currentBitmap.height;
@@ -309,6 +556,14 @@ function syncCanvas() {
 }
 
 function drawFrame() {
+  if (play.on && !$("an-video").hidden) {
+    // Video mode: the picture comes from the video element, the canvas
+    // carries the overlay only.
+    const cv = $("an-canvas");
+    cv.getContext("2d").clearRect(0, 0, cv.width, cv.height);
+    drawOverlay();
+    return;
+  }
   if (!syncCanvas()) return;
   const ctx = $("an-canvas").getContext("2d");
   ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -613,6 +868,7 @@ function cancelPrefetch() {
 }
 
 let stillTimer = null;
+let watchdog = null;
 
 function setPlaying(on) {
   if (on && (!data || !status?.replay)) return;
@@ -621,40 +877,104 @@ function setPlaying(on) {
   $("an-play").textContent = on ? "⏸" : "▶";
   document.body.classList.toggle("an-immersive", on && opt.immersive);
   clearTimeout(stillTimer);
-  if (!on) cancelPrefetch();
-  if (opt.quality === "auto" && autoScale < 100) {
-    if (on) {
-      // Playback resumes at the scale this machine can hold.
-      playbackScale = true;
-      lastRenderH = 0;
-      syncRenderSize();
-    } else {
-      // Paused for a closer look: back to full sharpness shortly after.
+  if (!on) {
+    cancelPrefetch();
+    const v = $("an-video");
+    v.pause();
+    v.hidden = true;
+    document.body.classList.remove("an-playing");
+    showPrep(false);
+    // Back to the exact, full-resolution still.
+    if (opt.quality === "auto" && autoScale < 100) {
       stillTimer = setTimeout(() => {
         playbackScale = false;
         lastRenderH = 0;
         syncRenderSize();
-      }, 400);
+      }, 300);
     }
+    schedulePreview();
+    return;
   }
-  if (on) {
-    if (currentMs >= runEnd() - 1) currentMs = 0;
-    play.startWall = performance.now();
-    // Whole-ms base: the cache is keyed by rounded times.
-    play.startMs = Math.round(currentMs);
-    currentMs = play.startMs;
-    play.k = -1; // the first tick (k = 0) still paints the start frame
-    fps = 0;
-    loopFps = 0;
-    lastTick = 0;
-    lastPrefetchK = -1e9;
-    loopFails = 0;
-    // The learned scale carries across the session; only re-measure
-    // while we are still at full size.
-    autoChecked = autoScale < 100;
-    prefetch(play.startMs);
-    primeGeometry(play.startMs, frameStep(), 45);
-    pump(play.gen);
+  if (currentMs >= runEnd() - 1) currentMs = 0;
+  if (engine === "video") {
+    if (segmentCovers(currentMs)) startVideoPlayback();
+    else requestSegment(currentMs, true);
+    return;
+  }
+  startStreaming();
+}
+
+/// Frame-by-frame engine: works on any platform, but every pixel travels
+/// through the image decoder, so it is the fallback.
+function startStreaming() {
+  tr("stream start");
+  play.startWall = performance.now();
+  play.startMs = Math.round(currentMs);
+  play.k = -1;
+  fps = 0;
+  loopFps = 0;
+  lastTick = 0;
+  lastPrefetchK = -1e9;
+  loopFails = 0;
+  autoChecked = autoScale < 100;
+  prefetch(play.startMs);
+  primeGeometry(play.startMs, frameStep(), 45);
+  pump(play.gen);
+}
+
+/// The video element never became ready — this platform cannot play the
+/// prepared segment, so switch to frames for the rest of the session.
+function fallbackToStreaming(why) {
+  tr(`fallback: ${why}`);
+  clearTimeout(watchdog);
+  engine = "stream";
+  transportNote = `Segment playback unavailable (${why}) — using single frames.`;
+  dropSegment();
+  const v = $("an-video");
+  v.hidden = true;
+  document.body.classList.remove("an-playing");
+  if (play.on) startStreaming();
+}
+
+/// A prepared segment landed: load it and (if we were waiting) play.
+let segObjectUrl = null;
+
+async function onSegmentReady(info) {
+  tr(`ready t=${info.token}`);
+  if (info.token !== seg.token) return;
+  seg.startMs = info.startMs;
+  seg.spanMs = info.spanMs;
+  seg.outFps = info.outFps;
+  const v = $("an-video");
+  // The media decoder cannot reach a custom URI scheme on every platform,
+  // so the segment is handed over as an in-memory object instead — a few
+  // MB, and it plays identically everywhere.
+  try {
+    const res = await fetch(videoUrl(info.token));
+    if (!res.ok) throw new Error(`segment ${res.status}`);
+    const blob = await res.blob();
+    if (info.token !== seg.token) return;
+    if (segObjectUrl) URL.revokeObjectURL(segObjectUrl);
+    segObjectUrl = URL.createObjectURL(blob);
+    tr(`blob ${(blob.size / 1048576).toFixed(1)}MB`);
+    v.src = segObjectUrl;
+    v.load();
+  } catch (e) {
+    seg.preparing = false;
+    showPrep(false);
+    setPlaying(false);
+    msg(`Could not load the prepared video: ${e}`);
+    return;
+  }
+  seg.ready = true;
+  seg.preparing = false;
+  await primeSegmentGeometry();
+  showPrep(false);
+  if (seg.wantPlay && play.on) {
+    seg.wantPlay = false;
+    startVideoPlayback();
+  } else if (seg.wantPlay) {
+    seg.wantPlay = false;
   }
 }
 
@@ -749,26 +1069,33 @@ async function pump(gen) {
 function stepFrame(dir) {
   const ft = data?.main?.frames?.t;
   if (!ft?.length) return;
-  setPlaying(false);
+  if (play.on) setPlaying(false);
   let i = lastIndexLE(ft, currentMs);
   if (!(dir < 0 && i >= 0 && ft[i] < currentMs)) i += dir;
   seek(ft[clamp(i, 0, ft.length - 1)]);
 }
 
+let speedTimer = null;
+
 function setSpeed(v) {
-  const next = clamp(v, 0.01, 4);
-  if (play.on && next !== play.factor) {
-    // The grid changes with the speed: restart the clock from here, or the
-    // playhead jumps by (elapsed × speed difference).
-    play.startWall = performance.now();
-    play.startMs = Math.round(currentMs);
-    play.k = -1;
-    lastPrefetchK = -1e9;
-    cancelPrefetch();
-  }
+  const next = clamp(v, 0.0625, 4);
+  const changed = next !== play.factor;
   play.factor = next;
   $("an-speed").value = String(Math.round(play.factor * 100));
   $("an-speed-num").value = String(Math.round(play.factor * 100) / 100);
+  if (!changed) return;
+  // A segment is rendered FOR one speed (the slower it is, the more
+  // frames per song second), so a new speed needs a new segment.
+  // Debounced: dragging the slider must not start a dozen renders.
+  clearTimeout(speedTimer);
+  if (play.on) {
+    $("an-video").playbackRate = videoRate(); // instant, until the new one lands
+    speedTimer = setTimeout(() => {
+      if (play.on) requestSegment(currentMs, true);
+    }, 500);
+  } else {
+    seg.ready = false;
+  }
 }
 
 // ------------------------------------------------------------ options
@@ -996,10 +1323,12 @@ function drawSection() {
     );
     html += card(
       "Diagnostics",
-      kv("Frame channel", transport) +
-        kv("Playback", loopFps ? `${Math.round(loopFps)} fps` : "–") +
+      kv("Engine", engine === "video" ? "rendered video" : "single frames") +
+        kv("Still frames", transport) +
+        kv("Playback", seg.ready ? `${seg.outFps} fps/song-s` : seg.preparing ? "preparing…" : loopFps ? `${Math.round(loopFps)} fps` : "idle") +
+        kv("Segment", seg.ready ? `${fmtMs(seg.startMs)} + ${(seg.spanMs / 1000).toFixed(1)}s` : "–") +
         kv("Render size", `${lastRenderH}p at ${scalePct()}%`) +
-        kv("Frames ready", `${geoCache.size} geometry`) +
+        `<div class="an-list"><span class="hint">${esc(trace.join(" · ") || "—")}</span></div>` +
         (transportNote ? `<p class="hint">${esc(transportNote)}</p>` : "") +
         `<p class="hint">If playback stalls, this tells us where. "fetch" is the fast path; the window falls back on its own if a platform blocks it.</p>`,
     );
@@ -1527,10 +1856,30 @@ window.addEventListener("DOMContentLoaded", async () => {
   }).observe($("stage"));
 
   // The main window drives which replay is loaded; follow its changes.
-  listen("sources-changed", () => refresh()).catch(() => {});
+  listen("sources-changed", () => {
+    dropSegment();
+    refresh();
+  }).catch(() => {});
+  listen("segment-progress", (e) => {
+    if (e.payload?.token !== seg.token) return;
+    $("an-prep-fill").style.width = `${e.payload.pct}%`;
+  }).catch(() => {});
+  listen("segment-ready", (e) => onSegmentReady(e.payload)).catch(() => {});
+  listen("segment-error", (e) => {
+    if (e.payload?.token !== seg.token) return;
+    seg.preparing = false;
+    showPrep(false);
+    setPlaying(false);
+    msg(`Could not prepare playback: ${e.payload.message}`);
+  }).catch(() => {});
+  $("an-prep-cancel").addEventListener("click", () => {
+    dropSegment();
+    setPlaying(false);
+  });
   listen("render-stage", () => {
     renderBusy = true;
     setPlaying(false);
+    dropSegment();
   }).catch(() => {});
   for (const ev of ["render-done", "render-cancelled", "render-error"]) {
     listen(ev, () => {
@@ -1555,5 +1904,6 @@ window.addEventListener("DOMContentLoaded", async () => {
 window.addEventListener("beforeunload", () => {
   play.on = false;
   cancelPrefetch();
+  invoke("cancel_segment").catch(() => {});
   invoke("set_preview_quality", { height: 720 }).catch(() => {});
 });

@@ -43,6 +43,10 @@ pub struct VideoOptions {
     pub hitsounds: Option<HitsoundOptions>,
     /// A second replay of the same map, rendered as a ghost overlay.
     pub ghost: Option<GhostOptions>,
+    /// Extra ffmpeg output arguments, appended just before the output
+    /// path — the Analyze window uses this for `+faststart` and a short
+    /// GOP so its segments start and seek instantly.
+    pub extra_output_args: Vec<String>,
     /// Custom VIDEO background: decoded by the same ffmpeg, muted and
     /// looped from its start point, one frame per output frame. (Image
     /// backgrounds ride the config's background layers instead.) The
@@ -87,6 +91,7 @@ impl Default for VideoOptions {
             music_volume: 1.0,
             hitsounds: None,
             ghost: None,
+            extra_output_args: Vec::new(),
             background_video: None,
         }
     }
@@ -323,6 +328,9 @@ pub fn render_video(
     }
     let video_dur = total_frames as f64 / opts.fps as f64;
     cmd.args(["-t", &format!("{video_dur:.3}")]);
+    for a in &opts.extra_output_args {
+        cmd.arg(a);
+    }
     cmd.arg(out);
 
     cmd.stdin(Stdio::piped());

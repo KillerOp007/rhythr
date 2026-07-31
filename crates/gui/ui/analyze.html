@@ -9,7 +9,13 @@
 </head>
 <body class="an-window">
   <div id="stage">
+    <video id="an-video" hidden playsinline muted preload="auto"></video>
     <canvas id="an-canvas"></canvas>
+    <div id="an-prep" hidden>
+      <div id="an-prep-text">Preparing playback…</div>
+      <div id="an-prep-track"><div id="an-prep-fill"></div></div>
+      <button class="btn small ghost" id="an-prep-cancel">Cancel</button>
+    </div>
     <div id="an-msg" hidden></div>
 
     <div id="an-topbar">

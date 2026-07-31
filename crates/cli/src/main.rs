@@ -463,6 +463,7 @@ fn run() -> anyhow::Result<bool> {
                 None => None,
             };
             let opts = rhythia_render::video::VideoOptions {
+        extra_output_args: Vec::new(),
                 fps,
                 start_ms,
                 end_ms,

@@ -22,6 +22,51 @@ body.an-window {
   display: block;
   cursor: crosshair;
 }
+/* Playback runs on a real video element (hardware decoded); the canvas
+   sits on top of it and carries only the overlays. */
+#an-video {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+}
+body.an-playing #an-canvas {
+  position: absolute;
+  pointer-events: auto;
+}
+
+#an-prep {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 15;
+  background: rgba(11, 14, 18, 0.92);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  min-width: 260px;
+}
+#an-prep-text {
+  font-size: 13px;
+  color: var(--text);
+}
+#an-prep-track {
+  width: 100%;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--panel-2);
+  overflow: hidden;
+}
+#an-prep-fill {
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  transition: width 0.15s linear;
+}
 
 #an-msg {
   position: absolute;
