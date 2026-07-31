@@ -1358,6 +1358,7 @@ async function applyStatus(st) {
   const replayChanged = status?.replay?.path !== st.replay?.path;
   const mapChanged = status?.map?.path !== st.map?.path;
   status = st;
+  if (st.build) $("app-ver").title = `build ${st.build}`;
   renderReplayCard();
   renderGhostCard();
   renderBackgroundCard();

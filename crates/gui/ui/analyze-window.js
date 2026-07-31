@@ -58,8 +58,8 @@ let lastRenderH = 0;
 // scale once if the machine cannot hold ~55 fps. It never changes back
 // mid-playback (a resize rebuilds the GPU pipeline).
 let autoScale = 100;
-let autoChecked = false;
 let playbackScale = false;
+let autoNextCheck = 1200;
 let loopFps = 0;
 let lastTick = 0;
 let lastPrefetchK = -1e9;
@@ -916,7 +916,7 @@ function startStreaming() {
   lastTick = 0;
   lastPrefetchK = -1e9;
   loopFails = 0;
-  autoChecked = autoScale < 100;
+  autoNextCheck = 1200; // first verdict after ~1.2 s of playback
   prefetch(play.startMs);
   primeGeometry(play.startMs, frameStep(), 45);
   pump(play.gen);
@@ -1037,17 +1037,24 @@ async function pump(gen) {
     loopFps = loopFps ? loopFps * 0.9 + inst * 0.1 : inst;
   }
   lastTick = now2;
-  // Auto resolution: after a second of playback, drop the scale once if
-  // this machine cannot keep up at the current size.
-  // (k can skip values when a frame is slow — hence >=, not ==)
-  // A stale iteration must never resize after playback stopped.
-  if (opt.quality === "auto" && !autoChecked && k >= 60 && play.on && gen === play.gen) {
-    autoChecked = true;
-    if (loopFps && loopFps < 50) {
-      autoScale = loopFps < 30 ? 50 : 70;
-      playbackScale = true;
-      lastRenderH = 0;
-      syncRenderSize();
+  // Auto resolution. Judged by WALL TIME, not by a frame count: at 3 fps
+  // a 60-frame threshold would take twenty seconds to notice anything.
+  // Cost scales with the pixel count, so the correction is sqrt-based and
+  // may repeat until the picture actually moves.
+  if (opt.quality === "auto" && play.on && gen === play.gen) {
+    const wall = performance.now() - play.startWall;
+    if (wall > autoNextCheck && loopFps) {
+      autoNextCheck = wall + 2500;
+      if (loopFps < 45 && autoScale > 25) {
+        const factor = Math.sqrt(clamp(loopFps / 55, 0.16, 1));
+        autoScale = clamp(Math.round(autoScale * factor), 25, 100);
+        playbackScale = true;
+        lastRenderH = 0;
+        tr(`auto ${autoScale}% (${Math.round(loopFps)} fps)`);
+        syncRenderSize();
+        loopFps = 0; // re-measure at the new size
+        lastTick = 0;
+      }
     }
   }
   // Keep frames and geometry a second ahead of the playhead — on the
@@ -1323,7 +1330,8 @@ function drawSection() {
     );
     html += card(
       "Diagnostics",
-      kv("Engine", engine === "video" ? "rendered video" : "single frames") +
+      kv("Build", status?.build || "?") +
+        kv("Engine", engine === "video" ? "rendered video" : "single frames") +
         kv("Still frames", transport) +
         kv("Playback", seg.ready ? `${seg.outFps} fps/song-s` : seg.preparing ? "preparing…" : loopFps ? `${Math.round(loopFps)} fps` : "idle") +
         kv("Segment", seg.ready ? `${fmtMs(seg.startMs)} + ${(seg.spanMs / 1000).toFixed(1)}s` : "–") +
@@ -1402,7 +1410,7 @@ function wireSection() {
     rb.addEventListener("change", () => {
       opt.quality = rb.dataset.q === "auto" ? "auto" : Number(rb.dataset.q);
       autoScale = 100;
-      autoChecked = false;
+      autoNextCheck = 1200;
       lastRenderH = 0;
       syncRenderSize();
     });
@@ -1682,7 +1690,7 @@ async function refresh() {
   const title = status?.replay
     ? `${status.replay.player} — ${status.map?.song_name || status.map?.title || ""}`
     : "No replay loaded";
-  $("an-title").textContent = title;
+  $("an-title").textContent = status?.build ? `${title}   ·   build ${status.build}` : title;
   if (!status?.replay || !status?.map) {
     data = null;
     dataKey = "";

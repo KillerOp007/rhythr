@@ -497,6 +497,8 @@ struct StatusDto {
     preview_height: u32,
     can_undo: bool,
     can_redo: bool,
+    /// Build identity, so a bug report always names the exact build.
+    build: String,
 }
 
 #[derive(Serialize)]
@@ -945,6 +947,7 @@ fn assemble_status(inner: &Inner, rendering: bool) -> StatusDto {
         bg_video_duration: inner.bg_duration,
         clip: inner.clip,
         preview_height: if inner.preview_height >= 240 { inner.preview_height } else { PREVIEW_H },
+        build: env!("RHYTHR_BUILD").to_string(),
         can_undo: !inner.undo_stack.is_empty(),
         can_redo: !inner.redo_stack.is_empty(),
     }

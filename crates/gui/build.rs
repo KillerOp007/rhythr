@@ -63,5 +63,17 @@ fn main() {
     if let Ok(guide) = fs::read_to_string("../../docs/USER-GUIDE.md") {
         fs::write("README.txt", guide.replace('\n', "\r\n")).expect("write README.txt");
     }
+    // A visible build identity: "which build am I running" must never be
+    // guesswork again.
+    let stamp = std::process::Command::new("git")
+        .args(["log", "-1", "--format=%cd-%h", "--date=format:%d.%m.%H%M"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_else(|| "dev".into());
+    println!("cargo:rustc-env=RHYTHR_BUILD={stamp}");
+    println!("cargo:rerun-if-changed=../../.git/HEAD");
+
     tauri_build::build();
 }
