@@ -16,6 +16,8 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager};
 
+mod live;
+
 use rhythia_formats::{map::Map, rhr::Replay};
 use rhythia_render::{scene::SceneParams, SkinConfig};
 use rhythia_sim::integrity;
@@ -34,7 +36,7 @@ const API_BEATMAP_PAGE: &str = "https://production.rhythia.com/api/getBeatmapPag
 /// Refuse to download maps larger than this (malformed/hostile responses).
 const MAX_MAP_BYTES: u64 = 512 * 1024 * 1024;
 /// Ghost overlay colour (sRGB 0..1) — a warm orange, clearly distinct.
-const GHOST_COLOR: [f32; 3] = [1.0, 0.55, 0.24];
+pub(crate) const GHOST_COLOR: [f32; 3] = [1.0, 0.55, 0.24];
 const PREVIEW_W: u32 = 1280;
 const PREVIEW_H: u32 = 720;
 
@@ -2296,6 +2298,123 @@ fn prepare_segment(
     Ok(token)
 }
 
+/// Starts the live Analyze engine: creates a wgpu surface on the main
+/// thread (a Metal requirement), snapshots everything the render thread
+/// needs, and spawns it. Returns false when live mode is unavailable.
+#[tauri::command]
+async fn start_live_session(
+    state: tauri::State<'_, App>,
+    live: tauri::State<'_, live::LiveHandles>,
+    app_handle: tauri::AppHandle,
+) -> Result<bool, String> {
+    // Native mode ships on Windows; other platforms keep the proven
+    // fallback engines unless explicitly forced (testing).
+    let forced = std::env::var("RHYTHR_NATIVE_ANALYZE").is_ok();
+    if !(cfg!(target_os = "windows") || forced) {
+        return Ok(false);
+    }
+    {
+        let mut guard = live.0.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(old) = guard.take() {
+            let _ = old.tx.send(live::LiveCmd::Stop);
+        }
+    }
+    let window = app_handle
+        .get_webview_window("analyze")
+        .ok_or("analyze window not open")?;
+    let size = window.inner_size().map_err(err_str)?;
+
+    let app = state.inner().clone();
+    let init = {
+        let inner = app.lock();
+        let (_, r) = inner.replay.as_ref().ok_or("no replay loaded")?;
+        let (_, m) = inner.map.as_ref().ok_or("no map loaded")?;
+        // The analyze view keeps the SKIN's background: no custom
+        // image/video layers in live mode (explicit user decision).
+        let mut cfg = inner.base_config.clone();
+        apply_hud_settings(&mut cfg, &inner.base_config, &inner.settings);
+        let run_end = if r.failed() {
+            r.fail_time_ms as f64
+        } else {
+            r.length_ms()
+        };
+        live::LiveInit {
+            replay: r.clone(),
+            map: m.clone(),
+            ghost: inner.ghost.as_ref().map(|(_, g)| g.clone()),
+            cfg,
+            run_end,
+            hide_cursor: inner.analyze_hide_cursor,
+            hide_notes: inner.analyze_hide_notes,
+            win_w: size.width,
+            win_h: size.height,
+            settings_w: inner.settings.width,
+            settings_h: inner.settings.height,
+        }
+    };
+
+    // Surface creation must happen on the main thread (macOS/Metal).
+    let (stx, srx) = std::sync::mpsc::channel();
+    let win2 = window.clone();
+    window
+        .run_on_main_thread(move || {
+            let instance = wgpu::Instance::default();
+            let surface = instance.create_surface(win2.clone()).map_err(|e| e.to_string());
+            let _ = stx.send(surface.map(|s| (instance, s)));
+        })
+        .map_err(err_str)?;
+    let (instance, surface) = srx
+        .recv()
+        .map_err(|_| "surface channel closed".to_string())?
+        .map_err(|e| format!("could not create surface: {e}"))?;
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    let running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    live::spawn(
+        app_handle.clone(),
+        "analyze".into(),
+        instance,
+        surface,
+        init,
+        rx,
+        running.clone(),
+    );
+    let mut guard = live.0.lock().unwrap_or_else(|p| p.into_inner());
+    *guard = Some(live::LiveSession { tx, running });
+    Ok(true)
+}
+
+/// Transport for the live engine.
+#[tauri::command]
+fn live_cmd(
+    live: tauri::State<'_, live::LiveHandles>,
+    cmd: String,
+    value: Option<f64>,
+    w: Option<u32>,
+    h: Option<u32>,
+    hide_cursor: Option<bool>,
+    hide_notes: Option<bool>,
+) -> Result<(), String> {
+    let guard = live.0.lock().unwrap_or_else(|p| p.into_inner());
+    let Some(s) = guard.as_ref() else {
+        return Err("no live session".into());
+    };
+    let msg = match cmd.as_str() {
+        "play" => live::LiveCmd::Play,
+        "pause" => live::LiveCmd::Pause,
+        "seek" => live::LiveCmd::Seek(value.unwrap_or(0.0)),
+        "speed" => live::LiveCmd::Speed(value.unwrap_or(1.0)),
+        "resize" => live::LiveCmd::Resize(w.unwrap_or(0), h.unwrap_or(0)),
+        "view" => live::LiveCmd::View {
+            hide_cursor: hide_cursor.unwrap_or(false),
+            hide_notes: hide_notes.unwrap_or(false),
+        },
+        "stop" => live::LiveCmd::Stop,
+        other => return Err(format!("unknown live cmd: {other}")),
+    };
+    s.tx.send(msg).map_err(|_| "live thread gone".to_string())
+}
+
 /// Analyze view options — they change what the renderer draws, so the
 /// preview pipeline and all cached frames restart.
 #[tauri::command]
@@ -2794,16 +2913,55 @@ async fn open_analyze_window(app_handle: tauri::AppHandle) -> Result<(), String>
             }
         });
     }
+    let native_capable =
+        cfg!(target_os = "windows") || std::env::var("RHYTHR_NATIVE_ANALYZE").is_ok();
     let win = WebviewWindowBuilder::new(&app_handle, "analyze", WebviewUrl::App("analyze.html".into()))
         .title("rhythr — Analyze")
         .inner_size(1280.0, 800.0)
         .min_inner_size(760.0, 520.0)
+        // Live mode paints BEHIND the webview; the page body goes
+        // transparent so the wgpu frame shows through.
+        .transparent(native_capable)
         .build()
         .map_err(err_str)?;
     // Closing it drops the preview back to its normal size.
     let handle = app_handle.clone();
+    let win_for_close = win.clone();
     win.on_window_event(move |e| {
+        if let tauri::WindowEvent::CloseRequested { api, .. } = e {
+            // The live thread owns a surface on this window: it MUST stop
+            // and drop it before the X11/Win32 window dies, or the next
+            // present hits a dead drawable and takes the process down.
+            let stopping = {
+                if let Some(lh) = handle.try_state::<live::LiveHandles>() {
+                    let mut guard = lh.0.lock().unwrap_or_else(|p| p.into_inner());
+                    guard.take()
+                } else {
+                    None
+                }
+            };
+            if let Some(s) = stopping {
+                api.prevent_close();
+                let _ = s.tx.send(live::LiveCmd::Stop);
+                let win2 = win_for_close.clone();
+                std::thread::spawn(move || {
+                    for _ in 0..100 {
+                        if !s.running.load(Ordering::SeqCst) {
+                            break;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                    }
+                    let _ = win2.destroy();
+                });
+            }
+        }
         if matches!(e, tauri::WindowEvent::Destroyed) {
+            if let Some(lh) = handle.try_state::<live::LiveHandles>() {
+                let mut guard = lh.0.lock().unwrap_or_else(|p| p.into_inner());
+                if let Some(s) = guard.take() {
+                    let _ = s.tx.send(live::LiveCmd::Stop);
+                }
+            }
             if let Some(app) = handle.try_state::<App>() {
                 let mut inner = app.lock();
                 let changed = inner.preview_height != PREVIEW_H
@@ -3407,6 +3565,7 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(shared)
+        .manage(live::LiveHandles::default())
         .setup(|app| {
             let _ = RESOURCE_DIR.set(app.path().resource_dir().ok());
             // A persisted VIDEO background needs its duration for the
@@ -3463,6 +3622,8 @@ fn main() {
             prepare_segment,
             cancel_segment,
             set_analyze_view,
+            start_live_session,
+            live_cmd,
             analysis_data,
             save_text_file,
             save_data_url,

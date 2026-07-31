@@ -68,7 +68,10 @@ let lastPrefetchK = -1e9;
 // Which playback engine this machine can actually use. "video" plays a
 // rendered segment (smooth at any size); "stream" pushes single frames
 // (works everywhere, costs more per pixel). Chosen automatically.
-let engine = "video";
+let engine = "video"; // "native" | "video" | "stream"
+// Live engine: the picture is painted by the GPU BEHIND this webview;
+// this page only draws overlays and controls on a transparent body.
+const liveState = { active: false, tick: null, ended: false };
 // Short trace of what the playback engine did last — visible under
 // View -> Diagnostics, so a problem report says where it went wrong.
 const trace = [];
@@ -441,6 +444,7 @@ function msg(text) {
 // ------------------------------------------------------------ preview
 
 function schedulePreview() {
+  if (engine === "native") return; // the live thread paints stills too
   if (!status?.replay || !status?.map) return;
   wanted = true;
   clearTimeout(previewTimer);
@@ -979,6 +983,10 @@ function setPlaying(on) {
   $("an-play").textContent = on ? "⏸" : "▶";
   document.body.classList.toggle("an-immersive", on && opt.immersive);
   clearTimeout(stillTimer);
+  if (!on && engine === "native") {
+    invoke("live_cmd", { cmd: "pause" }).catch(() => {});
+    return;
+  }
   if (!on) {
     cancelPrefetch();
     const v = $("an-video");
@@ -998,6 +1006,10 @@ function setPlaying(on) {
     return;
   }
   if (currentMs >= runEnd() - 1) currentMs = 0;
+  if (engine === "native") {
+    invoke("live_cmd", { cmd: "play" }).catch((e) => msg(String(e)));
+    return;
+  }
   if (engine === "video") {
     if (segmentCovers(currentMs)) {
       loadAndPlayCurrent();
@@ -1409,7 +1421,7 @@ function drawSection() {
     html += card(
       "Diagnostics",
       kv("Build", status?.build || "?") +
-        kv("Engine", engine === "video" ? "rendered video" : "single frames") +
+        kv("Engine", engine === "native" ? "live GPU (native)" : engine === "video" ? "rendered video" : "single frames") +
         kv("Still frames", transport) +
         kv("Playback", !$("an-video").hidden ? `video · ${seg.current?.outFps ?? "?"} fps/song-s` : seg.preparing ? "rendering…" : loopFps ? `stream · ${Math.round(loopFps)} fps` : "idle") +
         kv("Buffered", seg.current ? `${fmtMs(seg.current.startMs)}+${(seg.current.spanMs / 1000).toFixed(0)}s${seg.next ? ` · next ${fmtMs(seg.next.startMs)}+${(seg.next.spanMs / 1000).toFixed(0)}s` : ""}` : "–") +
@@ -1470,6 +1482,14 @@ function wireSection() {
   body.querySelectorAll("input[data-view]").forEach((cb) => {
     cb.addEventListener("change", async () => {
       opt[cb.dataset.view] = cb.checked;
+      if (engine === "native") {
+        invoke("live_cmd", {
+          cmd: "view",
+          hideCursor: !opt.gameCursor,
+          hideNotes: !opt.notes,
+        }).catch((e) => msg(String(e)));
+        return;
+      }
       try {
         status = await invoke("set_analyze_view", {
           hideCursor: !opt.gameCursor,
@@ -1811,6 +1831,12 @@ async function refresh() {
   const key = sourceKey();
   if (key === dataKey && data) return;
   await loadData(key);
+  if (engine === "native") {
+    // Sources changed: restart the live thread against the new replay.
+    liveState.active = false;
+    const ok = await bootNative();
+    if (!ok) engine = "video";
+  }
 }
 
 async function loadData(key) {
@@ -1891,6 +1917,89 @@ function toggleOptions(show) {
 window.addEventListener("error", (e) => msg(`Error: ${e.message}`));
 window.addEventListener("unhandledrejection", (e) => msg(`Error: ${e.reason}`));
 
+/// One live-tick: the native engine's clock and per-side geometry. The
+/// canvas paints ONLY overlays; the picture sits behind the webview.
+function onLiveTick(tk) {
+  liveState.tick = tk;
+  currentMs = tk.t;
+  const wasPlaying = play.on;
+  play.on = tk.playing;
+  if (wasPlaying !== tk.playing) {
+    $("an-play").textContent = tk.playing ? "⏸" : "▶";
+    document.body.classList.toggle("an-immersive", tk.playing && opt.immersive);
+  }
+  fps = tk.fps;
+  updateTime();
+  drawScrub();
+  // Overlay canvas covers the letterboxed frame rect (CSS px).
+  const dpr = window.devicePixelRatio || 1;
+  const cv = $("an-canvas");
+  const [rx, ry, rw, rh] = tk.rect;
+  cv.style.left = `${rx / dpr}px`;
+  cv.style.top = `${ry / dpr}px`;
+  cv.style.width = `${rw / dpr}px`;
+  cv.style.height = `${rh / dpr}px`;
+  if (cv.width !== tk.fw || cv.height !== tk.fh) {
+    cv.width = tk.fw;
+    cv.height = tk.fh;
+  }
+  lastFrame = { w: tk.fw, h: tk.fh, sides: tk.sides };
+  const ctx = cv.getContext("2d");
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, cv.width, cv.height);
+  drawOverlay();
+  refreshLive();
+}
+
+let nativeWired = false;
+
+function wireNativeOnce() {
+  if (nativeWired) return;
+  nativeWired = true;
+  listen("live-tick", (e) => onLiveTick(e.payload)).catch(() => {});
+  listen("live-ended", () => {
+    play.on = false;
+    $("an-play").textContent = "▶";
+    document.body.classList.remove("an-immersive");
+  }).catch(() => {});
+  listen("live-error", (e) => {
+    msg(`Live engine: ${e.payload}`);
+    tr(`live error: ${e.payload}`);
+  }).catch(() => {});
+  // Window resizes reach the render thread as physical pixels.
+  let rzTimer = null;
+  window.addEventListener("resize", () => {
+    if (engine !== "native") return;
+    clearTimeout(rzTimer);
+    rzTimer = setTimeout(() => {
+      const dpr = window.devicePixelRatio || 1;
+      invoke("live_cmd", {
+        cmd: "resize",
+        w: Math.round(window.innerWidth * dpr),
+        h: Math.round(window.innerHeight * dpr),
+      }).catch(() => {});
+    }, 120);
+  });
+}
+
+async function bootNative() {
+  try {
+    const ok = await invoke("start_live_session");
+    if (!ok) return false;
+  } catch (e) {
+    tr(`native failed: ${e}`);
+    return false;
+  }
+  engine = "native";
+  liveState.active = true;
+  document.body.classList.add("an-native");
+  // The frame path is unused in native mode.
+  $("an-video").hidden = true;
+  wireNativeOnce();
+  tr("native engine");
+  return true;
+}
+
 window.addEventListener("DOMContentLoaded", async () => {
   $("an-gear").addEventListener("click", () => toggleOptions());
   $("an-close").addEventListener("click", () => toggleOptions(false));
@@ -1904,6 +2013,13 @@ window.addEventListener("DOMContentLoaded", async () => {
   });
   $("an-speed-reset").addEventListener("click", () => setSpeed(1));
   $("an-canvas").addEventListener("click", pickNote);
+  // Native mode: the canvas is click-transparent (it spans the window
+  // under the floating controls), so picking listens on the stage.
+  $("stage").addEventListener("click", (e) => {
+    if (engine !== "native") return;
+    if (e.target !== $("stage") && e.target !== $("an-canvas")) return;
+    pickNote(e);
+  });
   $("an-secnav").addEventListener("click", (e) => {
     const b = e.target.closest("button[data-sec]");
     if (!b) return;
@@ -2012,7 +2128,10 @@ window.addEventListener("DOMContentLoaded", async () => {
   }, 5000);
 
   setSpeed(1);
-  await syncRenderSize();
+  const native = await bootNative();
+  if (!native) {
+    await syncRenderSize();
+  }
   await refresh();
   toggleOptions(true);
 });

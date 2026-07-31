@@ -267,3 +267,22 @@ body.an-immersive #an-playbar {
     box-shadow: -18px 0 40px rgba(0, 0, 0, 0.5);
   }
 }
+
+/* ── native live mode ───────────────────────────────────────── */
+/* The GPU paints the frame BEHIND the webview: everything between the
+   viewer's eye and that frame must be fully transparent. */
+body.an-native,
+body.an-native #stage {
+  background: transparent;
+}
+body.an-native #an-canvas {
+  position: absolute;
+  /* The GPU frame spans the whole window; the canvas must never eat
+     clicks meant for the controls floating above it. Note picking runs
+     from a stage-level listener instead. */
+  pointer-events: none;
+}
+body.an-native #an-options {
+  position: relative;
+  z-index: 30;
+}

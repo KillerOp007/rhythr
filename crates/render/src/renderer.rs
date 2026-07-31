@@ -97,6 +97,9 @@ pub struct SkinTextures {
 }
 
 pub struct Renderer {
+    /// Kept alive for surface creation/capabilities on the live path.
+    instance: wgpu::Instance,
+    adapter: wgpu::Adapter,
     device: wgpu::Device,
     queue: wgpu::Queue,
     width: u32,
@@ -160,7 +163,99 @@ const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
 impl Renderer {
     pub fn new(width: u32, height: u32, hud_font: Option<&[u8]>) -> Result<Renderer, Error> {
-        pollster::block_on(Self::new_async(width, height, hud_font))
+        pollster::block_on(Self::new_async(width, height, hud_font, None, None))
+    }
+
+    /// Renderer for the LIVE path: created against an existing Instance
+    /// whose Surface the adapter must be compatible with. The offscreen
+    /// pipeline is identical — presentation is a separate blit
+    /// ([`crate::present::Presenter`]).
+    pub fn new_for_surface(
+        instance: wgpu::Instance,
+        surface: &wgpu::Surface<'static>,
+        width: u32,
+        height: u32,
+        hud_font: Option<&[u8]>,
+    ) -> Result<Renderer, Error> {
+        pollster::block_on(Self::new_async(
+            width,
+            height,
+            hud_font,
+            Some(instance),
+            Some(surface),
+        ))
+    }
+
+    pub fn device(&self) -> &wgpu::Device {
+        &self.device
+    }
+
+    pub fn queue(&self) -> &wgpu::Queue {
+        &self.queue
+    }
+
+    pub fn adapter(&self) -> &wgpu::Adapter {
+        &self.adapter
+    }
+
+    pub fn instance(&self) -> &wgpu::Instance {
+        &self.instance
+    }
+
+    /// View of the offscreen frame — what the presenter blits.
+    pub fn color_view(&self) -> wgpu::TextureView {
+        self.color_tex.create_view(&Default::default())
+    }
+
+    /// Recreates the size-dependent GPU objects for a new render size.
+    /// The live window resizes often; everything else (pipelines, skin
+    /// textures, atlas) is size-independent and survives.
+    pub fn resize(&mut self, width: u32, height: u32) {
+        let (width, height) = (width.max(64), height.max(64));
+        if width == self.width && height == self.height {
+            return;
+        }
+        self.width = width;
+        self.height = height;
+        self.color_tex = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("color-target"),
+            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: COLOR_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let depth_tex = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("depth"),
+            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: DEPTH_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        self.depth_view = depth_tex.create_view(&Default::default());
+        self.queue.write_buffer(
+            &self.hud_screen_buf,
+            0,
+            bytemuck::bytes_of(&[width as f32, height as f32, 0.0f32, 0.0f32]),
+        );
+        let padded_row = (width * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
+            * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        for b in &mut self.readback_bufs {
+            *b = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("readback"),
+                size: (padded_row * height) as u64,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+        }
+        *self.readback_submissions.borrow_mut() = [None, None, None];
     }
 
     /// Whether the OUTPUT frame is portrait (Shorts/TikTok). Layout and
@@ -175,13 +270,15 @@ impl Renderer {
         width: u32,
         height: u32,
         hud_font: Option<&[u8]>,
+        instance: Option<wgpu::Instance>,
+        surface: Option<&wgpu::Surface<'static>>,
     ) -> Result<Renderer, Error> {
-        let instance = wgpu::Instance::default();
+        let instance = instance.unwrap_or_default();
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,
                 force_fallback_adapter: false,
-                compatible_surface: None,
+                compatible_surface: surface,
                 ..Default::default()
             })
             .await
@@ -363,7 +460,9 @@ impl Renderer {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: COLOR_FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
         let depth_tex = device.create_texture(&wgpu::TextureDescriptor {
@@ -602,6 +701,8 @@ impl Renderer {
         let readback_bufs = [mk_readback(), mk_readback(), mk_readback()];
 
         Ok(Renderer {
+            instance,
+            adapter,
             device,
             queue,
             width,
@@ -962,6 +1063,56 @@ impl Renderer {
         self.with_slot_pixels(0, |px| px.to_vec())
     }
 
+    /// Renders one frame WITHOUT any readback — the live path. The frame
+    /// lands in the offscreen texture; a [`crate::present::Presenter`]
+    /// blits it to the window afterwards.
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_live(
+        &self,
+        params: &SceneParams,
+        config: &SkinConfig,
+        skin: &SkinTextures,
+        replay: &Replay,
+        map: &Map,
+        song_time_ms: f64,
+        hud_state: Option<&crate::hud::HudState>,
+        ghost: Option<&crate::hud::GhostInput>,
+    ) -> Result<(), Error> {
+        match ghost {
+            None => self.submit_side(
+                params,
+                config,
+                skin,
+                replay,
+                map,
+                song_time_ms,
+                hud_state,
+                (0, self.width),
+                true,
+                None,
+                &[],
+            ),
+            Some(_) => {
+                // The ghost path in submit_frame_with_ghost only uses the
+                // slot for the final copy; a usize is still required, so
+                // route through it and drop the copy by rendering into
+                // slot 0 and never reading it. Cheaper: call the split
+                // logic directly with readback disabled.
+                self.submit_frame_with_ghost_inner(
+                    params,
+                    config,
+                    skin,
+                    replay,
+                    map,
+                    song_time_ms,
+                    hud_state,
+                    ghost,
+                    None,
+                )
+            }
+        }
+    }
+
     /// Renders one frame and queues its copy into readback slot `slot`
     /// WITHOUT waiting — pair with [`Self::with_slot_pixels`]. Submitting
     /// frame N and then reading slot N-1 overlaps GPU rendering with the
@@ -1009,6 +1160,32 @@ impl Renderer {
         ghost: Option<&crate::hud::GhostInput>,
         slot: usize,
     ) -> Result<(), Error> {
+        self.submit_frame_with_ghost_inner(
+            params,
+            config,
+            skin,
+            replay,
+            map,
+            song_time_ms,
+            hud_state,
+            ghost,
+            Some(slot),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn submit_frame_with_ghost_inner(
+        &self,
+        params: &SceneParams,
+        config: &SkinConfig,
+        skin: &SkinTextures,
+        replay: &Replay,
+        map: &Map,
+        song_time_ms: f64,
+        hud_state: Option<&crate::hud::HudState>,
+        ghost: Option<&crate::hud::GhostInput>,
+        slot: Option<usize>,
+    ) -> Result<(), Error> {
         match ghost {
             None => self.submit_side(
                 params,
@@ -1020,7 +1197,7 @@ impl Renderer {
                 hud_state,
                 (0, self.width),
                 true,
-                Some(slot),
+                slot,
                 &[],
             ),
             Some(g) => {
@@ -1127,7 +1304,7 @@ impl Renderer {
                     hud_state.map(|_| &g.state),
                     (half, self.width - half),
                     false,
-                    Some(slot),
+                    slot,
                     &race_verts,
                 )
             }

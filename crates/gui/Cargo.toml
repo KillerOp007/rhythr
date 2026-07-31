@@ -23,6 +23,7 @@ serde_json.workspace = true
 anyhow.workspace = true
 ureq = { version = "2", default-features = false, features = ["tls", "json"] }
 base64 = "0.22"
+wgpu = "30"
 png = "0.17"
 tempfile = "3"
 dirs = "6"
