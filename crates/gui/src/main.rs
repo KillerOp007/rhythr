@@ -312,6 +312,11 @@ struct Inner {
     /// Bumped with every preview invalidation; cached frames from an
     /// older generation are dropped.
     frame_gen: u64,
+    /// Analyze-window view options: hide the game's rendered cursor
+    /// (the raw-cursor overlay replaces it) and/or the notes (to study
+    /// hit areas alone). Applied to previews AND playback segments.
+    analyze_hide_cursor: bool,
+    analyze_hide_notes: bool,
     /// Multi-step layout history (Ctrl+Z / Ctrl+Y): snapshots taken
     /// before each editor action/gesture.
     undo_stack: Vec<LayoutPreset>,
@@ -660,6 +665,13 @@ fn apply_hud_settings(cfg: &mut SkinConfig, base: &SkinConfig, s: &Settings) {
 fn effective_config(inner: &Inner) -> SkinConfig {
     let mut cfg = inner.base_config.clone();
     apply_hud_settings(&mut cfg, &inner.base_config, &inner.settings);
+    if inner.analyze_hide_cursor {
+        cfg.cursor_opacity = 0.0;
+        cfg.cursor_trail_enabled = false;
+    }
+    if inner.analyze_hide_notes {
+        cfg.note_opacity = 0.0;
+    }
     // Custom background: replaces the skin's background layers. Silently
     // skipped if the file vanished — set_background validated it once.
     if let Some(p) = &inner.settings.background {
@@ -2284,6 +2296,28 @@ fn prepare_segment(
     Ok(token)
 }
 
+/// Analyze view options — they change what the renderer draws, so the
+/// preview pipeline and all cached frames restart.
+#[tauri::command]
+async fn set_analyze_view(
+    state: tauri::State<'_, App>,
+    hide_cursor: bool,
+    hide_notes: bool,
+) -> Result<StatusDto, String> {
+    let app = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut inner = app.lock();
+        if inner.analyze_hide_cursor != hide_cursor || inner.analyze_hide_notes != hide_notes {
+            inner.analyze_hide_cursor = hide_cursor;
+            inner.analyze_hide_notes = hide_notes;
+            invalidate_preview(&mut inner);
+        }
+        assemble_status(&inner, app.rendering.load(Ordering::SeqCst))
+    })
+    .await
+    .map_err(err_str)
+}
+
 /// Drops the prepared segment (playback stopped, sources changed).
 #[tauri::command]
 fn cancel_segment(state: tauri::State<'_, App>) {
@@ -2772,8 +2806,13 @@ async fn open_analyze_window(app_handle: tauri::AppHandle) -> Result<(), String>
         if matches!(e, tauri::WindowEvent::Destroyed) {
             if let Some(app) = handle.try_state::<App>() {
                 let mut inner = app.lock();
-                if inner.preview_height != PREVIEW_H {
-                    inner.preview_height = PREVIEW_H;
+                let changed = inner.preview_height != PREVIEW_H
+                    || inner.analyze_hide_cursor
+                    || inner.analyze_hide_notes;
+                inner.preview_height = PREVIEW_H;
+                inner.analyze_hide_cursor = false;
+                inner.analyze_hide_notes = false;
+                if changed {
                     invalidate_preview(&mut inner);
                 }
             }
@@ -3423,6 +3462,7 @@ fn main() {
             cancel_prefetch,
             prepare_segment,
             cancel_segment,
+            set_analyze_view,
             analysis_data,
             save_text_file,
             save_data_url,

@@ -20,6 +20,8 @@ const OK = "#58d68b";
 const opt = {
   path: true,
   raw: true,
+  gameCursor: true,
+  notes: true,
   markers: false,
   hitboxes: true,
   heatmap: false,
@@ -81,15 +83,18 @@ let loopFails = 0;
 // smooth picture at full window size. Stills (paused, stepping,
 // scrubbing) keep using the on-demand renderer, which is exact and
 // instant.
+// Segment pipeline, YouTube-style: playback NEVER waits for a render.
+// Play starts instantly on the frame stream; rendered video segments are
+// produced in the background and take over seamlessly, with the next one
+// always buffering while the current one plays.
 const seg = {
-  token: 0,
-  startMs: 0,
-  spanMs: 0,
-  outFps: 60,
-  ready: false,
+  token: 0, // latest requested token
   preparing: false,
-  wantPlay: false,
-  spanSetting: 12000, // song ms per segment
+  preparingFrom: -1,
+  switchOnReady: false,
+  spanSetting: 12000, // song ms per segment at 1x
+  current: null, // {url, startMs, spanMs, outFps} — loaded in <video>
+  next: null, // buffered follow-up
 };
 
 const videoUrl = (token) => {
@@ -99,30 +104,28 @@ const videoUrl = (token) => {
     : `rhvideo://localhost/seg.mp4?${q}`;
 };
 
-/// Frames per SONG second the renderer must produce so that playing the
-/// result at `speed` still shows ~60 frames a second: at 1x that is 60,
-/// at 0.25x it is 240. Every displayed frame is then a real rendered
-/// frame — no duplicates, no stutter.
+/// Frames per SONG second so the played result still shows ~60 frames a
+/// second at the chosen speed: 60 at 1x, 240 at 0.25x. Every displayed
+/// frame is a real rendered frame — no duplicates, no stutter.
 function segmentFps() {
   return Math.round(clamp(60 / clamp(play.factor, 0.0625, 4), 60, 480));
 }
 
-/// What the video element runs at. Its duration equals the song span, so
-/// the rate IS the playback speed.
+/// The video's duration equals its song span, so the element's rate IS
+/// the playback speed.
 function videoRate() {
   return clamp(play.factor, 0.0625, 4);
 }
 
-/// How much song time to prepare: enough to be useful, capped so the
-/// wait stays short at slow speeds (they need far more frames).
+/// Song time per segment: capped by render effort (~900 frames), so slow
+/// motion prepares shorter stretches instead of taking forever.
 function segmentSpan() {
-  const frames = 900; // ~10 s of rendering on a mid-range GPU
+  const frames = 900;
   return clamp((frames / segmentFps()) * 1000, 1500, seg.spanSetting);
 }
 
-function segmentCovers(t) {
-  return seg.ready && t >= seg.startMs - 1 && t < seg.startMs + seg.spanMs - 60;
-}
+const entryCovers = (e, t) => e && t >= e.startMs - 1 && t < e.startMs + e.spanMs - 60;
+const segmentCovers = (t) => entryCovers(seg.current, t);
 
 function showPrep(on, text) {
   $("an-prep").hidden = !on;
@@ -130,13 +133,20 @@ function showPrep(on, text) {
   if (!on) $("an-prep-fill").style.width = "0%";
 }
 
-function requestSegment(fromMs, autoPlay) {
-  seg.ready = false;
+/// Kicks off a background render. Playback keeps running on whatever is
+/// on screen; the pill is a quiet notice, never a blocker.
+function requestSegment(fromMs, switchOnReady) {
+  const from = Math.round(fromMs);
+  if (seg.preparing && Math.abs(seg.preparingFrom - from) < 500) {
+    if (switchOnReady) seg.switchOnReady = true;
+    return;
+  }
   seg.preparing = true;
-  seg.wantPlay = autoPlay;
-  showPrep(true, `Preparing ${(segmentSpan() / 1000).toFixed(1)} s at ${play.factor}×…`);
+  seg.preparingFrom = from;
+  seg.switchOnReady = switchOnReady;
+  showPrep(true, `Rendering ${(segmentSpan() / 1000).toFixed(0)} s…`);
   invoke("prepare_segment", {
-    startMs: Math.round(fromMs),
+    startMs: from,
     spanMs: segmentSpan(),
     height: lastRenderH || 720,
     outFps: segmentFps(),
@@ -147,31 +157,33 @@ function requestSegment(fromMs, autoPlay) {
     .catch((e) => {
       seg.preparing = false;
       showPrep(false);
-      msg(`Could not prepare playback: ${e}`);
+      tr(`prep failed: ${e}`);
     });
 }
 
-// Overlay geometry for the whole segment, on the video's own frame grid
-// so the boxes never lag the picture. Fetched once per segment; nothing
-// crosses the IPC boundary during playback.
+// Overlay geometry on the video's own frame grid, so the boxes never lag
+// the picture. Kept sorted; nothing crosses IPC during playback.
 let segGeo = { times: [], list: [] };
 
-async function primeSegmentGeometry() {
-  const stepMs = 1000 / seg.outFps;
-  const count = Math.min(1200, Math.round(seg.spanMs / stepMs));
+async function primeSegmentGeometry(entry) {
+  const stepMs = 1000 / entry.outFps;
+  const count = Math.min(1200, Math.round(entry.spanMs / stepMs));
   const times = [];
-  for (let i = 0; i < count; i++) times.push(seg.startMs + i * stepMs);
-  segGeo = { times: [], list: [] };
+  for (let i = 0; i < count; i++) times.push(entry.startMs + i * stepMs);
+  const merged = segGeo.times.map((t, i) => [t, segGeo.list[i]]);
   for (let i = 0; i < times.length; i += 300) {
     const chunk = times.slice(i, i + 300);
     try {
       const got = await invoke("frame_geometry_batch", { times: chunk });
-      segGeo.times.push(...chunk);
-      segGeo.list.push(...got);
+      chunk.forEach((t, j) => merged.push([t, got[j]]));
     } catch (e) {
       break;
     }
   }
+  merged.sort((a, b) => a[0] - b[0]);
+  // Keep a bounded window around the segments in flight.
+  const trimmed = merged.slice(-3600);
+  segGeo = { times: trimmed.map((x) => x[0]), list: trimmed.map((x) => x[1]) };
 }
 
 function geometryNear(t) {
@@ -188,29 +200,88 @@ function geometryNear(t) {
   return segGeo.list[cand] || null;
 }
 
+function freeEntry(e) {
+  if (e?.url) URL.revokeObjectURL(e.url);
+}
+
+function stopVideoElement() {
+  const v = $("an-video");
+  clearTimeout(watchdog);
+  v.pause();
+  v.hidden = true;
+  document.body.classList.remove("an-playing");
+}
+
 function dropSegment() {
-  seg.ready = false;
   seg.preparing = false;
-  seg.wantPlay = false;
+  seg.switchOnReady = false;
+  seg.preparingFrom = -1;
+  freeEntry(seg.current);
+  freeEntry(seg.next);
+  seg.current = null;
+  seg.next = null;
   segGeo = { times: [], list: [] };
   showPrep(false);
+  stopVideoElement();
   const v = $("an-video");
-  v.pause();
   v.removeAttribute("src");
   v.load();
-  if (segObjectUrl) {
-    URL.revokeObjectURL(segObjectUrl);
-    segObjectUrl = null;
-  }
   invoke("cancel_segment").catch(() => {});
 }
 
-// The video holds `span` song-seconds at `outFps` frames each, so its
-// duration is exactly the song span: video seconds ARE song seconds.
+/// A finished segment: fetch it into memory, prime its geometry, then
+/// either take over playback, buffer as the follow-up, or wait for Play.
+async function onSegmentReady(info) {
+  tr(`ready t=${info.token}`);
+  if (info.token !== seg.token) return;
+  let entry;
+  try {
+    const res = await fetch(videoUrl(info.token));
+    if (!res.ok) throw new Error(`segment ${res.status}`);
+    const blob = await res.blob();
+    if (info.token !== seg.token) return;
+    entry = {
+      url: URL.createObjectURL(blob),
+      startMs: info.startMs,
+      spanMs: info.spanMs,
+      outFps: info.outFps,
+    };
+    tr(`blob ${(blob.size / 1048576).toFixed(1)}MB`);
+  } catch (e) {
+    seg.preparing = false;
+    showPrep(false);
+    tr(`blob failed: ${e}`);
+    return;
+  }
+  seg.preparing = false;
+  showPrep(false);
+  await primeSegmentGeometry(entry);
+  const playingVideo = play.on && !$("an-video").hidden;
+  if (seg.switchOnReady && play.on && engine === "video" && entryCovers(entry, currentMs)) {
+    seg.switchOnReady = false;
+    freeEntry(seg.current);
+    seg.current = entry;
+    play.gen++; // stop the stream loop; the video takes over mid-flight
+    loadAndPlayCurrent();
+  } else if (playingVideo) {
+    freeEntry(seg.next);
+    seg.next = entry;
+  } else {
+    freeEntry(seg.current);
+    seg.current = entry;
+  }
+}
+
+function loadAndPlayCurrent() {
+  const v = $("an-video");
+  v.src = seg.current.url;
+  v.load();
+  startVideoPlayback();
+}
+
+// The video holds `span` song-seconds, so video seconds ARE song seconds.
 async function startVideoPlayback() {
   const v = $("an-video");
-  // Wait for real data: some webviews accept the source and then never
-  // decode anything, which would look like a frozen picture.
   if (v.readyState < 2) {
     const ok = await new Promise((resolve) => {
       let done = false;
@@ -237,13 +308,16 @@ async function startVideoPlayback() {
   document.body.classList.add("an-playing");
   v.hidden = false;
   $("an-canvas").style.left = "";
-  v.currentTime = clamp((currentMs - seg.startMs) / 1000, 0, Math.max(0, (seg.spanMs - 40) / 1000));
+  v.currentTime = clamp(
+    (currentMs - seg.current.startMs) / 1000,
+    0,
+    Math.max(0, (seg.current.spanMs - 40) / 1000),
+  );
   v.playbackRate = videoRate();
   // Do not await play(): some engines never resolve that promise even
   // though playback starts, which would leave the overlay loop dead.
   v.play().catch((e) => fallbackToStreaming(String(e)));
-  // Watchdog: an engine can accept the source, decode a frame and still
-  // never advance. Only real movement counts as working playback.
+  // Watchdog: only real movement counts as working playback.
   const t0 = v.currentTime;
   clearTimeout(watchdog);
   watchdog = setTimeout(() => {
@@ -254,12 +328,20 @@ async function startVideoPlayback() {
   videoTick();
 }
 
-/// The overlay follows the video's own clock — one callback per decoded
-/// frame, so it can never drift from the picture.
+/// Streaming takes over RIGHT NOW (seek outside the buffer, view change);
+/// a rendered segment for the new position arrives in the background.
+function switchToStreamingNow() {
+  stopVideoElement();
+  play.gen++;
+  startStreaming();
+}
+
+/// The overlay follows the video's own clock — it can never drift from
+/// the picture.
 function videoTick() {
   const v = $("an-video");
   if (!play.on || v.hidden) return;
-  currentMs = seg.startMs + v.currentTime * 1000;
+  currentMs = seg.current.startMs + v.currentTime * 1000;
   updateTime();
   drawScrub();
   syncOverlayToVideo();
@@ -269,21 +351,26 @@ function videoTick() {
   cv.getContext("2d").clearRect(0, 0, cv.width, cv.height);
   drawOverlay();
   refreshLive();
-  // Prepare the next stretch while this one still plays.
-  if (!seg.preparing && v.duration && v.currentTime > v.duration * 0.6) {
-    requestSegment(seg.startMs + seg.spanMs, false);
+  // Buffer the follow-up EARLY — the moment this segment starts playing.
+  if (!seg.next && !seg.preparing) {
+    const end = seg.current.startMs + seg.current.spanMs;
+    if (end < runEnd() - 100) requestSegment(end, false);
   }
   if (v.ended) {
-    if (seg.ready && seg.startMs > currentMs - 10) {
-      // The next stretch arrived — carry straight on.
-      startVideoPlayback();
+    if (entryCovers(seg.next, currentMs + 30)) {
+      // Gapless handover to the buffered follow-up.
+      freeEntry(seg.current);
+      seg.current = seg.next;
+      seg.next = null;
+      loadAndPlayCurrent();
       return;
     }
-    if (!seg.preparing) requestSegment(currentMs, true);
+    // Not buffered yet: keep moving on the frame stream, switch back
+    // when the render lands.
+    requestSegment(currentMs, true);
+    switchToStreamingNow();
     return;
   }
-  // Plain rAF: requestVideoFrameCallback exists on some engines but
-  // never fires there, which would stop the overlay after one frame.
   requestAnimationFrame(videoTick);
 }
 
@@ -508,13 +595,28 @@ function seek(t) {
   currentMs = clamp(t, 0, runEnd());
   updateTime();
   drawScrub();
-  if (play.on && segmentCovers(currentMs) && !$("an-video").hidden) {
-    // Inside the prepared stretch: instant, no re-render.
-    $("an-video").currentTime = (currentMs - seg.startMs) / 1000;
+  if (play.on && engine === "video") {
+    if (segmentCovers(currentMs) && !$("an-video").hidden) {
+      // Inside the buffered stretch: instant.
+      $("an-video").currentTime = (currentMs - seg.current.startMs) / 1000;
+      return;
+    }
+    if (entryCovers(seg.next, currentMs)) {
+      // The follow-up covers it — promote it now.
+      freeEntry(seg.current);
+      seg.current = seg.next;
+      seg.next = null;
+      play.gen++;
+      loadAndPlayCurrent();
+      return;
+    }
+    // Outside every buffer: keep moving on frames, render from HERE.
+    requestSegment(currentMs, true);
+    switchToStreamingNow();
     return;
   }
   if (play.on) {
-    requestSegment(currentMs, true);
+    startStreaming();
     return;
   }
   cancelPrefetch();
@@ -897,8 +999,13 @@ function setPlaying(on) {
   }
   if (currentMs >= runEnd() - 1) currentMs = 0;
   if (engine === "video") {
-    if (segmentCovers(currentMs)) startVideoPlayback();
-    else requestSegment(currentMs, true);
+    if (segmentCovers(currentMs)) {
+      loadAndPlayCurrent();
+      return;
+    }
+    // Start NOW on frames; the rendered segment takes over when it lands.
+    requestSegment(currentMs, true);
+    startStreaming();
     return;
   }
   startStreaming();
@@ -934,48 +1041,6 @@ function fallbackToStreaming(why) {
   v.hidden = true;
   document.body.classList.remove("an-playing");
   if (play.on) startStreaming();
-}
-
-/// A prepared segment landed: load it and (if we were waiting) play.
-let segObjectUrl = null;
-
-async function onSegmentReady(info) {
-  tr(`ready t=${info.token}`);
-  if (info.token !== seg.token) return;
-  seg.startMs = info.startMs;
-  seg.spanMs = info.spanMs;
-  seg.outFps = info.outFps;
-  const v = $("an-video");
-  // The media decoder cannot reach a custom URI scheme on every platform,
-  // so the segment is handed over as an in-memory object instead — a few
-  // MB, and it plays identically everywhere.
-  try {
-    const res = await fetch(videoUrl(info.token));
-    if (!res.ok) throw new Error(`segment ${res.status}`);
-    const blob = await res.blob();
-    if (info.token !== seg.token) return;
-    if (segObjectUrl) URL.revokeObjectURL(segObjectUrl);
-    segObjectUrl = URL.createObjectURL(blob);
-    tr(`blob ${(blob.size / 1048576).toFixed(1)}MB`);
-    v.src = segObjectUrl;
-    v.load();
-  } catch (e) {
-    seg.preparing = false;
-    showPrep(false);
-    setPlaying(false);
-    msg(`Could not load the prepared video: ${e}`);
-    return;
-  }
-  seg.ready = true;
-  seg.preparing = false;
-  await primeSegmentGeometry();
-  showPrep(false);
-  if (seg.wantPlay && play.on) {
-    seg.wantPlay = false;
-    startVideoPlayback();
-  } else if (seg.wantPlay) {
-    seg.wantPlay = false;
-  }
 }
 
 async function pump(gen) {
@@ -1095,13 +1160,20 @@ function setSpeed(v) {
   // frames per song second), so a new speed needs a new segment.
   // Debounced: dragging the slider must not start a dozen renders.
   clearTimeout(speedTimer);
+  // Buffered segments were rendered for the old speed — their frame
+  // density no longer matches.
+  freeEntry(seg.next);
+  seg.next = null;
   if (play.on) {
-    $("an-video").playbackRate = videoRate(); // instant, until the new one lands
+    if (!$("an-video").hidden) {
+      $("an-video").playbackRate = videoRate(); // instant, until the re-render lands
+    }
     speedTimer = setTimeout(() => {
       if (play.on) requestSegment(currentMs, true);
     }, 500);
   } else {
-    seg.ready = false;
+    freeEntry(seg.current);
+    seg.current = null;
   }
 }
 
@@ -1164,6 +1236,12 @@ function drawSection() {
       <label class="hint an-slider">Path window
         <input type="range" id="opt-window" min="100" max="4000" step="50" value="${opt.pathWindow}">
         <span>${(opt.pathWindow / 1000).toFixed(2)}s</span></label>
+      <div class="an-title" style="margin-top:10px">Rendered picture</div>
+      <div class="an-toggles">
+        <label class="an-tog"><input type="checkbox" data-view="gameCursor"${opt.gameCursor ? " checked" : ""}> Game cursor</label>
+        <label class="an-tog"><input type="checkbox" data-view="notes"${opt.notes ? " checked" : ""}> Notes</label>
+      </div>
+      <p class="hint">Hide the game's cursor to study the raw recorded one, or the notes to see nothing but hit areas. Changes re-render the picture.</p>
       <p class="hint">Hitboxes follow each note as it flies in — they are the note's own hit area, so they grow toward the hit plane and stay inside the field.</p>`,
     );
   } else if (opt.section === "cursor") {
@@ -1333,8 +1411,8 @@ function drawSection() {
       kv("Build", status?.build || "?") +
         kv("Engine", engine === "video" ? "rendered video" : "single frames") +
         kv("Still frames", transport) +
-        kv("Playback", seg.ready ? `${seg.outFps} fps/song-s` : seg.preparing ? "preparing…" : loopFps ? `${Math.round(loopFps)} fps` : "idle") +
-        kv("Segment", seg.ready ? `${fmtMs(seg.startMs)} + ${(seg.spanMs / 1000).toFixed(1)}s` : "–") +
+        kv("Playback", !$("an-video").hidden ? `video · ${seg.current?.outFps ?? "?"} fps/song-s` : seg.preparing ? "rendering…" : loopFps ? `stream · ${Math.round(loopFps)} fps` : "idle") +
+        kv("Buffered", seg.current ? `${fmtMs(seg.current.startMs)}+${(seg.current.spanMs / 1000).toFixed(0)}s${seg.next ? ` · next ${fmtMs(seg.next.startMs)}+${(seg.next.spanMs / 1000).toFixed(0)}s` : ""}` : "–") +
         kv("Render size", `${lastRenderH}p at ${scalePct()}%`) +
         `<div class="an-list"><span class="hint">${esc(trace.join(" · ") || "—")}</span></div>` +
         (transportNote ? `<p class="hint">${esc(transportNote)}</p>` : "") +
@@ -1389,6 +1467,35 @@ function redrawGraphs() {
 
 function wireSection() {
   const body = $("an-secbody");
+  body.querySelectorAll("input[data-view]").forEach((cb) => {
+    cb.addEventListener("change", async () => {
+      opt[cb.dataset.view] = cb.checked;
+      try {
+        status = await invoke("set_analyze_view", {
+          hideCursor: !opt.gameCursor,
+          hideNotes: !opt.notes,
+        });
+      } catch (e) {
+        msg(String(e));
+        return;
+      }
+      // Everything rendered so far shows the old look.
+      geoCache.clear();
+      freeEntry(seg.next);
+      seg.next = null;
+      const playingVideo = play.on && !$("an-video").hidden;
+      freeEntry(seg.current);
+      seg.current = null;
+      if (playingVideo) {
+        requestSegment(currentMs, true);
+        switchToStreamingNow();
+      } else if (play.on) {
+        requestSegment(currentMs, true);
+      } else {
+        schedulePreview();
+      }
+    });
+  });
   body.querySelectorAll("input[data-opt]").forEach((cb) => {
     cb.addEventListener("change", () => {
       opt[cb.dataset.opt] = cb.checked;
@@ -1731,8 +1838,9 @@ async function loadData(key) {
   data = fresh;
   timeline = tl;
   dataKey = key;
-  // Geometry describes THIS replay on THIS field — never reuse it.
+  // Geometry describes THIS replay on THIS field — never reuse any of it.
   geoCache.clear();
+  segGeo = { times: [], list: [] };
   heatCanvases = {
     main: buildHeatCanvas(data.main.heatmap, ACCENT),
     ghost: data.ghost ? buildHeatCanvas(data.ghost.heatmap, GHOST) : null,
