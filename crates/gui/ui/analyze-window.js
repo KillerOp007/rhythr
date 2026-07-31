@@ -603,7 +603,7 @@ async function syncRenderSize() {
 // The backend keys frames by round(from + step*k) — the frontend must use
 // the exact same base and step or every request misses the cache.
 function prefetch(fromMs) {
-  invoke("prefetch_frames", { fromMs, stepMs: frameStep(), count: 90 }).catch(() => {});
+  invoke("prefetch_frames", { fromMs, stepMs: frameStep(), count: 45 }).catch(() => {});
 }
 
 /// Stops the background renderer — it must not keep working for a
@@ -653,7 +653,7 @@ function setPlaying(on) {
     // while we are still at full size.
     autoChecked = autoScale < 100;
     prefetch(play.startMs);
-    primeGeometry(play.startMs, frameStep(), 60);
+    primeGeometry(play.startMs, frameStep(), 45);
     pump(play.gen);
   }
 }
@@ -733,10 +733,10 @@ async function pump(gen) {
   // Keep frames and geometry a second ahead of the playhead — on the
   // same grid points the playback will ask for.
   // Distance-based: a slow frame can skip right over any fixed multiple.
-  if (k - lastPrefetchK >= 30) {
+  if (k - lastPrefetchK >= 20) {
     lastPrefetchK = k;
     prefetch(play.startMs + (k + 15) * step);
-    primeGeometry(play.startMs + k * step, step, 60);
+    primeGeometry(play.startMs + k * step, step, 45);
   }
   if (gen !== play.gen) return;
   if (currentMs >= runEnd()) {

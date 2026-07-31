@@ -1043,10 +1043,14 @@ fn invalidate_preview(inner: &mut Inner) {
 // ---------------------------------------------------------------- commands
 
 #[tauri::command]
-fn get_status(state: tauri::State<'_, App>) -> StatusDto {
-    let app = state.inner();
-    let inner = app.lock();
-    assemble_status(&inner, app.rendering.load(Ordering::SeqCst))
+async fn get_status(state: tauri::State<'_, App>) -> Result<StatusDto, String> {
+    let app = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let inner = app.lock();
+        assemble_status(&inner, app.rendering.load(Ordering::SeqCst))
+    })
+    .await
+    .map_err(err_str)
 }
 
 /// Nudges the Analyze window after a source change so it reloads without
@@ -2189,7 +2193,13 @@ async fn frame_geometry_batch(
             return Ok(Vec::new());
         };
         ensure_preview_ctx(&app, first)?;
-        times.iter().map(|t| frame_sides(&app, *t)).collect()
+        // One lock for the whole batch: 60 separate acquisitions would
+        // fight the render threads for it.
+        let inner = app.lock();
+        times
+            .iter()
+            .map(|t| frame_sides_locked(&inner, *t))
+            .collect()
     })
     .await
     .map_err(err_str)?
@@ -2208,7 +2218,7 @@ fn prefetch_frames(
     let app = state.inner().clone();
     let gen = app.prefetch_gen.fetch_add(1, Ordering::SeqCst) + 1;
     let step = if step_ms.abs() < 0.5 { 16.0 } else { step_ms };
-    let count = count.min(180);
+    let count = count.min(60);
     std::thread::spawn(move || {
         for k in 0..count {
             if app.prefetch_gen.load(Ordering::SeqCst) != gen
@@ -2217,6 +2227,11 @@ fn prefetch_frames(
                 return;
             }
             // Same arithmetic as the frontend: round(from + step*k).
+            // A breath between frames: the lock is held for the whole
+            // render, and the UI thread must be able to get in.
+            if k > 0 {
+                std::thread::sleep(std::time::Duration::from_millis(3));
+            }
             let t = from_ms + step * k as f64;
             let key = t.round() as i64;
             let want = {
@@ -2395,8 +2410,12 @@ fn render_frame_png(app: &App, time_ms: f64) -> Result<Arc<Vec<u8>>, String> {
 /// The on-screen geometry for `time_ms` — pure CPU math, no GPU work, so
 /// the overlay can be fetched in parallel with the frame image.
 fn frame_sides(app: &App, time_ms: f64) -> Result<PreviewFrameDto, String> {
+    let inner = app.lock();
+    frame_sides_locked(&inner, time_ms)
+}
+
+fn frame_sides_locked(inner: &Inner, time_ms: f64) -> Result<PreviewFrameDto, String> {
     {
-        let inner = app.lock();
         let ctx = inner.preview.as_ref().ok_or("no preview")?;
         let (_, r) = inner.replay.as_ref().ok_or("no replay")?;
         let (pw, ph) = ctx.renderer.dimensions();
@@ -2497,15 +2516,24 @@ async fn analysis_data(state: tauri::State<'_, App>) -> Result<AnalysisDto, Stri
 /// Render size of the live preview. The Analyze window raises this so a
 /// full-screen replay stays sharp; closing it drops back to the default.
 #[tauri::command]
-fn set_preview_quality(state: tauri::State<'_, App>, height: u32) -> Result<StatusDto, String> {
-    let app = state.inner();
-    let mut inner = app.lock();
-    let h = height.clamp(480, 2160);
-    if inner.preview_height != h {
-        inner.preview_height = h;
-        invalidate_preview(&mut inner);
-    }
-    Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
+async fn set_preview_quality(
+    state: tauri::State<'_, App>,
+    height: u32,
+) -> Result<StatusDto, String> {
+    let app = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut inner = app.lock();
+        // Quantized: a pixel of window resize must not rebuild the whole
+        // GPU pipeline (new device + skin upload).
+        let h = (height.clamp(480, 2160) / 40) * 40;
+        if inner.preview_height != h {
+            inner.preview_height = h;
+            invalidate_preview(&mut inner);
+        }
+        assemble_status(&inner, app.rendering.load(Ordering::SeqCst))
+    })
+    .await
+    .map_err(err_str)
 }
 
 /// Opens (or focuses) the Analyze window — a second webview showing the
