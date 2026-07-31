@@ -377,6 +377,10 @@ struct Shared {
     frames: Mutex<FrameCache>,
     /// Newest prefetch request; older workers see the bump and stop.
     prefetch_gen: std::sync::atomic::AtomicU64,
+    /// Frame requests being served right now. A burst (fast scrubbing)
+    /// must not spawn unbounded threads, and the prefetcher steps aside
+    /// while a live request waits for the renderer.
+    frame_jobs: std::sync::atomic::AtomicUsize,
     /// Join handle of the active render thread (used on app exit).
     render_thread: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
@@ -2095,6 +2099,19 @@ fn serve_frame(app_handle: &tauri::AppHandle, query: &str) -> Result<Arc<Vec<u8>
         .ok_or("missing t")?;
     let app: App = (*app_handle.try_state::<App>().ok_or("app not ready")?).clone();
     let key = time_ms.round() as i64;
+    // Refuse a pile-up rather than queueing threads behind the renderer;
+    // the window simply asks again for the next frame.
+    if app.frame_jobs.load(Ordering::SeqCst) >= 6 {
+        return Err("busy".into());
+    }
+    struct Job(App);
+    impl Drop for Job {
+        fn drop(&mut self) {
+            self.0.frame_jobs.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+    app.frame_jobs.fetch_add(1, Ordering::SeqCst);
+    let _job = Job(app.clone());
     let cur_gen = { app.lock().frame_gen };
     {
         let mut cache = app.frames.lock().unwrap_or_else(|p| p.into_inner());
@@ -2208,6 +2225,16 @@ fn prefetch_frames(
             };
             if !want {
                 continue;
+            }
+            // A frame the window is waiting for beats work done ahead of
+            // time — let it have the renderer first.
+            let mut waited = 0;
+            while app.frame_jobs.load(Ordering::SeqCst) > 0 && waited < 200 {
+                std::thread::sleep(std::time::Duration::from_millis(2));
+                waited += 1;
+                if app.prefetch_gen.load(Ordering::SeqCst) != gen {
+                    return;
+                }
             }
             if ensure_preview_ctx(&app, t).is_err() {
                 return;
@@ -2938,6 +2965,7 @@ fn main() {
         rendering: AtomicBool::new(false),
         frames: Mutex::new(FrameCache::default()),
         prefetch_gen: std::sync::atomic::AtomicU64::new(0),
+        frame_jobs: std::sync::atomic::AtomicUsize::new(0),
         render_thread: Mutex::new(None),
     });
 

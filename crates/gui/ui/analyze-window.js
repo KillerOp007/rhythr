@@ -63,6 +63,7 @@ let playbackScale = false;
 let loopFps = 0;
 let lastTick = 0;
 let lastPrefetchK = -1e9;
+let loopFails = 0;
 let hideChromeTimer = null;
 // Set by render events; status polling alone lags a whole render behind.
 let renderBusy = false;
@@ -158,11 +159,75 @@ function primeGeometry(fromMs, step, count) {
     });
 }
 
-/// Fetches a frame's PNG and decodes it off the main thread.
+// Frame transport, in order of preference. Any of them can fail on a
+// platform we cannot test here, so the window degrades instead of
+// freezing: fetch -> plain <img> (no CORS involved) -> the IPC data URL
+// that the main window has always used.
+let transport = "fetch";
+let transportNote = "";
+let frameFails = 0;
+
+function withTimeout(promise, ms, onTimeout) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      onTimeout?.();
+      reject(new Error(`timed out after ${ms} ms`));
+    }, ms);
+    promise.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+    );
+  });
+}
+
+async function bitmapFromUrl(url) {
+  const img = new Image();
+  img.src = url;
+  await img.decode();
+  // Tainted canvases are fine here: the frame canvas is never read back.
+  return createImageBitmap(img);
+}
+
+async function loadBitmap(t) {
+  if (transport === "fetch") {
+    const ctl = new AbortController();
+    const res = await withTimeout(fetch(frameUrl(t), { signal: ctl.signal }), 5000, () =>
+      ctl.abort(),
+    );
+    if (!res.ok) throw new Error(`frame ${res.status}: ${await res.text()}`);
+    return createImageBitmap(await res.blob());
+  }
+  if (transport === "img") {
+    return withTimeout(bitmapFromUrl(frameUrl(t)), 5000);
+  }
+  const url = await withTimeout(invoke("preview", { timeMs: t }), 8000);
+  return bitmapFromUrl(url);
+}
+
+/// Fetches a frame and decodes it off the main thread, degrading the
+/// transport if this platform cannot serve the current one.
 async function fetchBitmap(t) {
-  const res = await fetch(frameUrl(t));
-  if (!res.ok) throw new Error(await res.text());
-  return createImageBitmap(await res.blob());
+  try {
+    const bmp = await loadBitmap(t);
+    frameFails = 0;
+    return bmp;
+  } catch (e) {
+    frameFails++;
+    if (frameFails >= 2 && transport !== "ipc") {
+      transport = transport === "fetch" ? "img" : "ipc";
+      transportNote = `Frame channel fell back to "${transport}" — ${e}`;
+      frameFails = 0;
+      msgFlash(transportNote);
+      return loadBitmap(t);
+    }
+    throw e;
+  }
 }
 
 let frameReq = 0;
@@ -583,6 +648,7 @@ function setPlaying(on) {
     loopFps = 0;
     lastTick = 0;
     lastPrefetchK = -1e9;
+    loopFails = 0;
     // The learned scale carries across the session; only re-measure
     // while we are still at full size.
     autoChecked = autoScale < 100;
@@ -604,7 +670,27 @@ async function pump(gen) {
   // prefetcher renders — so playback keeps real time even if a frame is
   // slow, and every request hits a ready image.
   const elapsed = performance.now() - play.startWall;
-  const k = Math.max(play.k + 1, Math.round((elapsed * play.factor * clamp(status?.replay?.speed || 1, 0.25, 3)) / step));
+  // ONLY the wall clock advances the song. Flooring this at "one more per
+  // iteration" would make a 144 Hz display play 2.4x too fast.
+  const kw = Math.round(
+    (elapsed * play.factor * clamp(status?.replay?.speed || 1, 0.25, 3)) / step,
+  );
+  if (kw <= play.k) {
+    // Same grid point — wait for the next one instead of re-rendering it.
+    requestAnimationFrame(() => pump(gen));
+    return;
+  }
+  // A window that was hidden (rAF frozen) or a machine that fell far
+  // behind must resync rather than jump seconds ahead.
+  if (kw - play.k > 45) {
+    play.startWall = performance.now();
+    play.startMs = Math.round(currentMs);
+    play.k = -1;
+    lastPrefetchK = -1e9;
+    requestAnimationFrame(() => pump(gen));
+    return;
+  }
+  const k = kw;
   play.k = k;
   currentMs = Math.min(play.startMs + k * step, runEnd());
   updateTime();
@@ -612,8 +698,14 @@ async function pump(gen) {
   const t0 = performance.now();
   try {
     await showFrame(currentMs);
+    loopFails = 0;
   } catch (e) {
-    /* transient — keep the loop alive */
+    // Never spin on a broken frame channel — say what happened and stop.
+    if (++loopFails >= 3) {
+      setPlaying(false);
+      msg(`Playback stopped — ${e}`);
+      return;
+    }
   }
   const dt = performance.now() - t0;
   fps = fps ? fps * 0.9 + (1000 / Math.max(1, dt)) * 0.1 : 1000 / Math.max(1, dt);
@@ -901,6 +993,15 @@ function drawSection() {
       "While playing",
       `<label class="an-tog"><input type="checkbox" data-opt="immersive"${opt.immersive ? " checked" : ""}> Hide the controls during playback</label>
        <p class="hint">They come back the moment you move the mouse or pause.</p>`,
+    );
+    html += card(
+      "Diagnostics",
+      kv("Frame channel", transport) +
+        kv("Playback", loopFps ? `${Math.round(loopFps)} fps` : "–") +
+        kv("Render size", `${lastRenderH}p at ${scalePct()}%`) +
+        kv("Frames ready", `${geoCache.size} geometry`) +
+        (transportNote ? `<p class="hint">${esc(transportNote)}</p>` : "") +
+        `<p class="hint">If playback stalls, this tells us where. "fetch" is the fast path; the window falls back on its own if a platform blocks it.</p>`,
     );
     html += card(
       "Shortcuts",
