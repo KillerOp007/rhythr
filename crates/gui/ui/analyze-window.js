@@ -71,7 +71,7 @@ let lastPrefetchK = -1e9;
 let engine = "video"; // "native" | "video" | "stream"
 // Live engine: the picture is painted by the GPU BEHIND this webview;
 // this page only draws overlays and controls on a transparent body.
-const liveState = { active: false, tick: null, ended: false };
+const liveState = { active: false, tick: null, ended: false, key: "" };
 // Short trace of what the playback engine did last — visible under
 // View -> Diagnostics, so a problem report says where it went wrong.
 const trace = [];
@@ -599,6 +599,10 @@ function seek(t) {
   currentMs = clamp(t, 0, runEnd());
   updateTime();
   drawScrub();
+  if (engine === "native") {
+    invoke("live_cmd", { cmd: "seek", value: currentMs }).catch(() => {});
+    return;
+  }
   if (play.on && engine === "video") {
     if (segmentCovers(currentMs) && !$("an-video").hidden) {
       // Inside the buffered stretch: instant.
@@ -715,7 +719,10 @@ function pathFrom(ctx, pts) {
 function drawOverlay() {
   const cv = $("an-canvas");
   const ctx = cv.getContext("2d");
-  if (!data || !lastFrame || !currentBitmap) return;
+  // Native mode has no bitmap — the GPU paints the picture; the canvas
+  // carries overlays alone.
+  if (!data || !lastFrame) return;
+  if (engine !== "native" && !currentBitmap) return;
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   // Geometry arrives in the frame's own pixels; the canvas IS that size,
   // except when a resize outran the renderer.
@@ -1153,6 +1160,17 @@ async function pump(gen) {
 function stepFrame(dir) {
   const ft = data?.main?.frames?.t;
   if (!ft?.length) return;
+  if (engine === "native") {
+    invoke("live_cmd", { cmd: "pause" }).catch(() => {});
+    let i = lastIndexLE(ft, currentMs);
+    if (!(dir < 0 && i >= 0 && ft[i] < currentMs)) i += dir;
+    const t = ft[clamp(i, 0, ft.length - 1)];
+    currentMs = t;
+    updateTime();
+    drawScrub();
+    invoke("live_cmd", { cmd: "seek", value: t }).catch(() => {});
+    return;
+  }
   if (play.on) setPlaying(false);
   let i = lastIndexLE(ft, currentMs);
   if (!(dir < 0 && i >= 0 && ft[i] < currentMs)) i += dir;
@@ -1168,6 +1186,10 @@ function setSpeed(v) {
   $("an-speed").value = String(Math.round(play.factor * 100));
   $("an-speed-num").value = String(Math.round(play.factor * 100) / 100);
   if (!changed) return;
+  if (engine === "native") {
+    invoke("live_cmd", { cmd: "speed", value: play.factor }).catch(() => {});
+    return;
+  }
   // A segment is rendered FOR one speed (the slower it is, the more
   // frames per song second), so a new speed needs a new segment.
   // Debounced: dragging the slider must not start a dozen renders.
@@ -1488,6 +1510,11 @@ function wireSection() {
           hideCursor: !opt.gameCursor,
           hideNotes: !opt.notes,
         }).catch((e) => msg(String(e)));
+        // Persist too: a session restart rebuilds from the stored flags.
+        invoke("set_analyze_view", {
+          hideCursor: !opt.gameCursor,
+          hideNotes: !opt.notes,
+        }).catch(() => {});
         return;
       }
       try {
@@ -1831,11 +1858,16 @@ async function refresh() {
   const key = sourceKey();
   if (key === dataKey && data) return;
   await loadData(key);
-  if (engine === "native") {
+  if (engine === "native" && liveState.key !== key) {
     // Sources changed: restart the live thread against the new replay.
     liveState.active = false;
     const ok = await bootNative();
-    if (!ok) engine = "video";
+    if (!ok) fallbackFromNative("could not restart");
+  } else if (engine !== "native") {
+    // Native may have been unavailable when the window opened (no replay
+    // loaded yet) or the engine died — sources changed, so try again.
+    // On platforms without native support this returns false instantly.
+    await bootNative();
   }
 }
 
@@ -1953,6 +1985,27 @@ function onLiveTick(tk) {
 
 let nativeWired = false;
 
+/// The live engine died (or refused to restart): hand the window back to
+/// the frame/segment engines and strip every native-mode override, or the
+/// page stays transparent with no picture behind it.
+function fallbackFromNative(reason) {
+  const wasNative = engine === "native";
+  engine = "video";
+  liveState.active = false;
+  liveState.key = "";
+  document.body.classList.remove("an-native");
+  document.documentElement.classList.remove("an-native");
+  document.body.classList.remove("an-immersive");
+  play.on = false;
+  $("an-play").textContent = "▶";
+  if (!wasNative) return;
+  tr(`native fallback: ${reason}`);
+  msg("");
+  syncRenderSize()
+    .then(() => schedulePreview())
+    .catch(() => {});
+}
+
 function wireNativeOnce() {
   if (nativeWired) return;
   nativeWired = true;
@@ -1963,8 +2016,8 @@ function wireNativeOnce() {
     document.body.classList.remove("an-immersive");
   }).catch(() => {});
   listen("live-error", (e) => {
-    msg(`Live engine: ${e.payload}`);
     tr(`live error: ${e.payload}`);
+    fallbackFromNative(String(e.payload));
   }).catch(() => {});
   // Window resizes reach the render thread as physical pixels.
   let rzTimer = null;
@@ -1972,12 +2025,9 @@ function wireNativeOnce() {
     if (engine !== "native") return;
     clearTimeout(rzTimer);
     rzTimer = setTimeout(() => {
-      const dpr = window.devicePixelRatio || 1;
-      invoke("live_cmd", {
-        cmd: "resize",
-        w: Math.round(window.innerWidth * dpr),
-        h: Math.round(window.innerHeight * dpr),
-      }).catch(() => {});
+      // No size args: the backend reads the window's true physical size
+      // itself — innerWidth*dpr is off by one at fractional Windows DPI.
+      invoke("live_cmd", { cmd: "resize" }).catch(() => {});
     }, 120);
   });
 }
@@ -1992,7 +2042,9 @@ async function bootNative() {
   }
   engine = "native";
   liveState.active = true;
+  liveState.key = sourceKey();
   document.body.classList.add("an-native");
+  document.documentElement.classList.add("an-native");
   // The frame path is unused in native mode.
   $("an-video").hidden = true;
   wireNativeOnce();
@@ -2128,10 +2180,9 @@ window.addEventListener("DOMContentLoaded", async () => {
   }, 5000);
 
   setSpeed(1);
-  const native = await bootNative();
-  if (!native) {
-    await syncRenderSize();
-  }
+  // Native boots from refresh() once the sources are known — booting
+  // here too would tear the engine down and rebuild it immediately.
+  await syncRenderSize();
   await refresh();
   toggleOptions(true);
 });

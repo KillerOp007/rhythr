@@ -36,12 +36,13 @@ pub struct LiveSession {
     pub running: Arc<AtomicBool>,
 }
 
-pub struct LiveHandles(pub Mutex<Option<LiveSession>>);
-
-impl Default for LiveHandles {
-    fn default() -> Self {
-        LiveHandles(Mutex::new(None))
-    }
+#[derive(Default)]
+pub struct LiveHandles {
+    pub session: Mutex<Option<LiveSession>>,
+    /// A session start is in flight: the window's close handler must not
+    /// let the window die under it (the start would spawn a render thread
+    /// against a destroyed window and leak the session).
+    pub starting: AtomicBool,
 }
 
 /// Everything the render thread owns — cloned out of the app state once,
@@ -116,6 +117,23 @@ pub fn spawn(
     running: Arc<AtomicBool>,
 ) {
     std::thread::spawn(move || {
+        // Runs on EVERY exit — early error returns, panics, clean stop.
+        // The closer waits on `running`; a path that forgets to flip it
+        // turns every window close into a full watchdog timeout.
+        struct DoneGuard {
+            running: Arc<AtomicBool>,
+            app: tauri::AppHandle,
+        }
+        impl Drop for DoneGuard {
+            fn drop(&mut self) {
+                if std::thread::panicking() {
+                    let _ = self.app.emit("live-error", "live engine crashed".to_string());
+                }
+                self.running.store(false, Ordering::SeqCst);
+                let _ = self.app.emit("live-stopped", ());
+            }
+        }
+        let _done = DoneGuard { running: running.clone(), app: app_handle.clone() };
         let emit_err = |msg: String| {
             let _ = app_handle.emit("live-error", msg);
         };
@@ -211,6 +229,12 @@ pub fn spawn(
                         cfg.cursor_opacity = if hide_cursor { 0.0 } else { base_cursor_opacity };
                         cfg.cursor_trail_enabled = !hide_cursor;
                         cfg.note_opacity = if hide_notes { 0.0 } else { base_note_opacity };
+                        // Note opacity lives in SceneParams, built once at
+                        // startup — rebuild it or the toggle never lands.
+                        let mut p = SceneParams::from(&cfg);
+                        p.grid_scale = main_mods.grid_scale;
+                        p.apply_speed(replay.speed);
+                        params = p;
                         dirty = true;
                     }
                     Ok(LiveCmd::Stop) => break 'run,
@@ -228,7 +252,9 @@ pub fn spawn(
             }
 
             let now = std::time::Instant::now();
-            let dt = now.duration_since(last).as_secs_f64() * 1000.0;
+            // Cap: a debugger stall or system sleep must not leap the
+            // clock to the end of the replay in one frame.
+            let dt = (now.duration_since(last).as_secs_f64() * 1000.0).min(100.0);
             last = now;
             if playing {
                 t += dt * speed * (replay.speed as f64).clamp(0.25, 3.0);
@@ -237,11 +263,13 @@ pub fn spawn(
                     playing = false;
                     let _ = app_handle.emit("live-ended", ());
                 }
-                fps = if fps == 0.0 {
-                    (1000.0 / dt.max(1.0)) as f32
-                } else {
-                    fps * 0.9 + (1000.0 / dt.max(1.0)) as f32 * 0.1
-                };
+                // Only real frame intervals feed the meter — the first
+                // loop pass after unpausing arrives ~0 ms after `last`
+                // was reset and would inject a ~1000 fps spike.
+                if dt >= 2.0 {
+                    let sample = (1000.0 / dt) as f32;
+                    fps = if fps == 0.0 { sample } else { fps * 0.9 + sample * 0.1 };
+                }
             }
 
             if playing || dirty {
@@ -259,9 +287,16 @@ pub fn spawn(
                     emit_err(format!("live render: {e}"));
                     break 'run;
                 }
-                if let Err(e) = presenter.present_frame(&renderer) {
-                    emit_err(format!("present: {e}"));
-                    break 'run;
+                match presenter.present_frame(&renderer) {
+                    // Skipped (occluded/outdated): no vsync block happened
+                    // — sleep, or this loop spins a core at full rate
+                    // while the window is minimized.
+                    Ok(false) => std::thread::sleep(std::time::Duration::from_millis(8)),
+                    Ok(true) => {}
+                    Err(e) => {
+                        emit_err(format!("present: {e}"));
+                        break 'run;
+                    }
                 }
                 if let Some(dir) = &dump_dir {
                     dump_counter += 1;
@@ -283,7 +318,7 @@ pub fn spawn(
 
             // Overlay tick at ~half display rate — plenty for the canvas.
             tick_counter += 1;
-            if tick_counter % 2 == 0 || !playing {
+            if tick_counter.is_multiple_of(2) || !playing {
                 let (fw, fh) = renderer.dimensions();
                 let (rx0, ry0, rvw, rvh) = presenter.frame_rect(&renderer);
                 let sides = renderer
@@ -344,11 +379,11 @@ pub fn spawn(
             }
         }
 
-        // Release every window-bound GPU object BEFORE signalling done —
-        // the closer destroys the window the moment `running` flips.
+        // Release every window-bound GPU object BEFORE the DoneGuard
+        // signals done — the closer destroys the window the moment
+        // `running` flips.
         drop(presenter);
         drop(renderer);
-        running.store(false, Ordering::SeqCst);
         fn save_png(path: &std::path::Path, rgba: &[u8], w: u32, h: u32) -> Result<(), String> {
             let f = std::fs::File::create(path).map_err(|e| e.to_string())?;
             let mut enc = png::Encoder::new(std::io::BufWriter::new(f), w, h);
@@ -357,7 +392,6 @@ pub fn spawn(
             let mut wr = enc.write_header().map_err(|e| e.to_string())?;
             wr.write_image_data(rgba).map_err(|e| e.to_string())
         }
-        let _ = app_handle.emit("live-stopped", ());
         let _ = window_label;
     });
 }

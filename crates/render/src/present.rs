@@ -254,17 +254,19 @@ impl Presenter {
 
     /// Blits the current offscreen frame to the swapchain, letterboxed to
     /// the frame's aspect, and presents. Blocks until the compositor has
-    /// a slot (Fifo) — this IS the frame pacing.
-    pub fn present_frame(&self, renderer: &Renderer) -> Result<(), Error> {
+    /// a slot (Fifo) — this IS the frame pacing. Returns false when the
+    /// frame was skipped (occluded/outdated): no vsync block happened, so
+    /// the caller must pace itself or it spins at an uncapped rate.
+    pub fn present_frame(&self, renderer: &Renderer) -> Result<bool, Error> {
         use wgpu::CurrentSurfaceTexture as Cst;
         let frame = match self.surface.get_current_texture() {
             Cst::Success(f) | Cst::Suboptimal(f) => f,
             Cst::Outdated | Cst::Lost => {
                 // A resize is in flight; reconfigure and skip this frame.
                 self.surface.configure(renderer.device(), &self.config);
-                return Ok(());
+                return Ok(false);
             }
-            Cst::Timeout | Cst::Occluded => return Ok(()),
+            Cst::Timeout | Cst::Occluded => return Ok(false),
             Cst::Validation => {
                 return Err(Error::Device("surface validation failed".into()));
             }
@@ -310,7 +312,7 @@ impl Presenter {
         }
         renderer.queue().submit([enc.finish()]);
         renderer.queue().present(frame);
-        Ok(())
+        Ok(true)
     }
 
     /// Where the frame lands inside the window (letterbox rect, physical

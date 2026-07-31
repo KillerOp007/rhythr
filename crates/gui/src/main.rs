@@ -12,7 +12,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use base64::Engine;
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager};
 
@@ -382,6 +381,7 @@ impl FrameCache {
 /// one. `out_fps` frames per SONG second — raise it and the same span
 /// plays back slower while staying perfectly smooth.
 #[derive(Clone)]
+#[allow(dead_code)] // segment fields feed the fallback engines' events
 struct ReadySegment {
     token: u64,
     path: PathBuf,
@@ -979,13 +979,6 @@ fn png_bytes(rgba: &[u8], w: u32, h: u32) -> Result<Vec<u8>, String> {
     Ok(buf)
 }
 
-fn png_data_url(rgba: &[u8], w: u32, h: u32) -> Result<String, String> {
-    let buf = png_bytes(rgba, w, h)?;
-    Ok(format!(
-        "data:image/png;base64,{}",
-        base64::engine::general_purpose::STANDARD.encode(&buf)
-    ))
-}
 
 /// Keeps the map cache below ~2 GiB by deleting the oldest downloads
 /// (there is no other eviction; maps are ~10-50 MB each).
@@ -2313,10 +2306,43 @@ async fn start_live_session(
     if !(cfg!(target_os = "windows") || forced) {
         return Ok(false);
     }
-    {
-        let mut guard = live.0.lock().unwrap_or_else(|p| p.into_inner());
-        if let Some(old) = guard.take() {
-            let _ = old.tx.send(live::LiveCmd::Stop);
+    // Flag the start so the close handler holds the window open while we
+    // are between "old session taken" and "new session stored". Cleared
+    // on every exit path via the guard below.
+    if live.starting.swap(true, Ordering::SeqCst) {
+        return Err("a live session start is already in flight".into());
+    }
+    struct StartFlag<'a>(&'a std::sync::atomic::AtomicBool);
+    impl Drop for StartFlag<'_> {
+        fn drop(&mut self) {
+            self.0.store(false, Ordering::SeqCst);
+        }
+    }
+    let _start_flag = StartFlag(&live.starting);
+
+    let stopping = {
+        let mut guard = live.session.lock().unwrap_or_else(|p| p.into_inner());
+        guard.take()
+    };
+    if let Some(old) = stopping {
+        // The old thread owns a swapchain on this window. Two flip-model
+        // swapchains on one HWND is a DXGI error — wait for the old one
+        // to actually release before creating a new surface.
+        let _ = old.tx.send(live::LiveCmd::Stop);
+        let flag = old.running.clone();
+        let stopped = tauri::async_runtime::spawn_blocking(move || {
+            for _ in 0..300 {
+                if !flag.load(Ordering::SeqCst) {
+                    return true;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            false
+        })
+        .await
+        .map_err(err_str)?;
+        if !stopped {
+            return Err("previous live session did not stop".into());
         }
     }
     let window = app_handle
@@ -2379,15 +2405,19 @@ async fn start_live_session(
         rx,
         running.clone(),
     );
-    let mut guard = live.0.lock().unwrap_or_else(|p| p.into_inner());
+    let mut guard = live.session.lock().unwrap_or_else(|p| p.into_inner());
     *guard = Some(live::LiveSession { tx, running });
+    // The close handler saw `starting` and held the window; if it is
+    // waiting, it takes this session the moment the flag clears.
     Ok(true)
 }
 
 /// Transport for the live engine.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 fn live_cmd(
     live: tauri::State<'_, live::LiveHandles>,
+    app_handle: tauri::AppHandle,
     cmd: String,
     value: Option<f64>,
     w: Option<u32>,
@@ -2395,7 +2425,7 @@ fn live_cmd(
     hide_cursor: Option<bool>,
     hide_notes: Option<bool>,
 ) -> Result<(), String> {
-    let guard = live.0.lock().unwrap_or_else(|p| p.into_inner());
+    let guard = live.session.lock().unwrap_or_else(|p| p.into_inner());
     let Some(s) = guard.as_ref() else {
         return Err("no live session".into());
     };
@@ -2404,7 +2434,22 @@ fn live_cmd(
         "pause" => live::LiveCmd::Pause,
         "seek" => live::LiveCmd::Seek(value.unwrap_or(0.0)),
         "speed" => live::LiveCmd::Speed(value.unwrap_or(1.0)),
-        "resize" => live::LiveCmd::Resize(w.unwrap_or(0), h.unwrap_or(0)),
+        "resize" => {
+            // The window's own physical size, not the JS estimate —
+            // innerWidth·dpr is off by one at fractional Windows DPI,
+            // and a 1px swapchain mismatch stretches the whole frame.
+            let (pw, ph) = match (w, h) {
+                (Some(w), Some(h)) => (w, h),
+                _ => {
+                    let win = app_handle
+                        .get_webview_window("analyze")
+                        .ok_or("analyze window gone")?;
+                    let s = win.inner_size().map_err(err_str)?;
+                    (s.width, s.height)
+                }
+            };
+            live::LiveCmd::Resize(pw, ph)
+        }
         "view" => live::LiveCmd::View {
             hide_cursor: hide_cursor.unwrap_or(false),
             hide_notes: hide_notes.unwrap_or(false),
@@ -2627,7 +2672,7 @@ fn prefetch_frames(
 }
 
 /// Builds the preview pipeline if needed. Callers hold no other lock.
-fn ensure_preview_ctx(app: &App, time_ms: f64) -> Result<(), String> {
+fn ensure_preview_ctx(app: &App, _time_ms: f64) -> Result<(), String> {
     {
         if app.rendering.load(Ordering::SeqCst) {
             return Err("rendering in progress".to_string());
@@ -2932,24 +2977,56 @@ async fn open_analyze_window(app_handle: tauri::AppHandle) -> Result<(), String>
             // The live thread owns a surface on this window: it MUST stop
             // and drop it before the X11/Win32 window dies, or the next
             // present hits a dead drawable and takes the process down.
-            let stopping = {
+            // A start may also be in flight (session not stored yet) —
+            // hold the window open until that start lands, then stop
+            // whatever session it stored.
+            let (stopping, starting) = {
                 if let Some(lh) = handle.try_state::<live::LiveHandles>() {
-                    let mut guard = lh.0.lock().unwrap_or_else(|p| p.into_inner());
-                    guard.take()
+                    let mut guard = lh.session.lock().unwrap_or_else(|p| p.into_inner());
+                    (guard.take(), lh.starting.load(Ordering::SeqCst))
                 } else {
-                    None
+                    (None, false)
                 }
             };
-            if let Some(s) = stopping {
+            if stopping.is_some() || starting {
                 api.prevent_close();
-                let _ = s.tx.send(live::LiveCmd::Stop);
+                if let Some(s) = &stopping {
+                    let _ = s.tx.send(live::LiveCmd::Stop);
+                }
                 let win2 = win_for_close.clone();
+                let handle2 = handle.clone();
                 std::thread::spawn(move || {
-                    for _ in 0..100 {
-                        if !s.running.load(Ordering::SeqCst) {
-                            break;
+                    let wait = |s: &live::LiveSession| {
+                        let _ = s.tx.send(live::LiveCmd::Stop);
+                        for _ in 0..200 {
+                            if !s.running.load(Ordering::SeqCst) {
+                                return;
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(10));
                         }
-                        std::thread::sleep(std::time::Duration::from_millis(10));
+                    };
+                    if let Some(s) = stopping {
+                        wait(&s);
+                    }
+                    if starting {
+                        // Let the in-flight start land, then take and stop
+                        // whatever it stored.
+                        if let Some(lh) = handle2.try_state::<live::LiveHandles>() {
+                            for _ in 0..200 {
+                                if !lh.starting.load(Ordering::SeqCst) {
+                                    break;
+                                }
+                                std::thread::sleep(std::time::Duration::from_millis(10));
+                            }
+                            let late = {
+                                let mut guard =
+                                    lh.session.lock().unwrap_or_else(|p| p.into_inner());
+                                guard.take()
+                            };
+                            if let Some(s) = late {
+                                wait(&s);
+                            }
+                        }
                     }
                     let _ = win2.destroy();
                 });
@@ -2957,7 +3034,7 @@ async fn open_analyze_window(app_handle: tauri::AppHandle) -> Result<(), String>
         }
         if matches!(e, tauri::WindowEvent::Destroyed) {
             if let Some(lh) = handle.try_state::<live::LiveHandles>() {
-                let mut guard = lh.0.lock().unwrap_or_else(|p| p.into_inner());
+                let mut guard = lh.session.lock().unwrap_or_else(|p| p.into_inner());
                 if let Some(s) = guard.take() {
                     let _ = s.tx.send(live::LiveCmd::Stop);
                 }

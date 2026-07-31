@@ -271,6 +271,9 @@ body.an-immersive #an-playbar {
 /* ── native live mode ───────────────────────────────────────── */
 /* The GPU paints the frame BEHIND the webview: everything between the
    viewer's eye and that frame must be fully transparent. */
+/* The <html> layer paints last behind everything — it must go clear
+   too, or the GPU frame stays hidden behind an opaque page. */
+html.an-native,
 body.an-native,
 body.an-native #stage {
   background: transparent;
