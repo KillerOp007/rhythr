@@ -203,6 +203,60 @@ fn match_hits_inner(
         }
     }
 
+    // Phase 3 — hit<->hit untangling. Two hit notes can have swapped
+    // flags when the player touched them in the OPPOSITE of chart order
+    // (routine on near-simultaneous doubles): the order-preserving walk
+    // then pins each flag to the wrong note and every verdict dot lands
+    // outside its box. Swap a pair when the crossed assignment matches
+    // the cursor strictly better; totals cannot change (both stay hits).
+    if cursor_guided {
+        for _pass in 0..4 {
+            let mut changed = false;
+            for i in 0..results.len() {
+                if !results[i].hit {
+                    continue;
+                }
+                let Some(fi) = flag_of[i] else { continue };
+                for j in (i + 1)..results.len() {
+                    let dt = notes[j].time_ms - notes[i].time_ms;
+                    if dt as f64 > window_ms {
+                        break;
+                    }
+                    if !results[j].hit {
+                        continue;
+                    }
+                    let Some(fj) = flag_of[j] else { continue };
+                    let (fmi, xi, yi) = flag_frames[fi];
+                    let (fmj, xj, yj) = flag_frames[fj];
+                    // Both flags must be plausible for the OTHER note.
+                    let ti = notes[i].time_ms as f64;
+                    let tj = notes[j].time_ms as f64;
+                    if fmj - ti > window_ms
+                        || ti - fmj > EARLY_SLACK_MS
+                        || fmi - tj > window_ms
+                        || tj - fmi > EARLY_SLACK_MS
+                    {
+                        continue;
+                    }
+                    let straight = usize::from(covers(xi, yi, &notes[i], bound))
+                        + usize::from(covers(xj, yj, &notes[j], bound));
+                    let crossed = usize::from(covers(xj, yj, &notes[i], bound))
+                        + usize::from(covers(xi, yi, &notes[j], bound));
+                    if crossed > straight {
+                        results[i].hit_ms = Some(fmj);
+                        results[j].hit_ms = Some(fmi);
+                        flag_of[i] = Some(fj);
+                        flag_of[j] = Some(fi);
+                        changed = true;
+                    }
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+    }
+
     MatchOutcome {
         results,
         orphan_flags,

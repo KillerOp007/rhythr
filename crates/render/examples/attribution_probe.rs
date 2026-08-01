@@ -45,6 +45,20 @@ fn main() {
             let (fx, fy) = cursor_at_flag(r.hit_ms.unwrap()).unwrap();
             if !in_area(fx, fy, n) {
                 hits_outside += 1;
+                // How far out, and was a NEIGHBOURING frame inside?
+                let (wx, wy) = world(n);
+                let d = ((fx - wx).abs().max((fy - wy).abs()) - HITBOX_HALF).max(0.0);
+                let fm = r.hit_ms.unwrap();
+                let idx = replay.frames.partition_point(|f| f.ms < fm - 0.01);
+                let near_inside = [-2i64, -1, 1, 2].iter().any(|&off| {
+                    let k = idx as i64 + off;
+                    if k < 0 || k as usize >= replay.frames.len() {
+                        return false;
+                    }
+                    let f = &replay.frames[k as usize];
+                    in_area(f.x, f.y, n)
+                });
+                println!("  outside: note {} d={:.3} cells, neighbour_frame_inside={}", r.note_index, d, near_inside);
             }
         } else {
             misses += 1;

@@ -26,6 +26,7 @@ function olPalette() {
     ? {
         box: "rgba(18,22,28,0.9)",
         boxMiss: "rgba(190,24,40,0.95)",
+        approach: "rgba(45,55,66,0.55)",
         raw: "#0e1116",
         main: "#0a7d76",
         ghost: "#a85800",
@@ -34,6 +35,7 @@ function olPalette() {
     : {
         box: "rgba(228,235,243,0.92)",
         boxMiss: "rgba(255,93,108,0.9)",
+        approach: "rgba(170,185,200,0.5)",
         raw: "#ffffff",
         main: ACCENT,
         ghost: GHOST,
@@ -58,7 +60,7 @@ const opt = {
   quality: "auto",
   immersive: true,
   audio: true,
-  audioVol: 70,
+  audioVol: 20,
   section: "overlays",
 };
 
@@ -234,6 +236,8 @@ function sndFollow() {
 function sndVolume(v) {
   opt.audioVol = v;
   if (snd.gain) snd.gain.gain.value = v / 100;
+  const s = $("an-vol");
+  if (s && Number(s.value) !== v) s.value = String(v);
 }
 
 function sndStateText() {
@@ -1037,9 +1041,12 @@ function drawOverlay() {
           fade = age > 0 ? Math.max(0.3, 1 - age / 350) : 1;
           ctx.globalAlpha = 0.85 * fade;
         }
-        ctx.strokeStyle = sel ? pal.main : hit ? pal.box : pal.boxMiss;
-        ctx.lineWidth = sel ? lw + 1 : lw;
-        ctx.setLineDash(hit ? [] : [lw * 3, lw * 2.2]);
+        // Approaching notes stay NEUTRAL — the verdict colours the box
+        // only once the note reaches the plane. Painting the outcome
+        // early reads like the analyzer marking un-reached notes as hit.
+        ctx.strokeStyle = sel ? pal.main : !judging ? pal.approach : hit ? pal.box : pal.boxMiss;
+        ctx.lineWidth = sel ? lw + 1 : judging ? lw : Math.max(1.2, lw * 0.75);
+        ctx.setLineDash(judging && !hit ? [lw * 3, lw * 2.2] : []);
         pathFrom(ctx, q.pts);
         ctx.stroke();
         ctx.setLineDash([]);
@@ -1055,7 +1062,9 @@ function drawOverlay() {
           const c = cursorAt(a, rm);
           const cp = c && cpx(c[0], c[1]);
           if (cp) {
-            ctx.globalAlpha = Math.max(0.45, fade);
+            // Same fade as the box: the dot must never outlive its box
+            // visually and float in empty space.
+            ctx.globalAlpha = 0.9 * fade;
             // For a miss, a thin line shows HOW FAR the cursor was from
             // the area at the deciding moment.
             if (!hit) {
@@ -1733,8 +1742,7 @@ function drawSection() {
     html += card(
       "Song audio",
       `<label class="an-tog"><input type="checkbox" data-opt="audio"${opt.audio ? " checked" : ""}> Play the map's music</label>
-       <div class="an-sndrow"><span class="hint">Volume</span><input type="range" id="an-sndvol" min="0" max="100" step="1" value="${opt.audioVol ?? 70}"></div>
-       <p class="hint">The music follows the playback clock. Slowing down bends the pitch down with it — find a spot by ear, the way you can't mid-run.</p>`,
+       <p class="hint">The music follows the playback clock. Slowing down bends the pitch down with it — find a spot by ear, the way you can't mid-run. Volume lives in the playbar.</p>`,
     );
     html += card(
       "Diagnostics",
@@ -1839,9 +1847,6 @@ function wireSection() {
         schedulePreview();
       }
     });
-  });
-  body.querySelector("#an-sndvol")?.addEventListener("input", (e) => {
-    sndVolume(Number(e.target.value));
   });
   body.querySelectorAll("input[data-opt]").forEach((cb) => {
     cb.addEventListener("change", () => {
@@ -2468,6 +2473,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     setSpeed(Number.isFinite(v) && v > 0 ? v : play.factor);
   });
   $("an-speed-reset").addEventListener("click", () => setSpeed(1));
+  $("an-vol").addEventListener("input", () => sndVolume(Number($("an-vol").value)));
   $("an-canvas").addEventListener("click", pickNote);
   // Native mode: the canvas is click-transparent (it spans the window
   // under the floating controls), so picking listens on the stage.

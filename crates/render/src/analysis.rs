@@ -843,12 +843,28 @@ pub fn analyze(map: &Map, replay: &Replay) -> Analysis {
     let report = integrity::verify_replay(replay, map);
     if !report.consistent() {
         let practice = replay.start_from_ms > 0;
+        // Fewer hit flags than the header claims, with zero orphans, is
+        // the RECORDER dropping frames under load — seen on legitimate
+        // leaderboard scores. An edited file looks different (orphans,
+        // impossible stats), so keep the scary wording for those.
+        let header_hits = replay.hits as u32;
+        let dropped_only =
+            report.orphan_flags == 0 && report.flagged_frames < header_hits;
         signals.push(Signal {
             id: "integrity".into(),
-            severity: if practice { "notice" } else { "warn" }.into(),
-            title: "File integrity check failed".into(),
+            severity: if practice || dropped_only { "notice" } else { "warn" }.into(),
+            title: if dropped_only {
+                format!(
+                    "Incomplete recording: {} hit flag(s) missing",
+                    header_hits - report.flagged_frames
+                )
+            } else {
+                "File integrity check failed".into()
+            },
             detail: if practice {
                 "Header stats and frame data disagree. This is a practice-mode run                  (started mid-song) — header semantics for partial runs are not fully                  pinned yet, so treat this as informational."
+            } else if dropped_only {
+                "The header counts more hits than the file has flag frames — the                  game's recorder dropped frames (common under load). Derived stats                  undercount accordingly; the score itself is not in question."
             } else {
                 "Header stats and frame data disagree — the file may be corrupted or edited."
             }
@@ -872,10 +888,13 @@ pub fn analyze(map: &Map, replay: &Replay) -> Analysis {
     if !tp_times.is_empty() {
         signals.push(Signal {
             id: "teleport".into(),
-            severity: if tp_times.len() > 2 { "warn" } else { "notice" }.into(),
+            // Population check (37 real leaderboard plays): tablet players
+            // routinely show dozens of these — never escalate on count.
+            severity: "notice".into(),
             title: format!("{} instant jump(s) across the field", tp_times.len()),
             detail: "The cursor crossed more than 1.8 cells within a single ~16 ms frame. \
-                     Rarely legitimate (frame drops during lag can look similar)."
+                     Normal for absolute input devices (tablets) and frame drops; \
+                     only meaningful together with other signals."
                 .into(),
             times: tp_times.iter().copied().take(5).collect(),
         });
@@ -883,10 +902,14 @@ pub fn analyze(map: &Map, replay: &Replay) -> Analysis {
     if accel_events.len() >= 5 {
         signals.push(Signal {
             id: "accel".into(),
-            severity: "notice".into(),
+            // Population check (37 real leaderboard plays, all speeds and
+            // mods): 35 of 37 legitimate runs trip this — fast play plus
+            // frame quantization IS extreme acceleration. Context only.
+            severity: "info".into(),
             title: format!("{} extreme acceleration spikes", accel_events.len()),
-            detail: "Repeated acceleration beyond what mouse movement normally produces. \
-                     Isolated spikes are noise; clusters are worth a close look in slow motion."
+            detail: "Acceleration beyond what smooth mouse movement produces. Nearly \
+                     every fast legitimate play shows these (speed mods and tablets \
+                     amplify them) — only meaningful together with other signals."
                 .into(),
             times: accel_events.iter().copied().take(5).collect(),
         });

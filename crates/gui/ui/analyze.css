@@ -207,6 +207,20 @@ body.an-immersive #an-playbar {
   margin-left: -2px;
 }
 
+.an-volbox {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.an-volico {
+  font-size: 12px;
+  opacity: 0.75;
+}
+.an-volbox input[type="range"] {
+  width: 74px;
+}
+
 /* ── options drawer ─────────────────────────────────────────── */
 
 #an-options {
