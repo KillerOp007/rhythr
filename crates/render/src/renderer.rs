@@ -1606,10 +1606,16 @@ impl Renderer {
                 if behind < 0.0 {
                     match hits.map(|h| h[i]) {
                         Some(r) if r.hit => {
+                            // FREEZE at the plane instead of flying on:
+                            // past the plane the perspective balloons a
+                            // note over the field border within a frame
+                            // or two — the analyzer's contract is that
+                            // notes stay inside the field. Same freeze
+                            // rule as the verdict boxes.
                             let taken = r.hit_ms.unwrap_or(note_t).max(note_t);
                             if song_time_ms <= taken {
                                 depth_opacity =
-                                    Some((behind, params.note_opacity(0.0)));
+                                    Some((0.0, params.note_opacity(0.0)));
                             }
                         }
                         Some(r)
