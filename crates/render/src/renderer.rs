@@ -2388,7 +2388,10 @@ impl Renderer {
         song_time_ms: f64,
     ) {
         let [cr, cg, cb] = srgb_to_linear(config.cursor_color);
-        let size = 0.10 * config.cursor_scale;
+        // The game's cursor mesh is 0.263 units square (song.tscn) —
+        // half 0.1315. Its half-width IS the clamp inset (edgec 0.13125):
+        // the clamped cursor's edge exactly kisses the 1.5 grid edge.
+        let size = 0.1315 * config.cursor_scale;
         if config.cursor_trail_enabled {
             // The game's trail is a smooth snake: soft stamps laid out by
             // DISTANCE along the recent cursor path (SpacingMultiplier is

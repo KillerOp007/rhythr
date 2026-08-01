@@ -195,7 +195,11 @@ impl SceneParams {
     /// The factor is pixel-calibrated against the game's bracket box (the
     /// health bar spanning it measures 773px at 1440p ↔ 1.3395 world units).
     pub fn playfield_half(&self) -> f32 {
-        self.grid_scale + self.note_radius * 0.73
+        // The game's border is a fixed 3.04-unit plane (song.tscn, Outer
+        // PlaneMesh) around the 3.0 grid — half 1.52, NOT a function of
+        // the note size. Edge notes (edge 1.45) stay inside with 0.07 of
+        // air, exactly as on screen in the real client.
+        self.grid_scale + 0.52
     }
 
     /// The game's hard bound for the visible cursor centre.
