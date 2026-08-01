@@ -268,6 +268,16 @@ body.an-immersive #an-playbar {
   }
 }
 
+.an-sndrow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+}
+.an-sndrow input[type="range"] {
+  flex: 1;
+}
+
 /* ── native live mode ───────────────────────────────────────── */
 /* The GPU paints the frame BEHIND the webview: everything between the
    viewer's eye and that frame must be fully transparent. */

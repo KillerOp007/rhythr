@@ -54,6 +54,21 @@ pub struct Map {
     pub cover: Option<Vec<u8>>,
 }
 
+impl MapMeta {
+    /// Mappers sometimes ship the editor's untouched placeholder metadata;
+    /// a literal "Artist Name - Song Name" is noise, not a name — prefer
+    /// the map title then.
+    pub fn normalize(&mut self) {
+        let placeholder = |s: &str| {
+            let t = s.trim();
+            t.is_empty() || t.eq_ignore_ascii_case("Artist Name - Song Name")
+        };
+        if placeholder(&self.song_name) && !placeholder(&self.title) {
+            self.song_name = self.title.clone();
+        }
+    }
+}
+
 impl Map {
     /// Loads a map by file extension: `.rhm` (zip) or `.json` (cache format).
     pub fn from_path(path: impl AsRef<Path>) -> Result<Map> {
@@ -136,6 +151,8 @@ impl Map {
         }
         notes.sort_by_key(|n| n.time_ms);
 
+        let mut meta = meta;
+        meta.normalize();
         Ok(Map {
             meta,
             notes,

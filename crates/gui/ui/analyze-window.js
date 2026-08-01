@@ -28,6 +28,8 @@ const opt = {
   pathWindow: 600,
   quality: "auto",
   immersive: true,
+  audio: true,
+  audioVol: 70,
   section: "overlays",
 };
 
@@ -54,6 +56,169 @@ const frameUrl = (t) => {
   return win ? `http://rhframe.localhost/f.png?${q}` : `rhframe://localhost/f.png?${q}`;
 };
 let heatCanvases = { main: null, ghost: null };
+
+// ── song audio ──────────────────────────────────────────────
+// The map's own music through WebAudio, rate-locked to the analyzer
+// clock. Resampling, not time-stretching: changing the speed bends the
+// pitch like a record — which is what makes a spot findable by ear.
+const audioUrl = () =>
+  navigator.userAgent.includes("Windows") ? "http://rhaudio.localhost/song" : "rhaudio://localhost/song";
+
+// performance.now() at the last playback-clock write — the follower
+/// extrapolates the staircase clock between writes.
+let clockWall = 0;
+
+const snd = {
+  ctx: null,
+  gain: null,
+  buf: null,
+  src: null,
+  key: "", // dataKey the buffer belongs to
+  state: "off", // off | loading | ready | failed: <why>
+  startPos: 0,
+  startedAt: 0,
+  rate: 1,
+  driftStrikes: 0,
+};
+
+function sndCtx() {
+  if (!snd.ctx) {
+    try {
+      snd.ctx = new (window.AudioContext || window.webkitAudioContext)();
+    } catch {
+      snd.state = "failed: no AudioContext";
+    }
+  }
+  return snd.ctx;
+}
+
+function sndLoad() {
+  // The audio belongs to the MAP — a replay or ghost change must not
+  // re-download and re-decode the same song.
+  const key = status?.map?.path || "";
+  if (!key || (snd.key === key && snd.state !== "off" && !snd.state.startsWith("failed"))) return;
+  sndStop();
+  snd.key = key;
+  snd.buf = null;
+  if (!sndCtx()) return;
+  snd.state = "loading";
+  fetch(audioUrl())
+    .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error("map has no audio"))))
+    .then((bytes) => (snd.key === key ? snd.ctx.decodeAudioData(bytes) : null))
+    .then((buf) => {
+      if (!buf || snd.key !== key) return;
+      snd.buf = buf;
+      snd.state = "ready";
+      sndDiagUpdate();
+    })
+    .catch((e) => {
+      if (snd.key === key) snd.state = `failed: ${e?.message || e}`;
+      sndDiagUpdate();
+    });
+}
+
+/// The replay's speed mod as every engine clock applies it (same clamp
+/// as the native clock in live.rs and the baked-in segment speed).
+function replaySpeed() {
+  return clamp(status?.replay?.speed || 1, 0.25, 3);
+}
+
+function sndRate() {
+  return Math.max(0.001, play.factor * replaySpeed());
+}
+
+function sndPos() {
+  return snd.startPos + (snd.ctx.currentTime - snd.startedAt) * snd.rate;
+}
+
+function sndStop() {
+  if (!snd.src) return;
+  try {
+    snd.src.stop();
+  } catch {}
+  try {
+    snd.src.disconnect();
+  } catch {}
+  snd.src = null;
+}
+
+function sndStart(tSec) {
+  sndStop();
+  if (!snd.buf || tSec >= snd.buf.duration) return;
+  if (!snd.gain) {
+    snd.gain = snd.ctx.createGain();
+    snd.gain.connect(snd.ctx.destination);
+  }
+  snd.gain.gain.value = (opt.audioVol ?? 70) / 100;
+  const src = snd.ctx.createBufferSource();
+  src.buffer = snd.buf;
+  const rate = sndRate();
+  src.playbackRate.value = rate;
+  src.connect(snd.gain);
+  src.start(0, Math.max(0, tSec));
+  snd.src = src;
+  snd.rate = rate;
+  snd.startPos = Math.max(0, tSec);
+  snd.startedAt = snd.ctx.currentTime;
+  snd.driftStrikes = 0;
+}
+
+/// One follower for every engine: reads the shared clock (currentMs,
+/// play.on, factor) and keeps the audio locked to it. Called from live
+/// ticks, the transport handlers and a slow safety interval.
+function sndFollow() {
+  if (!opt.audio || snd.state !== "ready" || !play.on || document.hidden) {
+    sndStop();
+    return;
+  }
+  if (snd.ctx.state === "suspended") return; // resumes on the next play gesture
+  // The clock is a staircase (one write per displayed frame); compare
+  // against its extrapolation, not the stale last step, or slow frame
+  // rates read as drift and restart the music in a loop.
+  const ext = clockWall ? currentMs + (performance.now() - clockWall) * sndRate() : currentMs;
+  const t = Math.min(ext, runEnd()) / 1000;
+  if (!snd.src) {
+    sndStart(t);
+    return;
+  }
+  const rate = sndRate();
+  if (Math.abs(rate - snd.rate) > 1e-6) {
+    // Rebase first so the drift math stays truthful, then bend the pitch.
+    snd.startPos = sndPos();
+    snd.startedAt = snd.ctx.currentTime;
+    snd.rate = rate;
+    snd.src.playbackRate.value = rate;
+  }
+  // Two strikes before a restart: a single stale reading (an in-flight
+  // tick around a seek, a segment handover) must not yank the music.
+  if (Math.abs(sndPos() - t) > 0.08) {
+    if (snd.driftStrikes >= 1) {
+      sndStart(t);
+    } else {
+      snd.driftStrikes++;
+    }
+  } else {
+    snd.driftStrikes = 0;
+  }
+}
+
+function sndVolume(v) {
+  opt.audioVol = v;
+  if (snd.gain) snd.gain.gain.value = v / 100;
+}
+
+function sndStateText() {
+  if (!opt.audio) return "off";
+  if (snd.state === "ready") return `ready · ${snd.buf ? Math.round(snd.buf.duration) + "s" : ""}`;
+  return snd.state;
+}
+
+/// Targeted update — drawSection() must NOT rebuild mid-drag, so state
+/// transitions patch only this one value.
+function sndDiagUpdate() {
+  const el = document.getElementById("an-audio-kv");
+  if (el) el.textContent = sndStateText();
+}
 let currentBitmap = null;
 let lastRenderH = 0;
 // Auto mode measures the first second of playback and drops the render
@@ -71,7 +236,7 @@ let lastPrefetchK = -1e9;
 let engine = "video"; // "native" | "video" | "stream"
 // Live engine: the picture is painted by the GPU BEHIND this webview;
 // this page only draws overlays and controls on a transparent body.
-const liveState = { active: false, tick: null, ended: false, key: "" };
+const liveState = { active: false, tick: null, ended: false, key: "", seekTarget: null, seekWall: 0 };
 // Short trace of what the playback engine did last — visible under
 // View -> Diagnostics, so a problem report says where it went wrong.
 const trace = [];
@@ -312,9 +477,9 @@ async function startVideoPlayback() {
   v.hidden = false;
   $("an-canvas").style.left = "";
   v.currentTime = clamp(
-    (currentMs - seg.current.startMs) / 1000,
+    (currentMs - seg.current.startMs) / 1000 / replaySpeed(),
     0,
-    Math.max(0, (seg.current.spanMs - 40) / 1000),
+    Math.max(0, (seg.current.spanMs / replaySpeed() - 40) / 1000),
   );
   v.playbackRate = videoRate();
   // Do not await play(): some engines never resolve that promise even
@@ -344,7 +509,10 @@ function switchToStreamingNow() {
 function videoTick() {
   const v = $("an-video");
   if (!play.on || v.hidden) return;
-  currentMs = seg.current.startMs + v.currentTime * 1000;
+  // The segment file has the replay's speed mod baked in (video.rs:
+  // one video second holds `speed` song seconds) — map back to song time.
+  currentMs = seg.current.startMs + v.currentTime * 1000 * replaySpeed();
+  clockWall = performance.now();
   updateTime();
   drawScrub();
   syncOverlayToVideo();
@@ -354,6 +522,7 @@ function videoTick() {
   cv.getContext("2d").clearRect(0, 0, cv.width, cv.height);
   drawOverlay();
   refreshLive();
+  sndFollow();
   // Buffer the follow-up EARLY — the moment this segment starts playing.
   if (!seg.next && !seg.preparing) {
     const end = seg.current.startMs + seg.current.spanMs;
@@ -597,8 +766,12 @@ async function runPreview() {
 
 function seek(t) {
   currentMs = clamp(t, 0, runEnd());
+  clockWall = performance.now();
+  liveState.seekTarget = currentMs;
+  liveState.seekWall = performance.now();
   updateTime();
   drawScrub();
+  queueMicrotask(sndFollow);
   if (engine === "native") {
     invoke("live_cmd", { cmd: "seek", value: currentMs }).catch(() => {});
     return;
@@ -606,7 +779,7 @@ function seek(t) {
   if (play.on && engine === "video") {
     if (segmentCovers(currentMs) && !$("an-video").hidden) {
       // Inside the buffered stretch: instant.
-      $("an-video").currentTime = (currentMs - seg.current.startMs) / 1000;
+      $("an-video").currentTime = (currentMs - seg.current.startMs) / 1000 / replaySpeed();
       return;
     }
     if (entryCovers(seg.next, currentMs)) {
@@ -987,6 +1160,13 @@ function setPlaying(on) {
   if (on && (!data || !status?.replay)) return;
   play.on = on;
   play.gen++;
+  if (on && opt.audio) {
+    // This runs inside a real user gesture (click/space) — the only
+    // place the autoplay policy lets the AudioContext start.
+    sndLoad();
+    if (snd.ctx?.state === "suspended") snd.ctx.resume().catch(() => {});
+  }
+  queueMicrotask(sndFollow);
   $("an-play").textContent = on ? "⏸" : "▶";
   document.body.classList.toggle("an-immersive", on && opt.immersive);
   clearTimeout(stillTimer);
@@ -1097,6 +1277,7 @@ async function pump(gen) {
   const k = kw;
   play.k = k;
   currentMs = Math.min(play.startMs + k * step, runEnd());
+  clockWall = performance.now();
   updateTime();
   drawScrub();
   const t0 = performance.now();
@@ -1166,6 +1347,9 @@ function stepFrame(dir) {
     if (!(dir < 0 && i >= 0 && ft[i] < currentMs)) i += dir;
     const t = ft[clamp(i, 0, ft.length - 1)];
     currentMs = t;
+    clockWall = performance.now();
+    liveState.seekTarget = t;
+    liveState.seekWall = performance.now();
     updateTime();
     drawScrub();
     invoke("live_cmd", { cmd: "seek", value: t }).catch(() => {});
@@ -1186,6 +1370,7 @@ function setSpeed(v) {
   $("an-speed").value = String(Math.round(play.factor * 100));
   $("an-speed-num").value = String(Math.round(play.factor * 100) / 100);
   if (!changed) return;
+  queueMicrotask(sndFollow);
   if (engine === "native") {
     invoke("live_cmd", { cmd: "speed", value: play.factor }).catch(() => {});
     return;
@@ -1441,6 +1626,12 @@ function drawSection() {
        <p class="hint">They come back the moment you move the mouse or pause.</p>`,
     );
     html += card(
+      "Song audio",
+      `<label class="an-tog"><input type="checkbox" data-opt="audio"${opt.audio ? " checked" : ""}> Play the map's music</label>
+       <div class="an-sndrow"><span class="hint">Volume</span><input type="range" id="an-sndvol" min="0" max="100" step="1" value="${opt.audioVol ?? 70}"></div>
+       <p class="hint">The music follows the playback clock. Slowing down bends the pitch down with it — find a spot by ear, the way you can't mid-run.</p>`,
+    );
+    html += card(
       "Diagnostics",
       kv("Build", status?.build || "?") +
         kv("Engine", engine === "native" ? "live GPU (native)" : engine === "video" ? "rendered video" : "single frames") +
@@ -1448,6 +1639,7 @@ function drawSection() {
         kv("Playback", !$("an-video").hidden ? `video · ${seg.current?.outFps ?? "?"} fps/song-s` : seg.preparing ? "rendering…" : loopFps ? `stream · ${Math.round(loopFps)} fps` : "idle") +
         kv("Buffered", seg.current ? `${fmtMs(seg.current.startMs)}+${(seg.current.spanMs / 1000).toFixed(0)}s${seg.next ? ` · next ${fmtMs(seg.next.startMs)}+${(seg.next.spanMs / 1000).toFixed(0)}s` : ""}` : "–") +
         kv("Render size", `${lastRenderH}p at ${scalePct()}%`) +
+        `<div class="an-kv"><span>Audio</span><b id="an-audio-kv">${sndStateText()}</b></div>` +
         `<div class="an-list"><span class="hint">${esc(trace.join(" · ") || "—")}</span></div>` +
         (transportNote ? `<p class="hint">${esc(transportNote)}</p>` : "") +
         `<p class="hint">If playback stalls, this tells us where. "fetch" is the fast path; the window falls back on its own if a platform blocks it.</p>`,
@@ -1543,9 +1735,20 @@ function wireSection() {
       }
     });
   });
+  body.querySelector("#an-sndvol")?.addEventListener("input", (e) => {
+    sndVolume(Number(e.target.value));
+  });
   body.querySelectorAll("input[data-opt]").forEach((cb) => {
     cb.addEventListener("change", () => {
       opt[cb.dataset.opt] = cb.checked;
+      if (cb.dataset.opt === "audio") {
+        if (cb.checked) {
+          sndLoad();
+          if (snd.ctx?.state === "suspended") snd.ctx.resume().catch(() => {});
+        }
+        sndFollow();
+        sndDiagUpdate();
+      }
       if (cb.dataset.opt === "immersive") {
         document.body.classList.toggle("an-immersive", play.on && opt.immersive);
       }
@@ -1910,6 +2113,7 @@ async function loadData(key) {
   chip.textContent = v === "clean" ? "no integrity signals" : v === "notice" ? "signals" : "strong signals";
   msg("");
   currentMs = clamp(currentMs, 0, runEnd());
+  if (opt.audio) sndLoad();
   renderNav();
   drawSection();
   drawScrub();
@@ -1952,8 +2156,18 @@ window.addEventListener("unhandledrejection", (e) => msg(`Error: ${e.reason}`));
 /// One live-tick: the native engine's clock and per-side geometry. The
 /// canvas paints ONLY overlays; the picture sits behind the webview.
 function onLiveTick(tk) {
+  // Ticks in flight from before a seek carry the OLD clock — letting
+  // them through rewinds the UI and yanks the audio back for a beat.
+  if (liveState.seekTarget != null) {
+    if (Math.abs(tk.t - liveState.seekTarget) < 250 || performance.now() - liveState.seekWall > 300) {
+      liveState.seekTarget = null;
+    } else {
+      return;
+    }
+  }
   liveState.tick = tk;
   currentMs = tk.t;
+  clockWall = performance.now();
   const wasPlaying = play.on;
   play.on = tk.playing;
   if (wasPlaying !== tk.playing) {
@@ -1976,6 +2190,7 @@ function onLiveTick(tk) {
     cv.height = tk.fh;
   }
   lastFrame = { w: tk.fw, h: tk.fh, sides: tk.sides };
+  sndFollow();
   const ctx = cv.getContext("2d");
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, cv.width, cv.height);
@@ -2187,8 +2402,12 @@ window.addEventListener("DOMContentLoaded", async () => {
   toggleOptions(true);
 });
 
+setInterval(sndFollow, 100);
+
 window.addEventListener("beforeunload", () => {
   play.on = false;
+  sndStop();
+  snd.ctx?.close().catch(() => {});
   cancelPrefetch();
   invoke("cancel_segment").catch(() => {});
   invoke("set_preview_quality", { height: 720 }).catch(() => {});

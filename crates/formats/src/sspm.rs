@@ -178,7 +178,7 @@ fn parse_v1(r: &mut Reader) -> Result<Map> {
         .filter(|s| !s.is_empty())
         .map(String::from)
         .collect();
-    Ok(Map {
+    Ok(normalized(Map {
         meta: MapMeta {
             legacy_id: map_id,
             song_name: map_name.clone(),
@@ -191,7 +191,12 @@ fn parse_v1(r: &mut Reader) -> Result<Map> {
         notes,
         audio,
         cover,
-    })
+    }))
+}
+
+fn normalized(mut map: Map) -> Map {
+    map.meta.normalize();
+    map
 }
 
 fn parse_v2(data: &[u8], r: &mut Reader) -> Result<Map> {
@@ -278,7 +283,7 @@ fn parse_v2(data: &[u8], r: &mut Reader) -> Result<Map> {
         .then(|| slice_at(data, cover_off, cover_len).map(<[u8]>::to_vec))
         .transpose()?;
 
-    Ok(Map {
+    Ok(normalized(Map {
         meta: MapMeta {
             legacy_id: map_id,
             song_name: if song_name.is_empty() {
@@ -297,7 +302,7 @@ fn parse_v2(data: &[u8], r: &mut Reader) -> Result<Map> {
         notes,
         audio,
         cover,
-    })
+    }))
 }
 
 /// Parses `.sspm` bytes (v1 or v2) into the shared [`Map`] model.
@@ -396,5 +401,33 @@ mod tests {
     #[test]
     fn rejects_bad_signature() {
         assert!(parse(b"NOPE").is_err());
+    }
+
+    #[test]
+    fn placeholder_song_name_falls_back_to_title() {
+        let mut meta = crate::map::MapMeta {
+            song_name: "Artist Name - Song Name".into(),
+            title: "DECO*27 - Rabbit Hole".into(),
+            ..Default::default()
+        };
+        meta.normalize();
+        assert_eq!(meta.song_name, "DECO*27 - Rabbit Hole");
+
+        let mut kept = crate::map::MapMeta {
+            song_name: "Real Artist - Real Song".into(),
+            title: "anything".into(),
+            ..Default::default()
+        };
+        kept.normalize();
+        assert_eq!(kept.song_name, "Real Artist - Real Song");
+
+        // Both placeholders: leave it alone (nothing better to show).
+        let mut both = crate::map::MapMeta {
+            song_name: "artist name - song name".into(),
+            title: "".into(),
+            ..Default::default()
+        };
+        both.normalize();
+        assert_eq!(both.song_name, "artist name - song name");
     }
 }

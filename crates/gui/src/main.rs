@@ -3562,6 +3562,51 @@ fn main() {
                 }
             });
         })
+        // The map's own music for the analyzer: one whole-file response —
+        // WebAudio decodes the complete buffer up front, no ranges needed.
+        .register_asynchronous_uri_scheme_protocol("rhaudio", |ctx, req, responder| {
+            let app_handle = ctx.app_handle().clone();
+            let _ = req;
+            std::thread::spawn(move || {
+                let responder = std::sync::Mutex::new(Some(responder));
+                let answer = |status: tauri::http::StatusCode, ct: &str, body: Vec<u8>| {
+                    if let Some(r) = responder.lock().ok().and_then(|mut g| g.take()) {
+                        if let Ok(resp) = tauri::http::Response::builder()
+                            .status(status)
+                            .header(tauri::http::header::CONTENT_TYPE, ct)
+                            .header(tauri::http::header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                            .header(tauri::http::header::CACHE_CONTROL, "no-store")
+                            .body(body)
+                        {
+                            r.respond(resp);
+                        }
+                    }
+                };
+                let audio = app_handle.try_state::<App>().and_then(|app| {
+                    let inner = app.lock();
+                    inner.map.as_ref().and_then(|(_, m)| m.audio.clone())
+                });
+                match audio {
+                    Some(bytes) => {
+                        let ct = if bytes.starts_with(b"OggS") {
+                            "audio/ogg"
+                        } else if bytes.starts_with(b"RIFF") {
+                            "audio/wav"
+                        } else if bytes.starts_with(b"fLaC") {
+                            "audio/flac"
+                        } else {
+                            "audio/mpeg"
+                        };
+                        answer(tauri::http::StatusCode::OK, ct, bytes);
+                    }
+                    None => answer(
+                        tauri::http::StatusCode::NOT_FOUND,
+                        "text/plain",
+                        b"map has no audio".to_vec(),
+                    ),
+                }
+            });
+        })
         // Playback segments: a real video file, served with byte ranges
         // because that is what a <video> element needs to start and seek.
         .register_asynchronous_uri_scheme_protocol("rhvideo", |ctx, req, responder| {
