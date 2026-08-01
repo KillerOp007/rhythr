@@ -618,6 +618,22 @@ const fmtMsFull = (ms) => {
 const runEnd = () => timeline?.length_ms || status?.replay?.length_ms || 0;
 const noteById = (i) => data?.main?.notes.find((n) => n.i === i);
 
+/// Cursor position (world units) at an arbitrary song time, interpolated
+/// between recorded frames.
+function cursorAt(a, ms) {
+  const ft = a.frames.t;
+  const i = lastIndexLE(ft, ms);
+  if (i < 0) return null;
+  if (i + 1 < ft.length && ft[i + 1] > ft[i]) {
+    const k = clamp((ms - ft[i]) / (ft[i + 1] - ft[i]), 0, 1);
+    return [
+      a.frames.x[i] + (a.frames.x[i + 1] - a.frames.x[i]) * k,
+      a.frames.y[i] + (a.frames.y[i + 1] - a.frames.y[i]) * k,
+    ];
+  }
+  return [a.frames.x[i], a.frames.y[i]];
+}
+
 function lastIndexLE(arr, t) {
   let lo = 0;
   let hi = arr.length;
@@ -717,9 +733,12 @@ function withTimeout(promise, ms, onTimeout) {
 
 async function bitmapFromUrl(url) {
   const img = new Image();
+  // CORS-mode load keeps the canvas origin-clean (the scheme handler
+  // sends Access-Control-Allow-Origin: *) — the overlay snapshot reads
+  // the canvas back, and one tainted frame would poison it for good.
+  img.crossOrigin = "anonymous";
   img.src = url;
   await img.decode();
-  // Tainted canvases are fine here: the frame canvas is never read back.
   return createImageBitmap(img);
 }
 
@@ -1002,6 +1021,10 @@ function drawOverlay() {
         const n = si === 0 ? noteById(q.i) : a.notes.find((x) => x.i === q.i);
         const sel = si === 0 && q.i === selNote;
         const hit = n ? n.hit : true;
+        // After the note reaches the plane the box freezes there; draw
+        // it a touch quieter once the verdict is in.
+        const judging = n && t >= n.t;
+        if (judging) ctx.globalAlpha = 0.75;
         ctx.strokeStyle = sel ? pal.main : hit ? pal.box : pal.boxMiss;
         ctx.lineWidth = sel ? lw + 1 : lw;
         ctx.setLineDash(hit ? [] : [lw * 3, lw * 2.2]);
@@ -1012,6 +1035,28 @@ function drawOverlay() {
           ctx.fillStyle = pal.selFill;
           ctx.fill();
         }
+        // Verdict marker: where the cursor actually was at the deciding
+        // moment — the recorded hit frame, or the note time for a miss.
+        // THIS answers "was I really inside?", not the moving picture.
+        if (judging) {
+          const rm = n.hit ? (n.hit_ms ?? n.t) : n.t;
+          const c = cursorAt(a, rm);
+          const cp = c && projectPx(side, c[0], c[1]);
+          if (cp) {
+            const r = Math.max(6, lw * 2.4);
+            ctx.globalAlpha = 1;
+            ctx.beginPath();
+            ctx.arc(cp[0], cp[1], r, 0, Math.PI * 2);
+            ctx.fillStyle = hit ? pal.main : pal.boxMiss;
+            ctx.fill();
+            // Contrast ring so the dot reads on any ground (including
+            // the cursor sprite it often sits on).
+            ctx.lineWidth = Math.max(1.5, lw * 0.6);
+            ctx.strokeStyle = pal.raw;
+            ctx.stroke();
+          }
+        }
+        ctx.globalAlpha = 1;
       }
       ctx.restore();
       ctx.save();
@@ -1495,7 +1540,7 @@ function drawSection() {
         <label class="an-tog"><input type="checkbox" data-view="notes"${opt.notes ? " checked" : ""}> Notes</label>
       </div>
       <p class="hint">Hide the game's cursor to study the raw recorded one, or the notes to see nothing but hit areas. Changes re-render the picture.</p>
-      <p class="hint">Hitboxes show the game's TRUE hit area (a fixed square, larger than the visual note) and follow each note in. A hit note keeps its box until the recorded hit lands; a missed one keeps flying so the whiff stays visible — even on skins that fade notes out early (half ghost).</p>`,
+      <p class="hint">Hitboxes show the game's TRUE hit area (a fixed square, larger than the visual note) and follow each note in. At the hit plane the box freezes — the game judges in 2D, so cursor vs. box is only comparable there — and lingers briefly with a dot marking exactly where the cursor was at the deciding moment: dot inside the box = hit, outside = miss. Works on skins that fade notes out early (half ghost).</p>`,
     );
   } else if (opt.section === "cursor") {
     const c = a.cursor;
@@ -1633,7 +1678,8 @@ function drawSection() {
         <button class="btn small" id="exp-card">Analysis card (PNG)</button>
         <button class="btn small ghost" id="exp-json">JSON</button>
         <button class="btn small ghost" id="exp-csv">CSV</button>
-      </div><p class="hint">The card is a shareable summary; JSON and CSV carry the per-note data for your own analysis.</p>`,
+        <button class="btn small ghost" id="exp-snap">Overlay snapshot (F8)</button>
+      </div><p class="hint">The card is a shareable summary; JSON and CSV carry the per-note data. The overlay snapshot saves exactly what you see — picture plus hitboxes/path — ideal for bug reports.</p>`,
     );
   } else if (opt.section === "view") {
     html += card(
@@ -1680,7 +1726,7 @@ function drawSection() {
     );
     html += card(
       "Shortcuts",
-      `<div class="an-list"><span>Space — play / pause</span><span>← / → — one frame</span><span>Shift + ← / → — one second</span><span>O — options · Esc — hide options</span><span>Click a note — inspect it</span></div>`,
+      `<div class="an-list"><span>Space — play / pause</span><span>← / → — one frame</span><span>Shift + ← / → — one second</span><span>O — options · Esc — hide options</span><span>F8 — save overlay snapshot</span><span>Click a note — inspect it</span></div>`,
     );
   }
 
@@ -1807,6 +1853,7 @@ function wireSection() {
     });
   });
   $("exp-card")?.addEventListener("click", exportCard);
+  $("exp-snap")?.addEventListener("click", snapOverlay);
   $("exp-json")?.addEventListener("click", exportJson);
   $("exp-csv")?.addEventListener("click", exportCsv);
   body.querySelectorAll("canvas[data-series]").forEach((cv) => {
@@ -1993,6 +2040,76 @@ async function exportCsv() {
     msgFlash(`Saved — ${p}`);
   } catch (e) {
     msg(String(e));
+  }
+}
+
+/// Composites the current picture and the overlay canvas into one PNG —
+/// exactly what the eye sees, portable and test-friendly (F8).
+let snapBusy = false;
+async function snapOverlay() {
+  if (!lastFrame || snapBusy) return;
+  snapBusy = true;
+  try {
+    // Freeze the moment FIRST: the overlay pixels now, the still for the
+    // same clock value — during playback the clock moves while the frame
+    // fetch runs, and a late picture under a fresh overlay lies.
+    const t0 = currentMs;
+    const ov = document.createElement("canvas");
+    ov.width = lastFrame.w;
+    ov.height = lastFrame.h;
+    ov.getContext("2d").drawImage($("an-canvas"), 0, 0);
+    const c = document.createElement("canvas");
+    c.width = lastFrame.w;
+    c.height = lastFrame.h;
+    const x = c.getContext("2d");
+    x.fillStyle = "#000";
+    x.fillRect(0, 0, c.width, c.height);
+    try {
+      // fetch + ImageBitmap keeps the canvas origin-clean — an <img>
+      // without CORS would taint it and toDataURL throws SecurityError.
+      const r = await fetch(frameUrl(t0));
+      if (r.ok) {
+        const bmp = await createImageBitmap(await r.blob());
+        // Aspect-fit, never stretch: the preview still and the live
+        // frame can differ in resolution (and defensively, in aspect).
+        const s = Math.min(c.width / bmp.width, c.height / bmp.height);
+        const dw = bmp.width * s;
+        const dh = bmp.height * s;
+        x.drawImage(bmp, (c.width - dw) / 2, (c.height - dh) / 2, dw, dh);
+        bmp.close?.();
+      }
+    } catch {
+      // No still available (render busy): overlay on black still helps.
+    }
+    x.drawImage(ov, 0, 0, c.width, c.height);
+    let dataUrl;
+    try {
+      dataUrl = c.toDataURL("image/png");
+    } catch {
+      msg("Overlay snapshot unavailable: the frame channel on this system taints the canvas.");
+      return;
+    }
+    let p = null;
+    try {
+      p = await invoke("overlay_snap_target");
+    } catch {}
+    if (!p) {
+      p = await dialog.save({
+        defaultPath: `${expBase()} - overlay.png`,
+        filters: [{ name: "PNG image", extensions: ["png"] }],
+      });
+      if (!p) return;
+    }
+    try {
+      await invoke("save_data_url_png", { path: p, dataUrl });
+      msg("Overlay snapshot saved.");
+      clearTimeout(flashTimer);
+      flashTimer = setTimeout(() => msg(""), 1800);
+    } catch (e) {
+      msg(String(e));
+    }
+  } finally {
+    snapBusy = false;
   }
 }
 
@@ -2356,6 +2473,11 @@ window.addEventListener("DOMContentLoaded", async () => {
     const typing = t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
     if (e.key === "Escape") {
       toggleOptions(false);
+      return;
+    }
+    if (e.key === "F8") {
+      e.preventDefault();
+      snapOverlay();
       return;
     }
     if (typing || e.ctrlKey || e.metaKey || e.altKey) return;

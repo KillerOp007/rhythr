@@ -2877,7 +2877,6 @@ fn frame_sides_locked(inner: &Inner, time_ms: f64) -> Result<PreviewFrameDto, St
                         time_ms,
                         (x, w),
                         Some(hud),
-                        ctx.cfg.push_back,
                     )
                     .into_iter()
                     .map(|(i, pts, depth)| NoteQuadDto { i: i as u32, pts, depth })
@@ -3084,6 +3083,34 @@ async fn open_analyze_window(app_handle: tauri::AppHandle) -> Result<(), String>
 #[tauri::command]
 fn save_text_file(path: String, contents: String) -> Result<(), String> {
     std::fs::write(&path, contents).map_err(err_str)
+}
+
+/// Overlay snapshots: with RHYTHR_SNAP_DIR set, the analyze window saves
+/// there without a dialog — the composited picture+overlay PNG is the
+/// only reliable way to SEE the overlay in automated tests (X11 screen
+/// grabs of a transparent window are compositor lottery).
+static SNAP_COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+#[tauri::command]
+fn overlay_snap_target() -> Option<String> {
+    std::env::var("RHYTHR_SNAP_DIR").ok().map(|d| {
+        let n = SNAP_COUNTER.fetch_add(1, Ordering::SeqCst);
+        format!("{d}/overlay-{n:03}.png")
+    })
+}
+
+/// Decodes a canvas data URL and writes the PNG bytes.
+#[tauri::command]
+fn save_data_url_png(path: String, data_url: String) -> Result<(), String> {
+    use base64::Engine as _;
+    let b64 = data_url
+        .split_once("base64,")
+        .ok_or("not a base64 data url")?
+        .1;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(b64)
+        .map_err(err_str)?;
+    std::fs::write(&path, bytes).map_err(err_str)
 }
 
 /// Writes a canvas-rendered PNG (data URL) to a user-chosen path.
@@ -3772,6 +3799,8 @@ fn main() {
             live_cmd,
             analysis_data,
             save_text_file,
+            overlay_snap_target,
+            save_data_url_png,
             save_data_url,
             set_preview_quality,
             open_analyze_window,

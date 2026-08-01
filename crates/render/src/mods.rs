@@ -6,7 +6,7 @@
 
 use rhythia_formats::map::Map;
 use rhythia_formats::rhr::Replay;
-use rhythia_sim::hitreg::{match_hits, DEFAULT_WINDOW_MS};
+use rhythia_sim::hitreg::{match_hits_timing_only, DEFAULT_WINDOW_MS};
 
 /// Hardrock scales the note grid outward around its centre. Empirical, from
 /// the hardrock testdata replay: the game's cursor clamp grows from
@@ -63,7 +63,10 @@ fn cursor_at(replay: &Replay, ms: f64) -> (f32, f32) {
 /// hit moments is the one that was active (clear margin in practice: the
 /// right flip scores a few tenths of a cell, wrong ones 1+).
 fn detect_flip(map: &Map, replay: &Replay, fallback: (bool, bool)) -> (bool, bool) {
-    let outcome = match_hits(&map.notes, &replay.frames, DEFAULT_WINDOW_MS);
+    // Timing-only on purpose: this runs on the UNFLIPPED map, and the
+    // cursor-guided phase would "correct" attributions against geometry
+    // the player never saw — biasing the flip score toward identity.
+    let outcome = match_hits_timing_only(&map.notes, &replay.frames, DEFAULT_WINDOW_MS);
     let mut best = fallback;
     let mut best_dist = f64::MAX;
     for flip_x in [false, true] {

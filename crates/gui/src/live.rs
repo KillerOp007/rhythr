@@ -348,7 +348,6 @@ pub fn spawn(
                                 t,
                                 (x, w),
                                 Some(side_hud),
-                                cfg.push_back,
                             )
                             .into_iter()
                             .map(|(i, pts, _)| TickNoteQuad { i: i as u32, pts })

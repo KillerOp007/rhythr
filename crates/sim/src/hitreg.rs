@@ -26,6 +26,22 @@ use rhythia_formats::rhr::Frame;
 /// real replays is exactly 80 ms; see module docs.
 pub const DEFAULT_WINDOW_MS: f64 = 80.0;
 
+/// Half-width of the game's hit area (NoteManager.gd `note_hitbox_size`
+/// 1.1375): the fixed square around a note's centre the cursor must
+/// cover, in world units. Attribution and the analyzer's hit-area boxes
+/// share this one constant.
+pub const HITBOX_HALF: f32 = 0.56875;
+
+/// Grid cell (0..2) to world units, the game's own mapping.
+fn note_world(n: &Note) -> (f32, f32) {
+    (n.x - 1.0, 1.0 - n.y)
+}
+
+fn covers(fx: f32, fy: f32, n: &Note) -> bool {
+    let (wx, wy) = note_world(n);
+    (fx - wx).abs() <= HITBOX_HALF && (fy - wy).abs() <= HITBOX_HALF
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct NoteResult {
     /// Index into the notes slice this result belongs to.
@@ -50,11 +66,34 @@ impl MatchOutcome {
     }
 }
 
-/// Aligns flagged frames to notes with a monotonic two-pointer walk.
-/// Notes must be sorted by time (Map guarantees this); flags are visited
-/// in frame order.
+/// Aligns flagged frames to notes with a monotonic two-pointer walk,
+/// then refines the attribution with the recorded cursor (see Phase 2
+/// below). Notes must be sorted by time (Map guarantees this).
 pub fn match_hits(notes: &[Note], frames: &[Frame], window_ms: f64) -> MatchOutcome {
-    let flags: Vec<f64> = frames.iter().filter(|f| f.hit).map(|f| f.ms).collect();
+    match_hits_inner(notes, frames, window_ms, true)
+}
+
+/// Timing-only matching, no cursor-guided reattribution. Use when the
+/// note coordinates are NOT yet in the cursor's space — mirror-flip
+/// detection runs on the unflipped map, and letting Phase 2 "correct"
+/// attributions against geometry the player never saw can invert the
+/// detected axis.
+pub fn match_hits_timing_only(notes: &[Note], frames: &[Frame], window_ms: f64) -> MatchOutcome {
+    match_hits_inner(notes, frames, window_ms, false)
+}
+
+fn match_hits_inner(
+    notes: &[Note],
+    frames: &[Frame],
+    window_ms: f64,
+    cursor_guided: bool,
+) -> MatchOutcome {
+    let flag_frames: Vec<(f64, f32, f32)> = frames
+        .iter()
+        .filter(|f| f.hit)
+        .map(|f| (f.ms, f.x, f.y))
+        .collect();
+    let flags: Vec<f64> = flag_frames.iter().map(|f| f.0).collect();
 
     let mut results: Vec<NoteResult> = (0..notes.len())
         .map(|i| NoteResult {
@@ -66,6 +105,9 @@ pub fn match_hits(notes: &[Note], frames: &[Frame], window_ms: f64) -> MatchOutc
 
     let mut orphan_flags = 0u32;
     let mut fi = 0usize;
+    // Which flag frame each hit note owns — Phase 2 swaps move the INDEX,
+    // so the cursor lookup can never alias two flags with equal stamps.
+    let mut flag_of: Vec<Option<usize>> = vec![None; notes.len()];
 
     for (ni, note) in notes.iter().enumerate() {
         let note_ms = note.time_ms as f64;
@@ -78,11 +120,68 @@ pub fn match_hits(notes: &[Note], frames: &[Frame], window_ms: f64) -> MatchOutc
         if fi < flags.len() && (flags[fi] - note_ms).abs() <= window_ms {
             results[ni].hit = true;
             results[ni].hit_ms = Some(flags[fi]);
+            flag_of[ni] = Some(fi);
             fi += 1;
         }
     }
     // Flags left after the last note matched nothing.
     orphan_flags += (flags.len() - fi) as u32;
+
+    // Phase 2 — cursor-guided reattribution. Timing alone cannot tell
+    // near-simultaneous notes apart, and the earliest-note rule above
+    // sometimes hands a flag to the WRONG one: the analyzer then paints
+    // a hit box the cursor never touched and a miss box it sat inside.
+    // The flag frame recorded the cursor, so use it: a flag moves from
+    // its note to a missed neighbour when the cursor covered the missed
+    // note's hit area and NOT the attributed one. Totals never change —
+    // each swap trades one hit and one miss between two notes.
+    //
+    // A note arms at its chart time: a flag may precede its true note
+    // only by the replay's ~17 ms frame-stamp quantization (module docs),
+    // never by the full window — otherwise a cursor parked on a
+    // soon-future note's cell steals flags and manufactures impossible
+    // early hits (negative timing errors).
+    const EARLY_SLACK_MS: f64 = 17.0;
+    // A mis-shifted CHAIN (every flag one note early) unravels one link
+    // per pass, from the tail backwards — so run to convergence. Each
+    // swap strictly increases the number of cursor-consistent hits, so
+    // this terminates within one pass per note; the cap is a backstop.
+    let passes = if cursor_guided { notes.len().max(1) } else { 0 };
+    for _pass in 0..passes {
+        let mut changed = false;
+        for mi in 0..results.len() {
+            if results[mi].hit {
+                continue;
+            }
+            let miss_note = &notes[mi];
+            let miss_t = miss_note.time_ms as f64;
+            for hi in 0..results.len() {
+                if !results[hi].hit {
+                    continue;
+                }
+                let Some(fidx) = flag_of[hi] else { continue };
+                let (fm, fx, fy) = flag_frames[fidx];
+                if fm - miss_t > window_ms || miss_t - fm > EARLY_SLACK_MS {
+                    continue;
+                }
+                // Only when the cursor is unambiguous: inside the missed
+                // note's area, outside the attributed one's.
+                if covers(fx, fy, miss_note) && !covers(fx, fy, &notes[hi]) {
+                    results[mi].hit = true;
+                    results[mi].hit_ms = Some(fm);
+                    flag_of[mi] = Some(fidx);
+                    results[hi].hit = false;
+                    results[hi].hit_ms = None;
+                    flag_of[hi] = None;
+                    changed = true;
+                    break;
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
 
     MatchOutcome {
         results,
@@ -178,5 +277,70 @@ mod tests {
         let out = match_hits(&notes, &frames, DEFAULT_WINDOW_MS);
         assert_eq!(out.derived_hits(), 1);
         assert_eq!(out.orphan_flags, 1);
+    }
+
+    /// The pass_long real-replay case: two near-simultaneous notes, the
+    /// flag lands on the earlier one by time but the cursor sat on the
+    /// later one — attribution must follow the cursor.
+    #[test]
+    fn cursor_reattributes_swapped_double_note() {
+        let notes = [
+            Note { time_ms: 1000, x: 0.0, y: 2.0 }, // world (-1, -1)
+            Note { time_ms: 1005, x: 1.0, y: 2.0 }, // world (0, -1)
+        ];
+        let frames = [Frame { ms: 1004.0, x: 0.0, y: -1.0, health: 1.0, hit: true }];
+        let out = match_hits(&notes, &frames, DEFAULT_WINDOW_MS);
+        assert!(!out.results[0].hit, "cursor never covered note 0");
+        assert!(out.results[1].hit, "cursor sat on note 1");
+        assert_eq!(out.results[1].hit_ms, Some(1004.0));
+        assert_eq!(out.derived_hits(), 1);
+    }
+
+    /// Overlapping areas (adjacent cells overlap by 0.1375): when the
+    /// cursor covers BOTH notes the earliest-note rule must stand.
+    #[test]
+    fn ambiguous_cursor_keeps_earliest_attribution() {
+        let notes = [
+            Note { time_ms: 1000, x: 0.0, y: 2.0 }, // world (-1, -1)
+            Note { time_ms: 1005, x: 1.0, y: 2.0 }, // world (0, -1)
+        ];
+        // Cursor midway: covers both areas.
+        let frames = [Frame { ms: 1004.0, x: -0.5, y: -1.0, health: 1.0, hit: true }];
+        let out = match_hits(&notes, &frames, DEFAULT_WINDOW_MS);
+        assert!(out.results[0].hit);
+        assert!(!out.results[1].hit);
+    }
+
+    /// A flag must never be stolen by a note far in the FUTURE — the
+    /// hitbox arms at the note's chart time (early slack = one frame).
+    #[test]
+    fn future_note_cannot_steal_a_flag() {
+        let notes = [
+            Note { time_ms: 1000, x: 0.0, y: 0.0 }, // world (-1, 1)
+            Note { time_ms: 1075, x: 2.0, y: 0.0 }, // world (1, 1)
+        ];
+        // Flag at 1000 for note 0, but the cursor already left toward
+        // note 1's cell (fast jump + frame quantization).
+        let frames = [Frame { ms: 1000.0, x: 1.0, y: 1.0, health: 1.0, hit: true }];
+        let out = match_hits(&notes, &frames, DEFAULT_WINDOW_MS);
+        assert!(out.results[0].hit, "note 0 keeps its flag");
+        assert!(!out.results[1].hit, "a note 75 ms in the future must not steal it");
+    }
+
+    /// Totals are invariant under reattribution.
+    #[test]
+    fn reattribution_never_changes_totals() {
+        let notes = [
+            Note { time_ms: 1000, x: 0.0, y: 0.0 },
+            Note { time_ms: 1010, x: 2.0, y: 0.0 },
+            Note { time_ms: 1020, x: 1.0, y: 1.0 },
+        ];
+        let frames = [
+            Frame { ms: 1008.0, x: 1.0, y: 1.0, health: 1.0, hit: true }, // on note 1
+            Frame { ms: 1022.0, x: 0.0, y: 0.0, health: 1.0, hit: true }, // on note 2
+        ];
+        let out = match_hits(&notes, &frames, DEFAULT_WINDOW_MS);
+        assert_eq!(out.derived_hits(), 2);
+        assert_eq!(out.orphan_flags, 0);
     }
 }

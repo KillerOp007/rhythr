@@ -90,8 +90,10 @@ pub fn synced_race(main: &RaceSide, ghost: &RaceSide, t_ms: f64) -> SyncedRace {
             };
             known = known.max(k);
         }
-        // Hit times and windows are monotone over the note order, so the
-        // first pending note ends the settled prefix.
+        // A pending earlier note excludes any later note from a settled
+        // prefix by definition, so breaking at the first pending note is
+        // correct — even though cursor reattribution means hit TIMES are
+        // no longer strictly monotone over the note order.
         if known > t_ms {
             break;
         }

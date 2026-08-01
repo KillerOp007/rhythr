@@ -745,14 +745,11 @@ impl Renderer {
         replay: &Replay,
         song_time_ms: f64,
         viewport: (u32, u32),
-        // A note's hit area outlives the hit plane: a HIT note keeps its
-        // box until the recorded hit lands (hits run up to the window
-        // late), a MISSED one flies on so the whiff is visible — through
-        // the hit window always, and the full push-back arc when the skin
-        // renders that. Skins that fade notes out early (half-ghost)
-        // change none of this: the hit AREA is what an analysis needs.
+        // A note's hit area outlives the hit plane: it freezes there and
+        // lingers until the note resolves (see [`hitbox_depth`]). Skins
+        // that fade notes out early (half-ghost) change none of this:
+        // the hit AREA is what an analysis needs.
         hud: Option<&crate::hud::HudState>,
-        push_back: bool,
     ) -> Vec<(usize, [[f32; 2]; 4], f32)> {
         let (vp_x, vp_w) = viewport;
         let aspect = vp_w as f32 / self.height as f32;
@@ -778,7 +775,6 @@ impl Renderer {
                 note_t,
                 song_time_ms,
                 results.map(|h| h[i]),
-                push_back,
             ) {
                 Some(d) => d,
                 None => continue,
@@ -2863,49 +2859,42 @@ impl CursorAt for Replay {
     }
 }
 
+/// How long a resolved hit-area box lingers at the plane so the eye can
+/// catch the verdict during playback.
+pub const HITBOX_LINGER_MS: f64 = 350.0;
+
 /// Approach depth for a note's hit-area quad, or None once the box should
-/// no longer exist. A note's hit area outlives the hit plane: a HIT note
-/// keeps its box until the recorded hit frame lands or it reaches the
-/// plane, whichever is later (the drawn note exists until the plane), a
-/// MISSED one flies on so the whiff stays visible —
-/// through the hit window always, the full push-back arc when the skin
-/// renders that. Skins that fade notes out early (half-ghost) change
-/// none of this.
+/// no longer exist. Once a note reaches the hit plane its box FREEZES
+/// there (depth 0): the game tests the cursor against the area in 2D,
+/// depth-free — a box that kept flying at the camera would balloon in
+/// perspective and stop being comparable to the on-screen cursor. It
+/// stays until the note resolves (the recorded hit frame, or the end of
+/// the hit window for a miss) plus a short linger. Skins that fade notes
+/// out early (half-ghost) change none of this.
 pub fn hitbox_depth(
     params: &SceneParams,
     note_t: f64,
     song_time_ms: f64,
     result: Option<rhythia_sim::hitreg::NoteResult>,
-    push_back: bool,
 ) -> Option<f32> {
     if let Some(d) = params.note_depth(note_t, song_time_ms) {
         return Some(d);
     }
-    let behind = ((note_t - song_time_ms) / 1000.0) as f32 * params.approach_rate;
-    if behind >= 0.0 {
+    if song_time_ms < note_t {
         // Not spawned yet (beyond spawn depth).
         return None;
     }
-    // Time rules FIRST — at high effective approach rates 2.5 world units
-    // can span less than the 80 ms hit window, and the promised lifetime
-    // must not silently shrink with the skin's approach speed.
-    let keep = match result {
-        // Hit: the box lives until the recorded hit frame.
-        Some(r) if r.hit => song_time_ms <= r.hit_ms.unwrap_or(note_t),
-        // Miss: through the hit window always; additionally the full
-        // 2.5-unit push-back arc when the skin renders that.
-        Some(_) => {
-            song_time_ms <= note_t + rhythia_sim::hitreg::DEFAULT_WINDOW_MS
-                || (push_back && behind > -2.5)
-        }
-        None => false,
+    let resolution = match result {
+        Some(r) if r.hit => r.hit_ms.unwrap_or(note_t).max(note_t),
+        Some(_) => note_t + rhythia_sim::hitreg::DEFAULT_WINDOW_MS,
+        None => return None,
     };
-    keep.then_some(behind)
+    (song_time_ms <= resolution + HITBOX_LINGER_MS).then_some(0.0)
 }
 
 #[cfg(test)]
 mod hitbox_tests {
-    use super::hitbox_depth;
+    use super::{hitbox_depth, HITBOX_LINGER_MS};
     use crate::scene::SceneParams;
     use rhythia_sim::hitreg::NoteResult;
 
@@ -2918,43 +2907,41 @@ mod hitbox_tests {
     }
 
     #[test]
-    fn hit_note_box_lives_until_the_recorded_hit() {
+    fn hit_note_box_freezes_and_lingers_past_the_recorded_hit() {
         let p = SceneParams::default();
-        // Note at 1000 ms, hit 60 ms late.
-        assert!(hitbox_depth(&p, 1000.0, 990.0, res(true, Some(1060.0)), false).is_some());
-        assert!(hitbox_depth(&p, 1000.0, 1055.0, res(true, Some(1060.0)), false).is_some());
-        assert!(hitbox_depth(&p, 1000.0, 1061.0, res(true, Some(1060.0)), false).is_none());
+        // Note at 1000 ms, hit 60 ms late: approaching before the plane,
+        // frozen AT the plane afterwards, gone after hit + linger.
+        assert!(hitbox_depth(&p, 1000.0, 990.0, res(true, Some(1060.0))).unwrap() > 0.0);
+        assert_eq!(hitbox_depth(&p, 1000.0, 1055.0, res(true, Some(1060.0))), Some(0.0));
+        assert_eq!(hitbox_depth(&p, 1000.0, 1061.0, res(true, Some(1060.0))), Some(0.0));
+        assert!(hitbox_depth(&p, 1000.0, 1060.0 + HITBOX_LINGER_MS + 1.0, res(true, Some(1060.0)))
+            .is_none());
     }
 
     #[test]
-    fn missed_note_box_survives_the_hit_window() {
+    fn missed_note_box_survives_window_plus_linger() {
         let p = SceneParams::default();
-        assert!(hitbox_depth(&p, 1000.0, 1079.0, res(false, None), false).is_some());
-        assert!(hitbox_depth(&p, 1000.0, 1081.0, res(false, None), false).is_none());
-        // Push-back skins keep the whiff through the full 2.5-unit arc —
-        // its span in ms depends on the approach rate.
-        let arc_ms = 2.4 / p.approach_rate as f64 * 1000.0;
-        assert!(hitbox_depth(&p, 1000.0, 1000.0 + arc_ms, res(false, None), true).is_some());
+        assert_eq!(hitbox_depth(&p, 1000.0, 1079.0, res(false, None)), Some(0.0));
+        assert_eq!(hitbox_depth(&p, 1000.0, 1081.0, res(false, None)), Some(0.0));
+        assert!(hitbox_depth(&p, 1000.0, 1080.0 + HITBOX_LINGER_MS + 1.0, res(false, None))
+            .is_none());
     }
 
     #[test]
     fn lifetimes_survive_high_effective_approach_rates() {
-        // 0.25x replay: apply_speed quadruples the approach rate, so 2.5
-        // world units span well under the 80 ms window — time rules must
-        // still win.
+        // 0.25x replay: the approach rate quadruples — the frozen box
+        // must still live by TIME rules, not spatial ones.
         let mut p = SceneParams::default();
         p.apply_speed(0.25);
-        assert!(hitbox_depth(&p, 1000.0, 1052.0, res(true, Some(1070.0)), false).is_some());
-        assert!(hitbox_depth(&p, 1000.0, 1071.0, res(true, Some(1070.0)), false).is_none());
-        assert!(hitbox_depth(&p, 1000.0, 1079.0, res(false, None), false).is_some());
-        assert!(hitbox_depth(&p, 1000.0, 1081.0, res(false, None), false).is_none());
+        assert_eq!(hitbox_depth(&p, 1000.0, 1052.0, res(true, Some(1070.0))), Some(0.0));
+        assert_eq!(hitbox_depth(&p, 1000.0, 1079.0, res(false, None)), Some(0.0));
     }
 
     #[test]
     fn unresolved_notes_end_at_the_plane() {
         let p = SceneParams::default();
-        assert!(hitbox_depth(&p, 1000.0, 999.0, None, false).is_some());
-        assert!(hitbox_depth(&p, 1000.0, 1001.0, None, false).is_none());
+        assert!(hitbox_depth(&p, 1000.0, 999.0, None).is_some());
+        assert!(hitbox_depth(&p, 1000.0, 1001.0, None).is_none());
     }
 }
 

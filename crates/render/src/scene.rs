@@ -32,10 +32,9 @@ pub const GRID_SPACING: f32 = 1.0;
 /// margin stays put while the outer cell centres move out).
 pub const CURSOR_EDGE_INSET: f32 = 0.13125;
 
-/// Half-width of the game's true hit area (NoteManager.gd:
-/// `note_hitbox_size` 1.1375): a fixed square around the note centre,
-/// independent of the visual note scale.
-pub const HITBOX_HALF: f32 = 0.56875;
+/// Half-width of the game's true hit area — one source of truth, shared
+/// with hit attribution in the sim crate.
+pub const HITBOX_HALF: f32 = rhythia_sim::hitreg::HITBOX_HALF;
 
 /// Camera / approach parameters. Defaults are starting points pinned to the
 /// game's config (FOV 70) and the reference footage; `frame` calibration

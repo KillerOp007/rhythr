@@ -445,7 +445,10 @@ impl HudState {
                     resolved += 1;
                     combo += 1;
                     acc_weight += note_multiplier(combo);
-                    last_hit_ms = ht;
+                    // Cursor reattribution can hand an earlier note a
+                    // LATER flag: track the chronological max, not the
+                    // note-order last.
+                    last_hit_ms = last_hit_ms.max(ht);
                     ring.on_hit(ht);
                 }
             } else if note_t + DEFAULT_WINDOW_MS < song_time_ms {
