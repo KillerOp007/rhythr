@@ -99,6 +99,33 @@ endorsed by Rhythia or Capo Games.
   against the file's header. "inconsistent — possibly modified" means
   the numbers don't add up.
 
+## The Analyze window
+
+Click **Analyze** above the preview to open the replay-forensics view.
+The replay fills the window; the gear (or `O`) opens an options drawer.
+
+- **Playback**: play/pause (Space), frame stepping (arrow keys),
+  smooth slow motion from 0.01x to 4x. On Windows every frame renders
+  live on the GPU — seeks are instant and there is nothing to buffer.
+  The map's own music plays along, pitch-bent with the speed so you
+  can find a spot by ear; the volume slider sits in the playbar.
+- **Hitboxes** show the game's TRUE hit area (a fixed square, larger
+  than the visual note — adjacent areas genuinely overlap, that is
+  the game's own rule). At the hit plane the box freezes, and a dot
+  marks exactly where your cursor was at the deciding moment: dot
+  inside the box = hit, outside = miss (with a distance line). A note
+  stays visible until the cursor actually takes it, so late hits read
+  correctly even in slow motion.
+- **Overlays**: cursor path (recorded aim, clamped to the field
+  barrier like in the game), raw cursor cross, heatmap, and per-note
+  inspection — click any note to see its timing and offset.
+- **Tabs**: cursor statistics, timing histogram, miss list with
+  closest calls (each entry jumps to the moment), integrity signals
+  (calibrated against real leaderboard plays; tablet teleports and
+  acceleration spikes on fast runs are expected, not accusations),
+  and exports — analysis card, JSON/CSV, and an **overlay snapshot**
+  (F8) that saves exactly what you see for sharing or bug reports.
+
 ## Troubleshooting
 
 - **Antivirus complains** — the installer is new and unsigned, so

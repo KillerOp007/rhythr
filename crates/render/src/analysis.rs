@@ -847,7 +847,7 @@ pub fn analyze(map: &Map, replay: &Replay) -> Analysis {
         // the RECORDER dropping frames under load — seen on legitimate
         // leaderboard scores. An edited file looks different (orphans,
         // impossible stats), so keep the scary wording for those.
-        let header_hits = replay.hits as u32;
+        let header_hits = u32::try_from(replay.hits).unwrap_or(0);
         let dropped_only =
             report.orphan_flags == 0 && report.flagged_frames < header_hits;
         signals.push(Signal {

@@ -1746,16 +1746,13 @@ impl Renderer {
             let stats = stats;
             let field = self.playfield_screen(&view_proj, params.playfield_half(), vp_w);
             // Project freshly missed notes' cells to screen for the X
-            // marks. `age` counts from the NOTE time, so add the hit
-            // window to compare registration against the freeze — same
-            // strict condition as stats_at, so an X only ever flashes for
-            // a miss the frozen counters actually contain.
+            // marks. `age` counts from the miss REGISTRATION (the window
+            // close) since the X waits for it — song_time - age IS the
+            // registration time, the same strict condition stats_at uses.
             let miss_marks: Vec<(f32, f32, f64)> = state
                 .recent_misses(map, song_time_ms)
                 .into_iter()
-                .filter(|&(_, _, age)| {
-                    song_time_ms - age + rhythia_sim::hitreg::DEFAULT_WINDOW_MS < stats_end
-                })
+                .filter(|&(_, _, age)| song_time_ms - age < stats_end)
                 .map(|(gx, gy, age)| {
                     let (wx, wy) = crate::scene::grid_to_world(gx, gy);
                     let c = view_proj * glam::Vec4::new(wx, wy, 0.0, 1.0);

@@ -3,6 +3,68 @@
 rhythr is an unofficial community tool and is not affiliated with or
 endorsed by Rhythia or Capo Games.
 
+## v0.5.0 — 2026-08-01
+
+The replay analyzer: a full forensics view for any run — and the layout
+editor grows presets, clip export and real undo.
+
+### Added
+
+- **Analyze window**: a dedicated pop-out for studying a replay.
+  The picture fills the window; a gear opens an options drawer with
+  overlays, cursor stats, timing, misses, per-note inspection,
+  integrity signals, exports and view settings.
+- **Live GPU playback** (Windows): every displayed frame is rendered
+  on the fly against a virtual clock — no buffering, instant seeks,
+  and slow motion from 0.01x to 4x stays butter smooth at full frame
+  rate. Linux keeps the proven pre-rendered playback engines.
+- **Song audio**: the map's own music plays during analysis,
+  rate-locked to the clock — slowing down bends the pitch like a
+  record, so you can find a spot by ear. Volume lives in the playbar
+  (default 20%).
+- **True hit areas**: hitboxes show the game's real hit square
+  (1.1375 cells, straight from the game source), follow each note in,
+  and FREEZE at the hit plane — the one place where cursor vs. box is
+  geometrically honest. A verdict dot marks exactly where the cursor
+  was at the deciding moment (inside = hit, outside = miss, with a
+  distance line on misses), and a note stays visible until the cursor
+  actually takes it. Box linger is configurable (0–1 s).
+- **Cursor-guided hit attribution**: near-simultaneous double notes
+  used to get their verdicts crossed when matched by time alone; the
+  recorded cursor now decides which note a hit belongs to. Totals
+  always match the game exactly. Validated against 37 real
+  leaderboard replays (all mods, top to bottom) plus reference runs.
+- **Integrity signals, recalibrated on the real population**:
+  acceleration spikes and tablet teleports no longer flag legitimate
+  plays; incomplete recordings (the game's recorder drops frames
+  under load) are reported honestly instead of as "corrupted".
+- **Overlay snapshot** (Export tab / F8): saves exactly what you see
+  — picture plus overlays — as one PNG. Ideal for bug reports.
+- **Layout presets**: save and apply complete looks (layout, sizes,
+  meters, skin config, resolution, background incl. placement); an
+  automatic "Before reset" preset makes Reset layout reversible.
+- **Clip export**: Set start/end under the timeline (or drag the
+  handles) to render just a section — with suggestions from the run
+  (best streak, toughest part, finish). Score/combo/accuracy are
+  exact from the clip's first frame.
+- **Real undo/redo** in the HUD editor (Ctrl+Z / Ctrl+Y, 50 steps)
+  and live preview while dragging.
+- **Background placement**: zoom and position controls for custom
+  backdrops; video backgrounds can start at any second and loop from
+  that point.
+
+### Fixed
+
+- Playfield border and cursor size now match the game scene exactly
+  (border half-width 1.52, cursor 0.263 units — both from song.tscn);
+  edge notes stay inside the border like in the real client.
+- The renderer removes a taken note at the recorded hit frame instead
+  of its chart time, and the miss X waits for the hit window to close
+  — slow motion no longer looks out of sync.
+- Placeholder map metadata ("Artist Name - Song Name") falls back to
+  the real map title everywhere.
+- Replay playback clock no longer drifts on high-refresh displays.
+
 ## v0.4.1 — 2026-07-26
 
 ### Added

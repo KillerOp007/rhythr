@@ -5,7 +5,7 @@
 # `updpkgsums` (or makepkg -g) against the published release assets.
 
 pkgname=rhythr-bin
-pkgver=0.4.1
+pkgver=0.5.0
 pkgrel=1
 pkgdesc="Unofficial community tool that renders Rhythia (.rhr) replays into pixel-accurate videos"
 arch=('x86_64')

@@ -718,7 +718,12 @@ pub fn build_hud(
     }
 
     // Column centre just past the box; PanelGap pushes it further out.
-    let col_dx = field.half + refd * 0.085 + cfg.panel_gap * refd / 1440.0;
+    // Clamped so the columns stay inside the viewport: the game-true
+    // field (half 1.52) fills a split half almost completely, and
+    // unclamped columns clip at the frame edge and cross the seam.
+    let col_dx = (field.half + refd * 0.085 + cfg.panel_gap * refd / 1440.0)
+        .min(field.cx - refd * 0.115)
+        .min(w - field.cx - refd * 0.115);
     let left_x = field.cx - col_dx;
     let right_x = field.cx + col_dx;
     let row = refd * 0.132; // vertical stride between stat entries

@@ -216,8 +216,11 @@ fn match_hits_inner(
                 if !results[i].hit {
                     continue;
                 }
-                let Some(fi) = flag_of[i] else { continue };
                 for j in (i + 1)..results.len() {
+                    // Re-read every iteration: a swap below moves note i
+                    // onto a different flag — a stale binding would hand
+                    // the SAME flag to two notes on 3-note clusters.
+                    let Some(fi) = flag_of[i] else { break };
                     let dt = notes[j].time_ms - notes[i].time_ms;
                     if dt as f64 > window_ms {
                         break;
@@ -399,6 +402,32 @@ mod tests {
         let out = match_hits(&notes, &frames, DEFAULT_WINDOW_MS);
         assert!(out.results[0].hit, "note 0 keeps its flag");
         assert!(!out.results[1].hit, "a note 75 ms in the future must not steal it");
+    }
+
+    /// Three simultaneous notes taken in the order B, C, A: the crossed
+    /// flags must resolve to a full rotation without any duplicate flag
+    /// attribution (regression: a stale flag binding handed one flag to
+    /// two notes).
+    #[test]
+    fn three_note_cluster_rotates_without_duplicates() {
+        let notes = [
+            Note { time_ms: 1000, x: 0.0, y: 1.0 }, // world (-1, 0)
+            Note { time_ms: 1000, x: 1.0, y: 1.0 }, // world (0, 0)
+            Note { time_ms: 1000, x: 2.0, y: 1.0 }, // world (1, 0)
+        ];
+        let frames = [
+            Frame { ms: 1000.0, x: 0.0, y: 0.0, health: 1.0, hit: true },  // on note 1
+            Frame { ms: 1005.0, x: 1.0, y: 0.0, health: 1.0, hit: true },  // on note 2
+            Frame { ms: 1010.0, x: -1.0, y: 0.0, health: 1.0, hit: true }, // on note 0
+        ];
+        let out = match_hits(&notes, &frames, DEFAULT_WINDOW_MS);
+        let ms: Vec<f64> = out.results.iter().map(|r| r.hit_ms.unwrap()).collect();
+        assert_eq!(ms, vec![1010.0, 1000.0, 1005.0]);
+        // No two notes may share a flag.
+        let mut sorted = ms.clone();
+        sorted.sort_by(|a, b| a.total_cmp(b));
+        sorted.dedup();
+        assert_eq!(sorted.len(), 3, "duplicate flag attribution");
     }
 
     /// Totals are invariant under reattribution.
