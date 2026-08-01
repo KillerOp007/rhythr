@@ -11,6 +11,35 @@ const $ = (id) => document.getElementById(id);
 const ACCENT = "#2fd6d0";
 const GHOST = "#ff9c41";
 const MUTED = "#8b98a9";
+
+/// Overlay strokes must survive any skin: on a bright background the
+/// light defaults vanish, so the whole palette flips dark — the same
+/// rule the HUD meters follow.
+function olPalette() {
+  // From status, not the analysis payload: a mid-session skin swap
+  // refreshes it through the normal status poll. The fallback engines
+  // show the user's custom background (native deliberately keeps the
+  // skin one) — with an image behind the picture, keep the light set.
+  const light =
+    !!status?.light_background && (engine === "native" || !status?.settings?.background);
+  return light
+    ? {
+        box: "rgba(18,22,28,0.9)",
+        boxMiss: "rgba(190,24,40,0.95)",
+        raw: "#0e1116",
+        main: "#0a7d76",
+        ghost: "#a85800",
+        selFill: "rgba(10,125,118,0.15)",
+      }
+    : {
+        box: "rgba(228,235,243,0.92)",
+        boxMiss: "rgba(255,93,108,0.9)",
+        raw: "#ffffff",
+        main: ACCENT,
+        ghost: GHOST,
+        selFill: "rgba(47,214,208,0.12)",
+      };
+}
 const DANGER = "#ff5d6c";
 const WARN = "#f2c14e";
 const OK = "#58d68b";
@@ -904,9 +933,13 @@ function drawOverlay() {
   ctx.lineCap = "round";
   const t = currentMs;
 
+  const pal = olPalette();
+  // Strokes are drawn in frame pixels: scale them with the frame or a 4K
+  // window gets hairlines nobody can see.
+  const lw = Math.max(1.8, lastFrame.h / 420);
   lastFrame.sides.forEach((side, si) => {
     const a = si === 0 ? data.main : data.ghost;
-    const color = si === 0 ? ACCENT : GHOST;
+    const color = si === 0 ? pal.main : pal.ghost;
     if (!a) return;
 
     // Two clips: the side's viewport (split halves must never bleed into
@@ -969,14 +1002,14 @@ function drawOverlay() {
         const n = si === 0 ? noteById(q.i) : a.notes.find((x) => x.i === q.i);
         const sel = si === 0 && q.i === selNote;
         const hit = n ? n.hit : true;
-        ctx.strokeStyle = sel ? ACCENT : hit ? "rgba(180,195,210,0.6)" : "rgba(255,93,108,0.85)";
-        ctx.lineWidth = sel ? 2.4 : 1.3;
-        ctx.setLineDash(hit ? [] : [5, 4]);
+        ctx.strokeStyle = sel ? pal.main : hit ? pal.box : pal.boxMiss;
+        ctx.lineWidth = sel ? lw + 1 : lw;
+        ctx.setLineDash(hit ? [] : [lw * 3, lw * 2.2]);
         pathFrom(ctx, q.pts);
         ctx.stroke();
         ctx.setLineDash([]);
         if (sel) {
-          ctx.fillStyle = "rgba(47,214,208,0.12)";
+          ctx.fillStyle = pal.selFill;
           ctx.fill();
         }
       }
@@ -994,7 +1027,7 @@ function drawOverlay() {
     if (opt.path && hi > lo) {
       ctx.strokeStyle = color;
       ctx.globalAlpha = 0.75;
-      ctx.lineWidth = 1.7;
+      ctx.lineWidth = Math.max(1.7, lw * 0.8);
       ctx.beginPath();
       let started = false;
       for (let j = lo; j <= hi; j++) {
@@ -1038,13 +1071,14 @@ function drawOverlay() {
         p = projectPx(side, a.frames.x[hi], a.frames.y[hi]);
       }
       if (p) {
-        ctx.strokeStyle = "#ffffff";
-        ctx.lineWidth = 1.5;
+        const arm = Math.max(8, lw * 4.5);
+        ctx.strokeStyle = pal.raw;
+        ctx.lineWidth = Math.max(1.5, lw * 0.7);
         ctx.beginPath();
-        ctx.moveTo(p[0] - 8, p[1]);
-        ctx.lineTo(p[0] + 8, p[1]);
-        ctx.moveTo(p[0], p[1] - 8);
-        ctx.lineTo(p[0], p[1] + 8);
+        ctx.moveTo(p[0] - arm, p[1]);
+        ctx.lineTo(p[0] + arm, p[1]);
+        ctx.moveTo(p[0], p[1] - arm);
+        ctx.lineTo(p[0], p[1] + arm);
         ctx.stroke();
       }
     }
@@ -1461,7 +1495,7 @@ function drawSection() {
         <label class="an-tog"><input type="checkbox" data-view="notes"${opt.notes ? " checked" : ""}> Notes</label>
       </div>
       <p class="hint">Hide the game's cursor to study the raw recorded one, or the notes to see nothing but hit areas. Changes re-render the picture.</p>
-      <p class="hint">Hitboxes follow each note as it flies in — they are the note's own hit area, so they grow toward the hit plane and stay inside the field.</p>`,
+      <p class="hint">Hitboxes show the game's TRUE hit area (a fixed square, larger than the visual note) and follow each note in. A hit note keeps its box until the recorded hit lands; a missed one keeps flying so the whiff stays visible — even on skins that fade notes out early (half ghost).</p>`,
     );
   } else if (opt.section === "cursor") {
     const c = a.cursor;
@@ -2035,7 +2069,7 @@ function msgFlash(text) {
 // ------------------------------------------------------------ data
 
 const sourceKey = () =>
-  `${status?.replay?.path}|${status?.ghost?.path || ""}|${status?.map?.path}|${status?.settings?.width}x${status?.settings?.height}`;
+  `${status?.replay?.path}|${status?.ghost?.path || ""}|${status?.map?.path}|${status?.config?.path || ""}|${status?.settings?.width}x${status?.settings?.height}`;
 
 async function refresh() {
   try {
@@ -2356,6 +2390,7 @@ window.addEventListener("DOMContentLoaded", async () => {
 
   // The main window drives which replay is loaded; follow its changes.
   listen("sources-changed", () => {
+    geoCache.clear();
     dropSegment();
     refresh();
   }).catch(() => {});

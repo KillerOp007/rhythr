@@ -737,6 +737,7 @@ impl Renderer {
     /// depth, note radius, camera), so an overlay can trace the note (and
     /// therefore its hit area) instead of guessing a fixed grid cell.
     /// Returns `(note index, four corners in px, depth)`, far notes first.
+    #[allow(clippy::too_many_arguments)]
     pub fn note_screen_quads(
         &self,
         params: &SceneParams,
@@ -744,14 +745,18 @@ impl Renderer {
         replay: &Replay,
         song_time_ms: f64,
         viewport: (u32, u32),
-        // With PushBack the render keeps a MISSED note flying toward the
-        // camera past the hit plane — those quads must exist too, or the
-        // overlay loses exactly the notes an analysis cares about.
-        push_back: Option<&crate::hud::HudState>,
+        // A note's hit area outlives the hit plane: a HIT note keeps its
+        // box until the recorded hit lands (hits run up to the window
+        // late), a MISSED one flies on so the whiff is visible — through
+        // the hit window always, and the full push-back arc when the skin
+        // renders that. Skins that fade notes out early (half-ghost)
+        // change none of this: the hit AREA is what an analysis needs.
+        hud: Option<&crate::hud::HudState>,
+        push_back: bool,
     ) -> Vec<(usize, [[f32; 2]; 4], f32)> {
         let (vp_x, vp_w) = viewport;
         let aspect = vp_w as f32 / self.height as f32;
-        let cursor = replay.cursor_at(song_time_ms);
+        let cursor = params.clamp_cursor(replay.cursor_at(song_time_ms));
         let vp = params.view_proj(aspect, self.portrait_output(), cursor);
         let project = |p: glam::Vec4| -> Option<[f32; 2]> {
             let c = vp * p;
@@ -764,25 +769,21 @@ impl Renderer {
                 (0.5 - ndc.y * 0.5) * self.height as f32,
             ])
         };
-        let results = push_back.map(|st| st.results());
+        let results = hud.map(|st| st.results());
         let mut out = Vec::new();
         for (i, n) in map.notes.iter().enumerate() {
             let note_t = n.time_ms as f64;
-            let depth = match params.note_depth(note_t, song_time_ms) {
+            let depth = match hitbox_depth(
+                params,
+                note_t,
+                song_time_ms,
+                results.map(|h| h[i]),
+                push_back,
+            ) {
                 Some(d) => d,
-                None => {
-                    // Mirror submit_side's push-back branch exactly: a
-                    // MISSED note keeps drifting 2.5 units past the plane.
-                    let behind = ((note_t - song_time_ms) / 1000.0) as f32 * params.approach_rate;
-                    let missed = results.map(|h| !h[i].hit).unwrap_or(false);
-                    if missed && (-2.5..0.0).contains(&behind) {
-                        behind
-                    } else {
-                        continue;
-                    }
-                }
+                None => continue,
             };
-            let m = params.note_model(n.x, n.y, depth);
+            let m = params.hitbox_model(n.x, n.y, depth);
             let corners = [
                 glam::Vec4::new(-1.0, 1.0, 0.0, 1.0),
                 glam::Vec4::new(1.0, 1.0, 0.0, 1.0),
@@ -820,7 +821,7 @@ impl Renderer {
     ) -> [[f32; 2]; 4] {
         let (vp_x, vp_w) = viewport;
         let aspect = vp_w as f32 / self.height as f32;
-        let cursor = replay.cursor_at(song_time_ms);
+        let cursor = params.clamp_cursor(replay.cursor_at(song_time_ms));
         let vp = params.view_proj(aspect, self.portrait_output(), cursor);
         let h = params.playfield_half();
         let mut pts = [[0.0f32; 2]; 4];
@@ -842,26 +843,35 @@ impl Renderer {
     /// (parallax and spin included). World points on the hit plane map to
     /// pixels via `px = (ndc.x*0.5+0.5)*vp_w + vp_x`,
     /// `py = (0.5-ndc.y*0.5)*height`.
+    #[allow(clippy::type_complexity)]
     pub fn field_projections(
         &self,
         params: &SceneParams,
         replay: &Replay,
-        ghost: Option<&Replay>,
+        // Ghost replay plus ITS grid scale — the clamp bound and camera
+        // must use each side's own field (a hardrock ghost clamps wider),
+        // exactly as submit_frame_with_ghost_inner builds its params.
+        ghost: Option<(&Replay, f32)>,
         song_time_ms: f64,
     ) -> Vec<((u32, u32), [[f32; 4]; 4])> {
-        let side = |r: &Replay, vp: (u32, u32)| {
+        let side = |p: &SceneParams, r: &Replay, vp: (u32, u32)| {
             let aspect = vp.1 as f32 / self.height as f32;
-            let cursor = r.cursor_at(song_time_ms);
-            let vp_m = params.view_proj(aspect, self.portrait_output(), cursor);
+            let cursor = p.clamp_cursor(r.cursor_at(song_time_ms));
+            let vp_m = p.view_proj(aspect, self.portrait_output(), cursor);
             (vp, vp_m.to_cols_array_2d())
         };
         match ghost {
-            None => vec![side(replay, (0, self.width))],
-            Some(g) => {
+            None => vec![side(params, replay, (0, self.width))],
+            Some((g, g_scale)) => {
                 let half = self.width / 2;
                 // Mirror submit_frame_with_ghost exactly: the right side
                 // takes the remainder on odd widths.
-                vec![side(replay, (0, half)), side(g, (half, self.width - half))]
+                let mut gp = *params;
+                gp.grid_scale = g_scale;
+                vec![
+                    side(params, replay, (0, half)),
+                    side(&gp, g, (half, self.width - half)),
+                ]
             }
         }
     }
@@ -1334,7 +1344,7 @@ impl Renderer {
     ) -> Result<(), Error> {
         let (vp_x, vp_w) = viewport;
         let aspect = vp_w as f32 / self.height as f32;
-        let cursor = replay.cursor_at(song_time_ms);
+        let cursor = params.clamp_cursor(replay.cursor_at(song_time_ms));
         let view_proj = params.view_proj(aspect, self.portrait_output(), cursor);
 
         let (corner, outline) = config.note_shape.sdf_params();
@@ -1614,7 +1624,7 @@ impl Renderer {
         // Cursor (+ optional trail) render after everything with the
         // depth-free overlay pipeline, in list order.
         let mut overlay: Vec<Instance> = Vec::new();
-        self.push_cursor(&mut overlay, config, replay, song_time_ms);
+        self.push_cursor(&mut overlay, params, config, replay, song_time_ms);
 
         items.sort_by(|a, b| a.0.total_cmp(&b.0));
         let mut instances: Vec<Instance> = items.into_iter().map(|(_, inst)| inst).collect();
@@ -2300,7 +2310,7 @@ impl Renderer {
     ) -> Vec<crate::hud::HudBox> {
         let vp_w = if half_width { self.width / 2 } else { self.width };
         let aspect = vp_w as f32 / self.height as f32;
-        let cursor = replay.cursor_at(song_time_ms);
+        let cursor = params.clamp_cursor(replay.cursor_at(song_time_ms));
         let view_proj = params.view_proj(aspect, self.portrait_output(), cursor);
         let field = self.playfield_screen(&view_proj, params.playfield_half(), vp_w);
         let stats = hud_state.stats_at(map, replay, song_time_ms);
@@ -2355,6 +2365,7 @@ impl Renderer {
     fn push_cursor(
         &self,
         items: &mut Vec<Instance>,
+        params: &SceneParams,
         config: &SkinConfig,
         replay: &Replay,
         song_time_ms: f64,
@@ -2382,10 +2393,11 @@ impl Renderer {
             let mut stamps = 0usize;
             let mut trail: Vec<Instance> = Vec::new();
             let mut carry = 0.0f32;
-            let mut prev = replay.cursor_at(song_time_ms);
+            let mut prev = params.clamp_cursor(replay.cursor_at(song_time_ms));
             'walk: for i in 1..=samples {
                 let frac = i as f32 / samples as f32; // 0 = head, 1 = oldest
-                let cur = replay.cursor_at(song_time_ms - span_ms * i as f64 / samples as f64);
+                let cur =
+                    params.clamp_cursor(replay.cursor_at(song_time_ms - span_ms * i as f64 / samples as f64));
                 let (dx, dy) = (cur.0 - prev.0, cur.1 - prev.1);
                 let seg = (dx * dx + dy * dy).sqrt();
                 let mut along = stamp_dist - carry;
@@ -2424,7 +2436,7 @@ impl Renderer {
             trail.reverse();
             items.extend(trail);
         }
-        let (x, y) = replay.cursor_at(song_time_ms);
+        let (x, y) = params.clamp_cursor(replay.cursor_at(song_time_ms));
         let model = Mat4::from_translation(glam::Vec3::new(x, y, 0.02))
             * Mat4::from_rotation_z(config.cursor_rotation_deg.to_radians())
             * Mat4::from_scale(glam::Vec3::splat(size));
@@ -2848,6 +2860,101 @@ impl CursorAt for Replay {
                 (a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t)
             }
         }
+    }
+}
+
+/// Approach depth for a note's hit-area quad, or None once the box should
+/// no longer exist. A note's hit area outlives the hit plane: a HIT note
+/// keeps its box until the recorded hit frame lands or it reaches the
+/// plane, whichever is later (the drawn note exists until the plane), a
+/// MISSED one flies on so the whiff stays visible —
+/// through the hit window always, the full push-back arc when the skin
+/// renders that. Skins that fade notes out early (half-ghost) change
+/// none of this.
+pub fn hitbox_depth(
+    params: &SceneParams,
+    note_t: f64,
+    song_time_ms: f64,
+    result: Option<rhythia_sim::hitreg::NoteResult>,
+    push_back: bool,
+) -> Option<f32> {
+    if let Some(d) = params.note_depth(note_t, song_time_ms) {
+        return Some(d);
+    }
+    let behind = ((note_t - song_time_ms) / 1000.0) as f32 * params.approach_rate;
+    if behind >= 0.0 {
+        // Not spawned yet (beyond spawn depth).
+        return None;
+    }
+    // Time rules FIRST — at high effective approach rates 2.5 world units
+    // can span less than the 80 ms hit window, and the promised lifetime
+    // must not silently shrink with the skin's approach speed.
+    let keep = match result {
+        // Hit: the box lives until the recorded hit frame.
+        Some(r) if r.hit => song_time_ms <= r.hit_ms.unwrap_or(note_t),
+        // Miss: through the hit window always; additionally the full
+        // 2.5-unit push-back arc when the skin renders that.
+        Some(_) => {
+            song_time_ms <= note_t + rhythia_sim::hitreg::DEFAULT_WINDOW_MS
+                || (push_back && behind > -2.5)
+        }
+        None => false,
+    };
+    keep.then_some(behind)
+}
+
+#[cfg(test)]
+mod hitbox_tests {
+    use super::hitbox_depth;
+    use crate::scene::SceneParams;
+    use rhythia_sim::hitreg::NoteResult;
+
+    fn res(hit: bool, hit_ms: Option<f64>) -> Option<NoteResult> {
+        Some(NoteResult {
+            note_index: 0,
+            hit,
+            hit_ms,
+        })
+    }
+
+    #[test]
+    fn hit_note_box_lives_until_the_recorded_hit() {
+        let p = SceneParams::default();
+        // Note at 1000 ms, hit 60 ms late.
+        assert!(hitbox_depth(&p, 1000.0, 990.0, res(true, Some(1060.0)), false).is_some());
+        assert!(hitbox_depth(&p, 1000.0, 1055.0, res(true, Some(1060.0)), false).is_some());
+        assert!(hitbox_depth(&p, 1000.0, 1061.0, res(true, Some(1060.0)), false).is_none());
+    }
+
+    #[test]
+    fn missed_note_box_survives_the_hit_window() {
+        let p = SceneParams::default();
+        assert!(hitbox_depth(&p, 1000.0, 1079.0, res(false, None), false).is_some());
+        assert!(hitbox_depth(&p, 1000.0, 1081.0, res(false, None), false).is_none());
+        // Push-back skins keep the whiff through the full 2.5-unit arc —
+        // its span in ms depends on the approach rate.
+        let arc_ms = 2.4 / p.approach_rate as f64 * 1000.0;
+        assert!(hitbox_depth(&p, 1000.0, 1000.0 + arc_ms, res(false, None), true).is_some());
+    }
+
+    #[test]
+    fn lifetimes_survive_high_effective_approach_rates() {
+        // 0.25x replay: apply_speed quadruples the approach rate, so 2.5
+        // world units span well under the 80 ms window — time rules must
+        // still win.
+        let mut p = SceneParams::default();
+        p.apply_speed(0.25);
+        assert!(hitbox_depth(&p, 1000.0, 1052.0, res(true, Some(1070.0)), false).is_some());
+        assert!(hitbox_depth(&p, 1000.0, 1071.0, res(true, Some(1070.0)), false).is_none());
+        assert!(hitbox_depth(&p, 1000.0, 1079.0, res(false, None), false).is_some());
+        assert!(hitbox_depth(&p, 1000.0, 1081.0, res(false, None), false).is_none());
+    }
+
+    #[test]
+    fn unresolved_notes_end_at_the_plane() {
+        let p = SceneParams::default();
+        assert!(hitbox_depth(&p, 1000.0, 999.0, None, false).is_some());
+        assert!(hitbox_depth(&p, 1000.0, 1001.0, None, false).is_none());
     }
 }
 

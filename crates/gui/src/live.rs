@@ -325,7 +325,7 @@ pub fn spawn(
                     .field_projections(
                         &params,
                         &replay,
-                        ghost.as_ref().map(|g| &g.replay),
+                        ghost.as_ref().map(|g| (&g.replay, g.grid_scale)),
                         t,
                     )
                     .into_iter()
@@ -347,7 +347,8 @@ pub fn spawn(
                                 side_replay,
                                 t,
                                 (x, w),
-                                cfg.push_back.then_some(side_hud),
+                                Some(side_hud),
+                                cfg.push_back,
                             )
                             .into_iter()
                             .map(|(i, pts, _)| TickNoteQuad { i: i as u32, pts })

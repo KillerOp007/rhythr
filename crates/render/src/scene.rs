@@ -25,6 +25,18 @@ use glam::{Mat4, Vec3};
 /// not at its centre — because of the hitbox size and aim bias.)
 pub const GRID_SPACING: f32 = 1.0;
 
+/// The game clamps the VISIBLE cursor to the field edge minus a fixed
+/// inset (Cursor.gd: `edgec = 0.13125` cells) — the recorded positions go
+/// further out, but the player never sees that. ±1.36875 on a normal
+/// grid; hardrock widens it with the grid (empirically +0.15, i.e. the
+/// margin stays put while the outer cell centres move out).
+pub const CURSOR_EDGE_INSET: f32 = 0.13125;
+
+/// Half-width of the game's true hit area (NoteManager.gd:
+/// `note_hitbox_size` 1.1375): a fixed square around the note centre,
+/// independent of the visual note scale.
+pub const HITBOX_HALF: f32 = 0.56875;
+
 /// Camera / approach parameters. Defaults are starting points pinned to the
 /// game's config (FOV 70) and the reference footage; `frame` calibration
 /// refines them.
@@ -184,6 +196,26 @@ impl SceneParams {
     /// health bar spanning it measures 773px at 1440p ↔ 1.3395 world units).
     pub fn playfield_half(&self) -> f32 {
         self.grid_scale + self.note_radius * 0.73
+    }
+
+    /// The game's hard bound for the visible cursor centre.
+    pub fn cursor_bound(&self) -> f32 {
+        self.grid_scale + (0.5 - CURSOR_EDGE_INSET)
+    }
+
+    /// Recorded cursor positions can leave the field; the game clamps the
+    /// drawn cursor (and the camera that follows it) to the border.
+    pub fn clamp_cursor(&self, c: (f32, f32)) -> (f32, f32) {
+        let b = self.cursor_bound();
+        (c.0.clamp(-b, b), c.1.clamp(-b, b))
+    }
+
+    /// Model matrix for a note's HIT AREA — the fixed square the game
+    /// actually tests the cursor against, larger than the visual note.
+    pub fn hitbox_model(&self, gx: f32, gy: f32, depth: f32) -> Mat4 {
+        let (wx, wy) = grid_to_world(gx, gy);
+        Mat4::from_translation(Vec3::new(wx, wy, -depth))
+            * Mat4::from_scale(Vec3::splat(HITBOX_HALF))
     }
 
     /// Depth of a note at the given song time, or None if it is not on

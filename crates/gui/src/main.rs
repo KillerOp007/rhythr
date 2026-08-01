@@ -502,6 +502,10 @@ struct StatusDto {
     clip: Option<(f64, f64)>,
     /// Height the live preview renders at (Analyze can raise it).
     preview_height: u32,
+    /// The skin renders on a bright background: overlay strokes must go
+    /// dark or they vanish. Lives on status (not the analysis payload)
+    /// so a mid-session skin swap updates it via the normal refresh.
+    light_background: bool,
     can_undo: bool,
     can_redo: bool,
     /// Build identity, so a bug report always names the exact build.
@@ -878,6 +882,13 @@ fn verify_dto(replay: &Replay, map: &Map) -> VerifyDto {
     }
 }
 
+/// Overlays and meter chrome flip to dark strokes on bright skin
+/// backgrounds — one rule, used by the HUD and the analyze overlay.
+fn is_light_background(cfg: &rhythia_render::config::SkinConfig) -> bool {
+    let bg = cfg.background_color;
+    0.299 * bg[0] + 0.587 * bg[1] + 0.114 * bg[2] > 0.55
+}
+
 fn assemble_status(inner: &Inner, rendering: bool) -> StatusDto {
     let replay = inner.replay.as_ref().map(|(path, r)| {
         let verify = inner.map.as_ref().map(|(_, m)| verify_dto(r, m));
@@ -961,6 +972,7 @@ fn assemble_status(inner: &Inner, rendering: bool) -> StatusDto {
         bg_video_duration: inner.bg_duration,
         clip: inner.clip,
         preview_height: if inner.preview_height >= 240 { inner.preview_height } else { PREVIEW_H },
+        light_background: is_light_background(&inner.base_config),
         build: env!("RHYTHR_BUILD").to_string(),
         can_undo: !inner.undo_stack.is_empty(),
         can_redo: !inner.redo_stack.is_empty(),
@@ -1242,7 +1254,11 @@ async fn download_map(
 }
 
 #[tauri::command]
-fn load_config(state: tauri::State<'_, App>, path: String) -> Result<StatusDto, String> {
+fn load_config(
+    state: tauri::State<'_, App>,
+    app_handle: tauri::AppHandle,
+    path: String,
+) -> Result<StatusDto, String> {
     let app = state.inner();
     let mut inner = app.lock();
     let p = Some(PathBuf::from(&path));
@@ -1252,11 +1268,17 @@ fn load_config(state: tauri::State<'_, App>, path: String) -> Result<StatusDto, 
     inner.settings.last_config = Some(path);
     inner.settings.save();
     invalidate_preview(&mut inner);
+    // The analyze window renders with this config baked in (live engine,
+    // cached geometry, overlay palette) — it must rebuild.
+    notify_sources_changed(&app_handle);
     Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
 }
 
 #[tauri::command]
-fn clear_config(state: tauri::State<'_, App>) -> Result<StatusDto, String> {
+fn clear_config(
+    state: tauri::State<'_, App>,
+    app_handle: tauri::AppHandle,
+) -> Result<StatusDto, String> {
     let app = state.inner();
     let mut inner = app.lock();
     inner.config_path = None;
@@ -1264,6 +1286,7 @@ fn clear_config(state: tauri::State<'_, App>) -> Result<StatusDto, String> {
     inner.settings.last_config = None;
     inner.settings.save();
     invalidate_preview(&mut inner);
+    notify_sources_changed(&app_handle);
     Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
 }
 
@@ -2825,7 +2848,7 @@ fn frame_sides_locked(inner: &Inner, time_ms: f64) -> Result<PreviewFrameDto, St
             .field_projections(
                 &ctx.params,
                 r,
-                ctx.ghost.as_ref().map(|g| &g.replay),
+                ctx.ghost.as_ref().map(|g| (&g.replay, g.grid_scale)),
                 time_ms,
             )
             .into_iter()
@@ -2853,7 +2876,8 @@ fn frame_sides_locked(inner: &Inner, time_ms: f64) -> Result<PreviewFrameDto, St
                         replay,
                         time_ms,
                         (x, w),
-                        ctx.cfg.push_back.then_some(hud),
+                        Some(hud),
+                        ctx.cfg.push_back,
                     )
                     .into_iter()
                     .map(|(i, pts, depth)| NoteQuadDto { i: i as u32, pts, depth })
