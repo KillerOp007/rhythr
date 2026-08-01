@@ -28,6 +28,8 @@ pub enum LiveCmd {
     /// Window inner size changed (physical px).
     Resize(u32, u32),
     View { hide_cursor: bool, hide_notes: bool },
+    /// How long resolved hit-area boxes linger (ms of song time).
+    Linger(f64),
     /// Render the CURRENT clock position to PNG bytes — the overlay
     /// snapshot wants exactly what the screen shows (skin background,
     /// live resolution), not the preview pipeline's version.
@@ -59,6 +61,7 @@ pub struct LiveInit {
     pub run_end: f64,
     pub hide_cursor: bool,
     pub hide_notes: bool,
+    pub linger_ms: f64,
     pub win_w: u32,
     pub win_h: u32,
     pub settings_w: u32,
@@ -200,6 +203,7 @@ pub fn spawn(
         let dump_dir = std::env::var("RHYTHR_LIVE_DUMP").ok().map(std::path::PathBuf::from);
         let mut dump_counter = 0u64;
 
+        let mut linger_ms = init.linger_ms;
         let mut t = 0.0f64;
         let mut playing = false;
         let mut speed = 1.0f64;
@@ -239,6 +243,10 @@ pub fn spawn(
                         p.grid_scale = main_mods.grid_scale;
                         p.apply_speed(replay.speed);
                         params = p;
+                        dirty = true;
+                    }
+                    Ok(LiveCmd::Linger(v)) => {
+                        linger_ms = v.clamp(0.0, 2000.0);
                         dirty = true;
                     }
                     Ok(LiveCmd::Still(reply)) => {
@@ -365,6 +373,7 @@ pub fn spawn(
                                 t,
                                 (x, w),
                                 Some(side_hud),
+                                linger_ms,
                             )
                             .into_iter()
                             .map(|(i, pts, _)| TickNoteQuad { i: i as u32, pts })

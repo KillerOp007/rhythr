@@ -500,7 +500,11 @@ impl HudState {
             .filter(|r| !r.hit)
             .filter_map(|r| {
                 let note = &map.notes[r.note_index];
-                let miss_t = note.time_ms as f64;
+                // The game decides a miss when the hit window CLOSES —
+                // an X at the chart time pops up while the cursor could
+                // still legally take the note.
+                let miss_t =
+                    note.time_ms as f64 + rhythia_sim::hitreg::DEFAULT_WINDOW_MS;
                 let age = song_time_ms - miss_t;
                 (0.0..MISS_X_MS)
                     .contains(&age)

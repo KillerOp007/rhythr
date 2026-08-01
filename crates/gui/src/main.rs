@@ -318,6 +318,8 @@ struct Inner {
     /// hit areas alone). Applied to previews AND playback segments.
     analyze_hide_cursor: bool,
     analyze_hide_notes: bool,
+    /// How long resolved analyze hit-area boxes linger (ms, 0 = instant).
+    analyze_linger_ms: f64,
     /// Multi-step layout history (Ctrl+Z / Ctrl+Y): snapshots taken
     /// before each editor action/gesture.
     undo_stack: Vec<LayoutPreset>,
@@ -2395,6 +2397,11 @@ async fn start_live_session(
             run_end,
             hide_cursor: inner.analyze_hide_cursor,
             hide_notes: inner.analyze_hide_notes,
+            linger_ms: if inner.analyze_linger_ms > 0.0 {
+                inner.analyze_linger_ms
+            } else {
+                rhythia_render::renderer::HITBOX_LINGER_MS
+            },
             win_w: size.width,
             win_h: size.height,
             settings_w: inner.settings.width,
@@ -2477,6 +2484,7 @@ fn live_cmd(
             hide_cursor: hide_cursor.unwrap_or(false),
             hide_notes: hide_notes.unwrap_or(false),
         },
+        "linger" => live::LiveCmd::Linger(value.unwrap_or(350.0)),
         "stop" => live::LiveCmd::Stop,
         other => return Err(format!("unknown live cmd: {other}")),
     };
@@ -2503,6 +2511,17 @@ async fn set_analyze_view(
     })
     .await
     .map_err(err_str)
+}
+
+/// How long resolved analyze hit-area boxes stay (ms; 0 restores the
+/// default). Live sessions get it via live_cmd; this persists it for
+/// restarts and the fallback geometry path.
+#[tauri::command]
+fn set_analyze_linger(state: tauri::State<'_, App>, ms: f64) {
+    let app = state.inner();
+    let mut inner = app.lock();
+    inner.analyze_linger_ms = ms.clamp(0.0, 2000.0);
+    touch_frames(&mut inner);
 }
 
 /// Drops the prepared segment (playback stopped, sources changed).
@@ -2838,6 +2857,11 @@ fn frame_sides(app: &App, time_ms: f64) -> Result<PreviewFrameDto, String> {
 }
 
 fn frame_sides_locked(inner: &Inner, time_ms: f64) -> Result<PreviewFrameDto, String> {
+    let ctx_linger = if inner.analyze_linger_ms > 0.0 {
+        inner.analyze_linger_ms
+    } else {
+        rhythia_render::renderer::HITBOX_LINGER_MS
+    };
     {
         let ctx = inner.preview.as_ref().ok_or("no preview")?;
         let (_, r) = inner.replay.as_ref().ok_or("no replay")?;
@@ -2877,6 +2901,7 @@ fn frame_sides_locked(inner: &Inner, time_ms: f64) -> Result<PreviewFrameDto, St
                         time_ms,
                         (x, w),
                         Some(hud),
+                        ctx_linger,
                     )
                     .into_iter()
                     .map(|(i, pts, depth)| NoteQuadDto { i: i as u32, pts, depth })
@@ -3082,6 +3107,7 @@ async fn open_analyze_window(app_handle: tauri::AppHandle) -> Result<(), String>
                 inner.preview_height = PREVIEW_H;
                 inner.analyze_hide_cursor = false;
                 inner.analyze_hide_notes = false;
+                inner.analyze_linger_ms = 0.0;
                 if changed {
                     invalidate_preview(&mut inner);
                 }
@@ -3831,6 +3857,7 @@ fn main() {
             prepare_segment,
             cancel_segment,
             set_analyze_view,
+            set_analyze_linger,
             start_live_session,
             live_cmd,
             analysis_data,

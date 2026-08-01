@@ -57,6 +57,7 @@ const opt = {
   hitboxes: true,
   heatmap: false,
   pathWindow: 600,
+  linger: 350,
   quality: "auto",
   immersive: true,
   audio: true,
@@ -1038,7 +1039,7 @@ function drawOverlay() {
         if (judging) {
           const resolution = n.hit ? Math.max(n.hit_ms ?? n.t, n.t) : n.t + 80;
           const age = t - resolution;
-          fade = age > 0 ? Math.max(0.3, 1 - age / 350) : 1;
+          fade = age > 0 ? Math.max(0.3, 1 - age / Math.max(opt.linger, 1)) : 1;
           ctx.globalAlpha = 0.85 * fade;
         }
         // Approaching notes stay NEUTRAL — the verdict colours the box
@@ -1568,6 +1569,9 @@ function drawSection() {
       <label class="hint an-slider">Path window
         <input type="range" id="opt-window" min="100" max="4000" step="50" value="${opt.pathWindow}">
         <span>${(opt.pathWindow / 1000).toFixed(2)}s</span></label>
+      <label class="hint an-slider">Verdict boxes stay
+        <input type="range" id="opt-linger" min="0" max="1000" step="50" value="${opt.linger}">
+        <span>${opt.linger === 0 ? "instant" : (opt.linger / 1000).toFixed(2) + "s"}</span></label>
       <div class="an-title" style="margin-top:10px">Rendered picture</div>
       <div class="an-toggles">
         <label class="an-tog"><input type="checkbox" data-view="gameCursor"${opt.gameCursor ? " checked" : ""}> Game cursor</label>
@@ -1870,6 +1874,21 @@ function wireSection() {
     win.addEventListener("input", () => {
       opt.pathWindow = Number(win.value);
       win.nextElementSibling.textContent = `${(opt.pathWindow / 1000).toFixed(2)}s`;
+      drawFrame();
+    });
+  }
+  const lin = body.querySelector("#opt-linger");
+  if (lin) {
+    lin.addEventListener("input", () => {
+      opt.linger = Number(lin.value);
+      lin.nextElementSibling.textContent =
+        opt.linger === 0 ? "instant" : `${(opt.linger / 1000).toFixed(2)}s`;
+      // 0 must mean INSTANT for the engine, but the backend treats 0 as
+      // "use default" — send 1 ms instead (visually identical).
+      const ms = Math.max(1, opt.linger);
+      invoke("live_cmd", { cmd: "linger", value: ms }).catch(() => {});
+      invoke("set_analyze_linger", { ms }).catch(() => {});
+      geoCache.clear();
       drawFrame();
     });
   }

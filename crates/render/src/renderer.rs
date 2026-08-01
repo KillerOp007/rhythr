@@ -750,6 +750,7 @@ impl Renderer {
         // that fade notes out early (half-ghost) change none of this:
         // the hit AREA is what an analysis needs.
         hud: Option<&crate::hud::HudState>,
+        linger_ms: f64,
     ) -> Vec<(usize, [[f32; 2]; 4], f32)> {
         let (vp_x, vp_w) = viewport;
         let aspect = vp_w as f32 / self.height as f32;
@@ -775,6 +776,7 @@ impl Renderer {
                 note_t,
                 song_time_ms,
                 results.map(|h| h[i]),
+                linger_ms,
             ) {
                 Some(d) => d,
                 None => continue,
@@ -1588,19 +1590,38 @@ impl Renderer {
             }
         }
 
-        // Notes. With PushBack, missed notes fly on past the hit plane and
-        // fade out instead of vanishing at it.
+        // Notes. The game removes a HIT note when the cursor takes it —
+        // the recorded hit frame — NOT at its chart time: late hits (up
+        // to the 80 ms window) keep flying briefly past the plane, and
+        // ending them early reads as "hit before the cursor arrived" in
+        // slow motion. Missed notes fly on only with PushBack skins.
         let hits = hud_state.map(|s| s.results());
         for (i, note) in map.notes.iter().enumerate() {
             let note_t = note.time_ms as f64;
             let mut depth_opacity: Option<(f32, f32)> = params
                 .note_depth(note_t, song_time_ms)
                 .map(|d| (d, params.note_opacity(d)));
-            if depth_opacity.is_none() && config.push_back {
+            if depth_opacity.is_none() {
                 let behind = ((note_t - song_time_ms) / 1000.0) as f32 * params.approach_rate;
-                let missed = hits.map(|h| !h[i].hit).unwrap_or(false);
-                if missed && (-2.5..0.0).contains(&behind) {
-                    depth_opacity = Some((behind, (1.0 + behind / 2.5).max(0.0)));
+                if behind < 0.0 {
+                    match hits.map(|h| h[i]) {
+                        Some(r) if r.hit => {
+                            let taken = r.hit_ms.unwrap_or(note_t).max(note_t);
+                            if song_time_ms <= taken {
+                                depth_opacity =
+                                    Some((behind, params.note_opacity(0.0)));
+                            }
+                        }
+                        Some(r)
+                            if !r.hit
+                                && config.push_back
+                                && (-2.5..0.0).contains(&behind) =>
+                        {
+                            depth_opacity =
+                                Some((behind, (1.0 + behind / 2.5).max(0.0)));
+                        }
+                        _ => {}
+                    }
                 }
             }
             if let Some((depth, opacity)) = depth_opacity {
@@ -2876,6 +2897,7 @@ pub fn hitbox_depth(
     note_t: f64,
     song_time_ms: f64,
     result: Option<rhythia_sim::hitreg::NoteResult>,
+    linger_ms: f64,
 ) -> Option<f32> {
     if let Some(d) = params.note_depth(note_t, song_time_ms) {
         return Some(d);
@@ -2889,7 +2911,7 @@ pub fn hitbox_depth(
         Some(_) => note_t + rhythia_sim::hitreg::DEFAULT_WINDOW_MS,
         None => return None,
     };
-    (song_time_ms <= resolution + HITBOX_LINGER_MS).then_some(0.0)
+    (song_time_ms <= resolution + linger_ms).then_some(0.0)
 }
 
 #[cfg(test)]
@@ -2897,6 +2919,8 @@ mod hitbox_tests {
     use super::{hitbox_depth, HITBOX_LINGER_MS};
     use crate::scene::SceneParams;
     use rhythia_sim::hitreg::NoteResult;
+
+    const L: f64 = HITBOX_LINGER_MS;
 
     fn res(hit: bool, hit_ms: Option<f64>) -> Option<NoteResult> {
         Some(NoteResult {
@@ -2909,39 +2933,40 @@ mod hitbox_tests {
     #[test]
     fn hit_note_box_freezes_and_lingers_past_the_recorded_hit() {
         let p = SceneParams::default();
-        // Note at 1000 ms, hit 60 ms late: approaching before the plane,
-        // frozen AT the plane afterwards, gone after hit + linger.
-        assert!(hitbox_depth(&p, 1000.0, 990.0, res(true, Some(1060.0))).unwrap() > 0.0);
-        assert_eq!(hitbox_depth(&p, 1000.0, 1055.0, res(true, Some(1060.0))), Some(0.0));
-        assert_eq!(hitbox_depth(&p, 1000.0, 1061.0, res(true, Some(1060.0))), Some(0.0));
-        assert!(hitbox_depth(&p, 1000.0, 1060.0 + HITBOX_LINGER_MS + 1.0, res(true, Some(1060.0)))
-            .is_none());
+        assert!(hitbox_depth(&p, 1000.0, 990.0, res(true, Some(1060.0)), L).unwrap() > 0.0);
+        assert_eq!(hitbox_depth(&p, 1000.0, 1055.0, res(true, Some(1060.0)), L), Some(0.0));
+        assert_eq!(hitbox_depth(&p, 1000.0, 1061.0, res(true, Some(1060.0)), L), Some(0.0));
+        assert!(hitbox_depth(&p, 1000.0, 1060.0 + L + 1.0, res(true, Some(1060.0)), L).is_none());
     }
 
     #[test]
     fn missed_note_box_survives_window_plus_linger() {
         let p = SceneParams::default();
-        assert_eq!(hitbox_depth(&p, 1000.0, 1079.0, res(false, None)), Some(0.0));
-        assert_eq!(hitbox_depth(&p, 1000.0, 1081.0, res(false, None)), Some(0.0));
-        assert!(hitbox_depth(&p, 1000.0, 1080.0 + HITBOX_LINGER_MS + 1.0, res(false, None))
-            .is_none());
+        assert_eq!(hitbox_depth(&p, 1000.0, 1079.0, res(false, None), L), Some(0.0));
+        assert_eq!(hitbox_depth(&p, 1000.0, 1081.0, res(false, None), L), Some(0.0));
+        assert!(hitbox_depth(&p, 1000.0, 1080.0 + L + 1.0, res(false, None), L).is_none());
+    }
+
+    #[test]
+    fn zero_linger_removes_the_box_at_resolution() {
+        let p = SceneParams::default();
+        assert_eq!(hitbox_depth(&p, 1000.0, 1059.0, res(true, Some(1060.0)), 0.0), Some(0.0));
+        assert!(hitbox_depth(&p, 1000.0, 1061.0, res(true, Some(1060.0)), 0.0).is_none());
     }
 
     #[test]
     fn lifetimes_survive_high_effective_approach_rates() {
-        // 0.25x replay: the approach rate quadruples — the frozen box
-        // must still live by TIME rules, not spatial ones.
         let mut p = SceneParams::default();
         p.apply_speed(0.25);
-        assert_eq!(hitbox_depth(&p, 1000.0, 1052.0, res(true, Some(1070.0))), Some(0.0));
-        assert_eq!(hitbox_depth(&p, 1000.0, 1079.0, res(false, None)), Some(0.0));
+        assert_eq!(hitbox_depth(&p, 1000.0, 1052.0, res(true, Some(1070.0)), L), Some(0.0));
+        assert_eq!(hitbox_depth(&p, 1000.0, 1079.0, res(false, None), L), Some(0.0));
     }
 
     #[test]
     fn unresolved_notes_end_at_the_plane() {
         let p = SceneParams::default();
-        assert!(hitbox_depth(&p, 1000.0, 999.0, None).is_some());
-        assert!(hitbox_depth(&p, 1000.0, 1001.0, None).is_none());
+        assert!(hitbox_depth(&p, 1000.0, 999.0, None, L).is_some());
+        assert!(hitbox_depth(&p, 1000.0, 1001.0, None, L).is_none());
     }
 }
 
