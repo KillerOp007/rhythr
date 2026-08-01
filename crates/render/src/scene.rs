@@ -29,8 +29,9 @@ pub const GRID_SPACING: f32 = 1.0;
 /// inset (Cursor.gd: `edgec = 0.13125` cells) — the recorded positions go
 /// further out, but the player never sees that. ±1.36875 on a normal
 /// grid; hardrock widens it with the grid (empirically +0.15, i.e. the
-/// margin stays put while the outer cell centres move out).
-pub const CURSOR_EDGE_INSET: f32 = 0.13125;
+/// margin stays put while the outer cell centres move out). One source
+/// of truth, shared with hit attribution.
+pub const CURSOR_EDGE_INSET: f32 = rhythia_sim::hitreg::CURSOR_EDGE_INSET;
 
 /// Half-width of the game's true hit area — one source of truth, shared
 /// with hit attribution in the sim crate.

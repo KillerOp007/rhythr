@@ -32,14 +32,33 @@ pub const DEFAULT_WINDOW_MS: f64 = 80.0;
 /// share this one constant.
 pub const HITBOX_HALF: f32 = 0.56875;
 
+/// The game's cursor barrier: the cursor the game TESTS hits with is
+/// clamped to the field edge minus the fixed inset (Cursor.gd `edgec`
+/// 0.13125 cells) — recordings from absolute devices (tablets) contain
+/// raw positions beyond it, but no hit can ever happen out there.
+pub const CURSOR_EDGE_INSET: f32 = 0.13125;
+
 /// Grid cell (0..2) to world units, the game's own mapping.
 fn note_world(n: &Note) -> (f32, f32) {
     (n.x - 1.0, 1.0 - n.y)
 }
 
-fn covers(fx: f32, fy: f32, n: &Note) -> bool {
+/// The cursor bound for a note set: normal grids clamp at ±1.36875,
+/// hardrock grids wider — derived from the notes themselves so this
+/// crate needs no mods knowledge.
+fn cursor_bound(notes: &[Note]) -> f32 {
+    let mut grid = 1.0f32;
+    for n in notes {
+        let (wx, wy) = note_world(n);
+        grid = grid.max(wx.abs()).max(wy.abs());
+    }
+    grid + (0.5 - CURSOR_EDGE_INSET)
+}
+
+fn covers(fx: f32, fy: f32, n: &Note, bound: f32) -> bool {
+    let (cx, cy) = (fx.clamp(-bound, bound), fy.clamp(-bound, bound));
     let (wx, wy) = note_world(n);
-    (fx - wx).abs() <= HITBOX_HALF && (fy - wy).abs() <= HITBOX_HALF
+    (cx - wx).abs() <= HITBOX_HALF && (cy - wy).abs() <= HITBOX_HALF
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -142,6 +161,7 @@ fn match_hits_inner(
     // soon-future note's cell steals flags and manufactures impossible
     // early hits (negative timing errors).
     const EARLY_SLACK_MS: f64 = 17.0;
+    let bound = cursor_bound(notes);
     // A mis-shifted CHAIN (every flag one note early) unravels one link
     // per pass, from the tail backwards — so run to convergence. Each
     // swap strictly increases the number of cursor-consistent hits, so
@@ -166,7 +186,7 @@ fn match_hits_inner(
                 }
                 // Only when the cursor is unambiguous: inside the missed
                 // note's area, outside the attributed one's.
-                if covers(fx, fy, miss_note) && !covers(fx, fy, &notes[hi]) {
+                if covers(fx, fy, miss_note, bound) && !covers(fx, fy, &notes[hi], bound) {
                     results[mi].hit = true;
                     results[mi].hit_ms = Some(fm);
                     flag_of[mi] = Some(fidx);

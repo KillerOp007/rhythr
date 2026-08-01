@@ -2898,6 +2898,11 @@ struct AnalysisDto {
     player: String,
     ghost_player: Option<String>,
     map_title: String,
+    /// The game's cursor barrier per side (world units): the visible
+    /// cursor — and every hit test — is clamped here. Overlays must
+    /// clamp too; raw recordings (tablets!) go beyond it.
+    cursor_bound: f32,
+    ghost_cursor_bound: Option<f32>,
 }
 
 /// Full replay analytics for the Analyze tab. Recomputed on demand — a
@@ -2910,18 +2915,23 @@ async fn analysis_data(state: tauri::State<'_, App>) -> Result<AnalysisDto, Stri
         let (_, r) = inner.replay.as_ref().ok_or("load a replay first")?;
         let (_, m) = inner.map.as_ref().ok_or("load a map first")?;
         // Analyze against the map as this player saw it (mirror/hardrock).
-        let (main_map, _) = rhythia_render::mods::map_for_replay(m, r);
+        let (main_map, main_mods) = rhythia_render::mods::map_for_replay(m, r);
         let main = rhythia_render::analysis::analyze(&main_map, r);
-        let (ghost, ghost_distance, ghost_player) = match inner.ghost.as_ref() {
+        let bound_of = |grid_scale: f32| {
+            grid_scale + (0.5 - rhythia_sim::hitreg::CURSOR_EDGE_INSET)
+        };
+        let (ghost, ghost_distance, ghost_player, ghost_cursor_bound) = match inner.ghost.as_ref()
+        {
             Some((_, g)) => {
-                let (gmap, _) = rhythia_render::mods::map_for_replay(m, g);
+                let (gmap, gmods) = rhythia_render::mods::map_for_replay(m, g);
                 (
                     Some(rhythia_render::analysis::analyze(&gmap, g)),
                     Some(rhythia_render::analysis::cursor_distance(r, g)),
                     Some(g.player_name.clone()),
+                    Some(bound_of(gmods.grid_scale)),
                 )
             }
-            None => (None, None, None),
+            None => (None, None, None, None),
         };
         Ok(AnalysisDto {
             main,
@@ -2930,6 +2940,8 @@ async fn analysis_data(state: tauri::State<'_, App>) -> Result<AnalysisDto, Stri
             player: r.player_name.clone(),
             ghost_player,
             map_title: m.meta.title.clone(),
+            cursor_bound: bound_of(main_mods.grid_scale),
+            ghost_cursor_bound,
         })
     })
     .await
@@ -3083,6 +3095,30 @@ async fn open_analyze_window(app_handle: tauri::AppHandle) -> Result<(), String>
 #[tauri::command]
 fn save_text_file(path: String, contents: String) -> Result<(), String> {
     std::fs::write(&path, contents).map_err(err_str)
+}
+
+/// The live engine's own picture at its current clock — PNG bytes for
+/// the overlay snapshot, so the composite shows EXACTLY what the screen
+/// shows (skin background, live resolution), not the preview pipeline's
+/// rendition with the custom background.
+#[tauri::command]
+async fn live_still(
+    live: tauri::State<'_, live::LiveHandles>,
+) -> Result<tauri::ipc::Response, String> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    {
+        let guard = live.session.lock().unwrap_or_else(|p| p.into_inner());
+        let s = guard.as_ref().ok_or("no live session")?;
+        s.tx.send(live::LiveCmd::Still(tx))
+            .map_err(|_| "live thread gone".to_string())?;
+    }
+    let bytes = tauri::async_runtime::spawn_blocking(move || {
+        rx.recv_timeout(std::time::Duration::from_secs(3))
+            .map_err(|_| "live still timed out".to_string())?
+    })
+    .await
+    .map_err(err_str)??;
+    Ok(tauri::ipc::Response::new(bytes))
 }
 
 /// Overlay snapshots: with RHYTHR_SNAP_DIR set, the analyze window saves
@@ -3801,6 +3837,7 @@ fn main() {
             save_text_file,
             overlay_snap_target,
             save_data_url_png,
+            live_still,
             save_data_url,
             set_preview_quality,
             open_analyze_window,

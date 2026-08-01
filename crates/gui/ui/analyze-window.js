@@ -960,6 +960,11 @@ function drawOverlay() {
     const a = si === 0 ? data.main : data.ghost;
     const color = si === 0 ? pal.main : pal.ghost;
     if (!a) return;
+    // The game's barrier: the visible cursor (and every hit test) is
+    // clamped to the field — raw tablet recordings go beyond it, but
+    // "outside the field" never happened on screen. Draw the truth.
+    const cb = (si === 0 ? data.cursor_bound : data.ghost_cursor_bound) ?? 1.36875;
+    const cpx = (wx, wy) => projectPx(side, clamp(wx, -cb, cb), clamp(wy, -cb, cb));
 
     // Two clips: the side's viewport (split halves must never bleed into
     // each other) and, for the field-bound layers, the playfield border.
@@ -1021,10 +1026,17 @@ function drawOverlay() {
         const n = si === 0 ? noteById(q.i) : a.notes.find((x) => x.i === q.i);
         const sel = si === 0 && q.i === selNote;
         const hit = n ? n.hit : true;
-        // After the note reaches the plane the box freezes there; draw
-        // it a touch quieter once the verdict is in.
+        // After the note reaches the plane the box freezes there; the
+        // verdict fades out over the linger so stacked past judgements
+        // read as past, not as one confusing simultaneous scene.
         const judging = n && t >= n.t;
-        if (judging) ctx.globalAlpha = 0.75;
+        let fade = 1;
+        if (judging) {
+          const resolution = n.hit ? Math.max(n.hit_ms ?? n.t, n.t) : n.t + 80;
+          const age = t - resolution;
+          fade = age > 0 ? Math.max(0.3, 1 - age / 350) : 1;
+          ctx.globalAlpha = 0.85 * fade;
+        }
         ctx.strokeStyle = sel ? pal.main : hit ? pal.box : pal.boxMiss;
         ctx.lineWidth = sel ? lw + 1 : lw;
         ctx.setLineDash(hit ? [] : [lw * 3, lw * 2.2]);
@@ -1041,10 +1053,24 @@ function drawOverlay() {
         if (judging) {
           const rm = n.hit ? (n.hit_ms ?? n.t) : n.t;
           const c = cursorAt(a, rm);
-          const cp = c && projectPx(side, c[0], c[1]);
+          const cp = c && cpx(c[0], c[1]);
           if (cp) {
+            ctx.globalAlpha = Math.max(0.45, fade);
+            // For a miss, a thin line shows HOW FAR the cursor was from
+            // the area at the deciding moment.
+            if (!hit) {
+              const cxm = (q.pts[0][0] + q.pts[1][0] + q.pts[2][0] + q.pts[3][0]) / 4;
+              const cym = (q.pts[0][1] + q.pts[1][1] + q.pts[2][1] + q.pts[3][1]) / 4;
+              ctx.beginPath();
+              ctx.moveTo(cp[0], cp[1]);
+              ctx.lineTo(cxm, cym);
+              ctx.lineWidth = Math.max(1, lw * 0.4);
+              ctx.strokeStyle = pal.boxMiss;
+              ctx.setLineDash([lw * 1.5, lw * 1.5]);
+              ctx.stroke();
+              ctx.setLineDash([]);
+            }
             const r = Math.max(6, lw * 2.4);
-            ctx.globalAlpha = 1;
             ctx.beginPath();
             ctx.arc(cp[0], cp[1], r, 0, Math.PI * 2);
             ctx.fillStyle = hit ? pal.main : pal.boxMiss;
@@ -1077,7 +1103,7 @@ function drawOverlay() {
       let started = false;
       for (let j = lo; j <= hi; j++) {
         if (j > lo && ft[j] - ft[j - 1] > 500) started = false;
-        const p = projectPx(side, a.frames.x[j], a.frames.y[j]);
+        const p = cpx(a.frames.x[j], a.frames.y[j]);
         if (!p) continue;
         if (!started) {
           ctx.moveTo(p[0], p[1]);
@@ -1094,7 +1120,7 @@ function drawOverlay() {
       ctx.fillStyle = color;
       ctx.globalAlpha = 0.9;
       for (let j = lo; j <= hi; j++) {
-        const p = projectPx(side, a.frames.x[j], a.frames.y[j]);
+        const p = cpx(a.frames.x[j], a.frames.y[j]);
         if (!p) continue;
         ctx.beginPath();
         ctx.arc(p[0], p[1], 1.8, 0, Math.PI * 2);
@@ -1107,13 +1133,12 @@ function drawOverlay() {
       let p = null;
       if (hi >= 0 && hi + 1 < ft.length && ft[hi + 1] > ft[hi]) {
         const k = clamp((t - ft[hi]) / (ft[hi + 1] - ft[hi]), 0, 1);
-        p = projectPx(
-          side,
+        p = cpx(
           a.frames.x[hi] + (a.frames.x[hi + 1] - a.frames.x[hi]) * k,
           a.frames.y[hi] + (a.frames.y[hi + 1] - a.frames.y[hi]) * k,
         );
       } else if (hi >= 0) {
-        p = projectPx(side, a.frames.x[hi], a.frames.y[hi]);
+        p = cpx(a.frames.x[hi], a.frames.y[hi]);
       }
       if (p) {
         const arm = Math.max(8, lw * 4.5);
@@ -1668,7 +1693,7 @@ function drawSection() {
               )
               .join("")
           : `<p class="hint">Nothing unusual found in this replay's data.</p>`) +
-        `<p class="hint an-foot">Signals are hints derived from the recording — context, not verdicts.</p>`,
+        `<p class="hint an-foot">Signals are hints derived from the recording — context, not verdicts. Absolute input devices (graphics tablets) naturally produce teleport-like jumps when the pen re-enters hover range: on tablet plays, movement signals here are expected and are NOT evidence of cheating.</p>`,
     );
     html += card("Recording rate", kv("Frame delta", `${fmt1(a.frame_deltas.avg_ms)} ms avg · ${fmt1(a.frame_deltas.median_ms)} ms median`) + `<canvas class="an-graph" data-hist="delta"></canvas>`);
   } else if (opt.section === "export") {
@@ -2065,11 +2090,24 @@ async function snapOverlay() {
     x.fillStyle = "#000";
     x.fillRect(0, 0, c.width, c.height);
     try {
+      // Native mode: ask the live engine itself — its picture (skin
+      // background, live resolution) is what the screen shows; the
+      // preview pipeline would paint the custom background instead.
       // fetch + ImageBitmap keeps the canvas origin-clean — an <img>
       // without CORS would taint it and toDataURL throws SecurityError.
-      const r = await fetch(frameUrl(t0));
-      if (r.ok) {
-        const bmp = await createImageBitmap(await r.blob());
+      let blob = null;
+      if (engine === "native") {
+        try {
+          const bytes = await invoke("live_still");
+          blob = new Blob([bytes], { type: "image/png" });
+        } catch {}
+      }
+      if (!blob) {
+        const r = await fetch(frameUrl(t0));
+        if (r.ok) blob = await r.blob();
+      }
+      if (blob) {
+        const bmp = await createImageBitmap(blob);
         // Aspect-fit, never stretch: the preview still and the live
         // frame can differ in resolution (and defensively, in aspect).
         const s = Math.min(c.width / bmp.width, c.height / bmp.height);

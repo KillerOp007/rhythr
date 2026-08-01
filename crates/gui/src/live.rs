@@ -28,6 +28,10 @@ pub enum LiveCmd {
     /// Window inner size changed (physical px).
     Resize(u32, u32),
     View { hide_cursor: bool, hide_notes: bool },
+    /// Render the CURRENT clock position to PNG bytes — the overlay
+    /// snapshot wants exactly what the screen shows (skin background,
+    /// live resolution), not the preview pipeline's version.
+    Still(Sender<Result<Vec<u8>, String>>),
     Stop,
 }
 
@@ -237,6 +241,19 @@ pub fn spawn(
                         params = p;
                         dirty = true;
                     }
+                    Ok(LiveCmd::Still(reply)) => {
+                        let res = renderer
+                            .render_still_with_ghost(
+                                &params, &cfg, &skin, &replay, &main_map, t, Some(&hud),
+                                ghost.as_ref(),
+                            )
+                            .map_err(|e| e.to_string())
+                            .and_then(|px| {
+                                let (w, h) = renderer.dimensions();
+                                png_bytes_vec(&px, w, h)
+                            });
+                        let _ = reply.send(res);
+                    }
                     Ok(LiveCmd::Stop) => break 'run,
                     Err(std::sync::mpsc::TryRecvError::Empty) => break,
                     Err(std::sync::mpsc::TryRecvError::Disconnected) => break 'run,
@@ -385,13 +402,22 @@ pub fn spawn(
         drop(presenter);
         drop(renderer);
         fn save_png(path: &std::path::Path, rgba: &[u8], w: u32, h: u32) -> Result<(), String> {
-            let f = std::fs::File::create(path).map_err(|e| e.to_string())?;
-            let mut enc = png::Encoder::new(std::io::BufWriter::new(f), w, h);
-            enc.set_color(png::ColorType::Rgba);
-            enc.set_depth(png::BitDepth::Eight);
-            let mut wr = enc.write_header().map_err(|e| e.to_string())?;
-            wr.write_image_data(rgba).map_err(|e| e.to_string())
+            let bytes = png_bytes_vec(rgba, w, h)?;
+            std::fs::write(path, bytes).map_err(|e| e.to_string())
         }
         let _ = window_label;
     });
+}
+
+/// Encodes RGBA pixels as PNG bytes in memory.
+fn png_bytes_vec(rgba: &[u8], w: u32, h: u32) -> Result<Vec<u8>, String> {
+    let mut out = Vec::new();
+    {
+        let mut enc = png::Encoder::new(std::io::Cursor::new(&mut out), w, h);
+        enc.set_color(png::ColorType::Rgba);
+        enc.set_depth(png::BitDepth::Eight);
+        let mut wr = enc.write_header().map_err(|e| e.to_string())?;
+        wr.write_image_data(rgba).map_err(|e| e.to_string())?;
+    }
+    Ok(out)
 }
