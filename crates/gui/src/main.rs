@@ -430,10 +430,20 @@ type App = Arc<Shared>;
 // -------------------------------------------------------------------- DTOs
 
 #[derive(Serialize, Clone)]
+struct PlannedOutputDto {
+    path: String,
+    exists: bool,
+}
+
+#[derive(Serialize, Clone)]
 struct VerifyDto {
     consistent: bool,
     /// Failed error-level checks as "name: expected X, got Y".
     problems: Vec<String>,
+    /// The checks failed because this map is not the one that was played.
+    /// Without this the UI accused the player's replay of being edited
+    /// when they had simply picked the wrong map file.
+    wrong_map: bool,
 }
 
 #[derive(Serialize, Clone)]
@@ -871,17 +881,36 @@ fn open_releases_page(app: tauri::AppHandle) {
         .open_url("https://github.com/KillerOp007/rhythr/releases/latest", None::<&str>);
 }
 
-fn verify_dto(replay: &Replay, map: &Map) -> VerifyDto {
+fn verify_dto(replay: &Replay, map: &Map, hash_mismatch: bool) -> VerifyDto {
     let report = integrity::verify_replay(replay, map);
     let problems = report
         .failed_checks()
         .filter(|c| c.severity == integrity::Severity::Error)
         .map(|c| format!("{}: expected {}, got {}", c.name, c.expected, c.actual))
         .collect();
+    let consistent = report.consistent();
     VerifyDto {
-        consistent: report.consistent(),
+        consistent,
         problems,
+        wrong_map: !consistent && wrong_map(replay, &report, hash_mismatch),
     }
+}
+
+/// Whether a failed check is better explained by the loaded map than by the
+/// replay. A replay's hit flags only line up with the chart they were played
+/// on, so against a foreign map most of them match nothing at all — a state
+/// no edit produces, since editing a replay keeps its own totals coherent.
+fn wrong_map(replay: &Replay, report: &integrity::IntegrityReport, hash_mismatch: bool) -> bool {
+    if hash_mismatch {
+        return true;
+    }
+    let flags = report.flagged_frames;
+    // A third of the recorded hits finding no note at all, or barely half
+    // of them landing, is a different chart — not a doctored file.
+    let orphan_heavy = flags > 20 && u64::from(report.orphan_flags) * 3 > u64::from(flags);
+    let header_hits = replay.hits.max(0) as u32;
+    let lost_most = header_hits > 20 && report.derived_hits * 2 < header_hits;
+    orphan_heavy || lost_most
 }
 
 /// Overlays and meter chrome flip to dark strokes on bright skin
@@ -893,7 +922,10 @@ fn is_light_background(cfg: &rhythia_render::config::SkinConfig) -> bool {
 
 fn assemble_status(inner: &Inner, rendering: bool) -> StatusDto {
     let replay = inner.replay.as_ref().map(|(path, r)| {
-        let verify = inner.map.as_ref().map(|(_, m)| verify_dto(r, m));
+        let verify = inner
+            .map
+            .as_ref()
+            .map(|(_, m)| verify_dto(r, m, inner.map_hash_mismatch));
         let mods: Vec<String> = serde_json::from_str(&r.mods).unwrap_or_default();
         ReplayDto {
             path: path.to_string_lossy().into_owned(),
@@ -3256,9 +3288,74 @@ struct RenderProgress {
 }
 
 #[tauri::command]
+/// Where a render started right now would write, from the output folder,
+/// the file name and the clip range. Shared by the render itself and by the
+/// UI's overwrite check, so the two can never disagree about the target.
+fn planned_output(inner: &Inner) -> Result<PathBuf, String> {
+    let s = &inner.settings;
+    let dir = s
+        .output_dir
+        .clone()
+        .or_else(|| {
+            dirs::video_dir()
+                .or_else(dirs::download_dir)
+                .map(|p| p.to_string_lossy().into_owned())
+        })
+        .ok_or("no output folder set")?;
+    let mut name = if s.file_name.is_empty() {
+        suggested_name(inner)
+    } else {
+        sanitize_filename(&s.file_name)
+    };
+    if !name.to_lowercase().ends_with(".mp4") {
+        name.push_str(".mp4");
+    }
+    // A clip gets its range in the name: "… (1.02-1.34).mp4" (dots,
+    // not colons — Windows path rules).
+    if let Some((cs, ce)) = inner.clip {
+        let tag = |ms: f64| {
+            let t = (ms / 1000.0).max(0.0) as u64;
+            format!("{}.{:02}", t / 60, t % 60)
+        };
+        let base = name.trim_end_matches(".mp4").to_string();
+        name = format!("{base} ({}-{}).mp4", tag(cs), tag(ce));
+    }
+    Ok(PathBuf::from(&dir).join(name))
+}
+
+/// The first free "name (2).mp4", "name (3).mp4"… next to a taken path.
+fn next_free_path(path: &Path) -> PathBuf {
+    let dir = path.parent().unwrap_or(Path::new("."));
+    let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    let ext = path.extension().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "mp4".into());
+    for n in 2..10_000 {
+        let candidate = dir.join(format!("{stem} ({n}).{ext}"));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    path.to_path_buf()
+}
+
+/// The target path plus whether something is already there, so the UI can
+/// ask before a render replaces an earlier video.
+#[tauri::command]
+fn planned_output_path(state: tauri::State<'_, App>) -> Result<PlannedOutputDto, String> {
+    let app = state.inner();
+    let inner = app.lock();
+    let path = planned_output(&inner)?;
+    Ok(PlannedOutputDto {
+        exists: path.exists(),
+        path: path.to_string_lossy().into_owned(),
+    })
+}
+
+#[tauri::command]
 fn start_render(
     state: tauri::State<'_, App>,
     app_handle: tauri::AppHandle,
+    // Keep an existing file and write alongside it instead of over it.
+    keep_existing: Option<bool>,
 ) -> Result<String, String> {
     let app = state.inner().clone();
     if app.rendering.swap(true, Ordering::SeqCst) {
@@ -3269,34 +3366,14 @@ fn start_render(
         let (_, replay) = inner.replay.as_ref().ok_or("no replay loaded")?;
         let (_, map) = inner.map.as_ref().ok_or("no map loaded")?;
         let s = &inner.settings;
-        let dir = s
-            .output_dir
-            .clone()
-            .or_else(|| {
-                dirs::video_dir()
-                    .or_else(dirs::download_dir)
-                    .map(|p| p.to_string_lossy().into_owned())
-            })
-            .ok_or("no output folder set")?;
-        let mut name = if s.file_name.is_empty() {
-            suggested_name(&inner)
-        } else {
-            sanitize_filename(&s.file_name)
-        };
-        if !name.to_lowercase().ends_with(".mp4") {
-            name.push_str(".mp4");
+        let mut out = planned_output(&inner)?;
+        if keep_existing.unwrap_or(false) && out.exists() {
+            out = next_free_path(&out);
         }
-        // A clip gets its range in the name: "… (1.02-1.34).mp4" (dots,
-        // not colons — Windows path rules).
-        if let Some((cs, ce)) = inner.clip {
-            let tag = |ms: f64| {
-                let t = (ms / 1000.0).max(0.0) as u64;
-                format!("{}.{:02}", t / 60, t % 60)
-            };
-            let base = name.trim_end_matches(".mp4").to_string();
-            name = format!("{base} ({}-{}).mp4", tag(cs), tag(ce));
-        }
-        let out = PathBuf::from(&dir).join(name);
+        let dir = out
+            .parent()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default();
         std::fs::create_dir_all(&dir).map_err(err_str)?;
         let job = RenderJob {
             replay: replay.clone(),
@@ -3875,6 +3952,7 @@ fn main() {
             export_frame,
             export_card,
             start_render,
+            planned_output_path,
             cancel_render,
             probe_encoders,
         ])

@@ -88,6 +88,16 @@ impl<'a> Reader<'a> {
 
     /// Consumes one marker value of the given data type.
     fn skip_value(&mut self, type_id: u8) -> Result<()> {
+        self.skip_value_at(type_id, 0)
+    }
+
+    /// How deep marker arrays may nest. Real files use one level at most;
+    /// the limit exists because the element type of an array can be another
+    /// array, so a crafted file could otherwise drive this recursion until
+    /// the stack overflows — an abort no caller can catch.
+    const MAX_ARRAY_DEPTH: u32 = 8;
+
+    fn skip_value_at(&mut self, type_id: u8, depth: u32) -> Result<()> {
         match type_id {
             0x00 => {}
             0x01 => self.pos += 1,
@@ -106,10 +116,22 @@ impl<'a> Reader<'a> {
                 self.take(n)?;
             }
             0x0c => {
+                if depth >= Self::MAX_ARRAY_DEPTH {
+                    return Err(Error::Malformed(
+                        "sspm: marker arrays nested too deeply".into(),
+                    ));
+                }
                 let sub = self.u8()?;
                 let count = self.u16()?;
-                for _ in 0..count {
-                    self.skip_value(sub)?;
+                // Type 0x00 is zero bytes wide, so an array of it consumes
+                // nothing at all: looping 65535 times would be pure waste,
+                // and nesting such arrays multiplies out to a hang. Every
+                // other element type advances the cursor, which bounds the
+                // total work by the file size.
+                if sub != 0x00 {
+                    for _ in 0..count {
+                        self.skip_value_at(sub, depth + 1)?;
+                    }
                 }
             }
             other => {
@@ -327,6 +349,44 @@ pub fn parse(data: &[u8]) -> Result<Map> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A hostile marker value: `depth` nested arrays, the innermost one an
+    /// array of the zero-width type. Parsed naively this either overflows
+    /// the stack or spins 65535^depth times.
+    fn nested_array_value(depth: usize) -> Vec<u8> {
+        let mut v = Vec::new();
+        for _ in 0..depth {
+            v.push(0x0c); // element type: another array
+            v.extend_from_slice(&1u16.to_le_bytes());
+        }
+        v.push(0x00); // innermost element type: zero bytes wide
+        v.extend_from_slice(&u16::MAX.to_le_bytes());
+        v
+    }
+
+    #[test]
+    fn deeply_nested_marker_arrays_are_rejected_not_fatal() {
+        let bytes = nested_array_value(64);
+        let mut r = Reader::new(&bytes);
+        let err = r.skip_value(0x0c).unwrap_err();
+        assert!(
+            format!("{err}").contains("nested too deeply"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn zero_width_element_arrays_do_not_spin() {
+        // One array of 65535 zero-width elements. The type byte is the
+        // argument, so the value itself is just element type + count: the
+        // reader must consume those three bytes and stop, not loop over
+        // 65535 elements of nothing.
+        let mut v = vec![0x00];
+        v.extend_from_slice(&u16::MAX.to_le_bytes());
+        let mut r = Reader::new(&v);
+        r.skip_value(0x0c).unwrap();
+        assert_eq!(r.pos, v.len());
+    }
 
     /// Builds a minimal v2 file with two notes (one grid, one quantum).
     fn synthetic_v2() -> Vec<u8> {

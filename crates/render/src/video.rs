@@ -335,11 +335,17 @@ pub fn render_video(
 
     cmd.stdin(Stdio::piped());
     cmd.stdout(Stdio::null());
-    cmd.stderr(Stdio::inherit());
+    // Captured, not inherited: a GUI has no terminal, so an inherited
+    // stderr threw away the only explanation ffmpeg ever gives and every
+    // failure arrived as a bare "exited with exit status: 1". It must be
+    // DRAINED on a thread — ffmpeg writes progress here, and a full pipe
+    // with no reader deadlocks the encode.
+    cmd.stderr(Stdio::piped());
 
     let mut child = cmd
         .spawn()
         .map_err(|e| Error::Ffmpeg(format!("could not start ffmpeg ({}): {e}", opts.ffmpeg)))?;
+    let log = FfmpegLog::drain(child.stderr.take());
     let mut stdin = child
         .stdin
         .take()
@@ -356,9 +362,12 @@ pub fn render_video(
     };
     let mut write_frame = |pixels: &[u8], i: u64, child: &mut std::process::Child| {
         if let Err(e) = stdin.write_all(pixels) {
+            // A broken pipe here means ffmpeg died; its own last words say
+            // why far better than the errno does.
             let status = child.wait();
             return Err(Error::Ffmpeg(format!(
-                "writing frame {i} failed: {e} (ffmpeg exit: {status:?})"
+                "writing frame {i} failed: {e} (ffmpeg exit: {status:?}){}",
+                log.tail()
             )));
         }
         Ok(())
@@ -439,10 +448,72 @@ pub fn render_video(
         .map_err(|e| Error::Ffmpeg(format!("waiting for ffmpeg: {e}")))?;
     if !status.success() {
         // Guard drop removes the unusable partial file.
-        return Err(Error::Ffmpeg(format!("ffmpeg exited with {status}")));
+        return Err(Error::Ffmpeg(format!(
+            "ffmpeg exited with {status}{}",
+            log.tail()
+        )));
     }
     guard.done = true;
     Ok(())
+}
+
+/// The tail of ffmpeg's stderr, collected on a reader thread so the pipe
+/// never fills up. Only the last few lines are kept — that is where ffmpeg
+/// puts the reason, and the rest is progress spam.
+struct FfmpegLog {
+    lines: std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<String>>>,
+}
+
+impl FfmpegLog {
+    const KEEP: usize = 40;
+
+    fn drain(stderr: Option<std::process::ChildStderr>) -> FfmpegLog {
+        let lines = std::sync::Arc::new(std::sync::Mutex::new(
+            std::collections::VecDeque::<String>::new(),
+        ));
+        if let Some(err) = stderr {
+            let sink = std::sync::Arc::clone(&lines);
+            std::thread::spawn(move || {
+                use std::io::BufRead;
+                for line in std::io::BufReader::new(err).lines().map_while(Result::ok) {
+                    let line = line.trim().to_string();
+                    if line.is_empty() {
+                        continue;
+                    }
+                    let mut q = sink.lock().unwrap_or_else(|e| e.into_inner());
+                    if q.len() == Self::KEEP {
+                        q.pop_front();
+                    }
+                    q.push_back(line);
+                }
+            });
+        }
+        FfmpegLog { lines }
+    }
+
+    /// The last lines that are not ffmpeg's periodic progress readout,
+    /// formatted for appending to an error message (empty when silent).
+    fn tail(&self) -> String {
+        let q = self.lines.lock().unwrap_or_else(|e| e.into_inner());
+        let picked: Vec<&str> = q
+            .iter()
+            .rev()
+            .filter(|l| !l.starts_with("frame=") && !l.starts_with("size="))
+            .take(3)
+            .map(String::as_str)
+            .collect();
+        if picked.is_empty() {
+            return String::new();
+        }
+        let mut out = String::from(" — ");
+        for (i, l) in picked.iter().rev().enumerate() {
+            if i > 0 {
+                out.push_str(" / ");
+            }
+            out.push_str(l);
+        }
+        out
+    }
 }
 
 /// Owns the ffmpeg child during encoding; unless defused (`done = true`),

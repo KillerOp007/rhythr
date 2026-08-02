@@ -53,9 +53,19 @@ function renderReplayCard() {
   const mods = r.mods.length ? r.mods.map((m) => m.replace(/^mod_/, "")).join(", ") : "none";
   let chip = "";
   if (r.verify) {
-    chip = r.verify.consistent
-      ? `<span class="chip ok" title="rhythr's own consistency check — not an official Rhythia score verification.">verified</span>`
-      : `<span class="chip bad" title="${esc(r.verify.problems.join("\n"))}">inconsistent — possibly modified</span>`;
+    if (r.verify.consistent) {
+      chip = `<span class="chip ok" title="rhythr's own consistency check — not an official Rhythia score verification.">verified</span>`;
+    } else if (r.verify.wrong_map) {
+      // Blaming the replay here was wrong: the usual cause is a map file
+      // that simply is not the chart this run was played on.
+      chip = `<span class="chip warn" title="${esc(
+        "The recorded hits do not line up with this chart:\n" +
+          r.verify.problems.join("\n") +
+          "\n\nLoad the map this replay was played on."
+      )}">map doesn't match</span>`;
+    } else {
+      chip = `<span class="chip bad" title="${esc(r.verify.problems.join("\n"))}">inconsistent — possibly modified</span>`;
+    }
   }
   const outcome = r.failed
     ? `<span class="chip bad">failed at ${fmtTime(r.fail_time_ms)}</span>`
@@ -100,7 +110,7 @@ function renderConfigCard() {
   const path = status?.config?.path;
   $("btn-config-clear").hidden = !path;
   if (!path) {
-    body.innerHTML = `<p class="hint">Optional <code>.rhs</code> — defaults otherwise</p>`;
+    body.innerHTML = `<p class="hint">Optional <code>.rhs</code> or the game's <code>config.json</code> — defaults otherwise</p>`;
     return;
   }
   const name = path.split(/[\\/]/).pop();
@@ -1272,8 +1282,23 @@ function setRenderingUi(on) {
 
 async function startRender() {
   $("btn-open-out").hidden = true;
+  let keepExisting = false;
   try {
-    lastOutPath = await invoke("start_render");
+    // Rendering twice used to replace the first video without a word.
+    const planned = await invoke("planned_output_path");
+    if (planned.exists) {
+      const name = planned.path.split(/[\\/]/).pop();
+      const overwrite = await dialog.ask(
+        `${name} already exists in the output folder.\n\nReplace it?`,
+        { title: "File already there", kind: "warning", okLabel: "Replace", cancelLabel: "Keep both" }
+      );
+      keepExisting = !overwrite;
+    }
+  } catch {
+    // Path not resolvable yet (no folder set) — let start_render report it.
+  }
+  try {
+    lastOutPath = await invoke("start_render", { keepExisting });
     setRenderingUi(true);
     $("render-text").textContent = "Starting…";
   } catch (e) {
@@ -1455,9 +1480,24 @@ async function loadPath(path) {
     if (lower.endsWith(".rhr")) {
       await call(() => invoke("load_replay", { path }));
       loadNote(`Loaded replay: ${name}`);
-    } else if (lower.endsWith(".sspm") || lower.endsWith(".rhm") || lower.endsWith(".json")) {
+    } else if (lower.endsWith(".sspm") || lower.endsWith(".rhm")) {
       await call(() => invoke("load_map", { path }));
       loadNote(`Loaded map: ${name}`);
+    } else if (lower.endsWith(".json")) {
+      // Ambiguous: a cached map is JSON, and so is the game's own
+      // config.json. Try the map first, fall back to reading it as a skin.
+      try {
+        await call(() => invoke("load_map", { path }));
+        loadNote(`Loaded map: ${name}`);
+      } catch (mapErr) {
+        try {
+          await call(() => invoke("load_config", { path }));
+          loadNote(`Loaded skin config: ${name}`);
+          schedulePreview();
+        } catch {
+          throw mapErr;
+        }
+      }
     } else if (lower.endsWith(".rhs")) {
       await call(() => invoke("load_config", { path }));
       loadNote(`Loaded skin: ${name}`);
@@ -1576,7 +1616,9 @@ function initControls() {
     }
   });
   $("btn-config").addEventListener("click", async () => {
-    const p = await dialog.open({ filters: [{ name: "Skin config", extensions: ["rhs"] }] });
+    const p = await dialog.open({
+      filters: [{ name: "Skin config", extensions: ["rhs", "json"] }],
+    });
     if (p) await loadPath(p);
   });
   $("btn-config-clear").addEventListener("click", () => call(() => invoke("clear_config")).then(schedulePreview));
