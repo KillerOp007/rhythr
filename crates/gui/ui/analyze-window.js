@@ -860,6 +860,84 @@ function seek(t) {
 function updateTime() {
   $("an-time").textContent = fmtMsFull(currentMs) + (fps ? `  [${Math.round(fps)} fps]` : "");
   $("an-total").textContent = fmtMs(runEnd());
+  enforceLoop();
+}
+
+// ------------------------------------------------------- miss navigation
+//
+// Studying a mistake is what this window is for, and it could only be done
+// by hunting for the moment on the scrub bar. These walk the run's misses
+// in order and can loop the one you are on.
+
+/// Miss times in chart order, cached per loaded analysis.
+let missTimes = [];
+/// How much of the approach to show before the note, and how long to keep
+/// watching after it, when jumping to or looping a miss.
+const MISS_LEAD_MS = 900;
+const MISS_TAIL_MS = 400;
+let missLoop = null; // {from, to} while looping
+let inLoopJump = false;
+
+function collectMisses() {
+  const notes = data?.main?.notes || [];
+  missTimes = notes.filter((n) => !n.hit).map((n) => n.t).sort((x, y) => x - y);
+  const has = missTimes.length > 0;
+  for (const id of ["an-miss-prev", "an-miss-next", "an-miss-loop"]) {
+    const el = $(id);
+    if (el) el.disabled = !has;
+  }
+  setMissLoop(false);
+}
+
+/// The miss the playhead is at or heading into — the one a loop should
+/// repeat, and the anchor "previous"/"next" step away from.
+function currentMissIndex() {
+  if (!missTimes.length) return -1;
+  let best = 0;
+  for (let i = 0; i < missTimes.length; i++) {
+    if (missTimes[i] - MISS_LEAD_MS <= currentMs) best = i;
+    else break;
+  }
+  return best;
+}
+
+function gotoMiss(dir) {
+  if (!missTimes.length) return;
+  const here = currentMissIndex();
+  // Treat "already sitting on this miss" as being on it, so one press of
+  // prev goes to the previous one rather than re-seeking to the same spot.
+  const onIt = Math.abs(currentMs - (missTimes[here] - MISS_LEAD_MS)) < 60;
+  let next = dir > 0 ? here + 1 : here - (onIt ? 1 : 0);
+  if (!onIt && dir > 0 && missTimes[here] - MISS_LEAD_MS > currentMs) next = here;
+  next = clamp(next, 0, missTimes.length - 1);
+  seek(Math.max(0, missTimes[next] - MISS_LEAD_MS));
+  if (missLoop) setMissLoop(true); // re-anchor the loop on the new miss
+  showChrome();
+}
+
+function setMissLoop(on) {
+  const btn = $("an-miss-loop");
+  if (!on || !missTimes.length) {
+    missLoop = null;
+  } else {
+    const t = missTimes[currentMissIndex()];
+    missLoop = { from: Math.max(0, t - MISS_LEAD_MS), to: t + MISS_TAIL_MS };
+  }
+  if (btn) {
+    btn.setAttribute("aria-pressed", missLoop ? "true" : "false");
+    btn.classList.toggle("on", !!missLoop);
+  }
+}
+
+/// Wraps the playhead back to the start of the looped miss. Guarded because
+/// seek() calls updateTime() again.
+function enforceLoop() {
+  if (!missLoop || inLoopJump || !play.on) return;
+  if (currentMs >= missLoop.to || currentMs < missLoop.from - 50) {
+    inLoopJump = true;
+    seek(missLoop.from);
+    inLoopJump = false;
+  }
 }
 
 // ------------------------------------------------------------ overlay
@@ -1550,6 +1628,22 @@ function drawSection() {
   let html = "";
 
   if (opt.section === "overlays") {
+    // Nothing on the replay said what any of it meant; this is the key.
+    const pal = olPalette();
+    const swatch = (css, shape) =>
+      `<span class="an-swatch an-sw-${shape}" style="--sw:${css}"></span>`;
+    html += card(
+      "What you are looking at",
+      `<div class="an-legend">
+        ${swatch(pal.main, "line")}<span>Cursor path — where the cursor actually was, clamped to the field barrier the game enforces.</span>
+        ${data.ghost ? `${swatch(pal.ghost, "line")}<span>The ghost run's path.</span>` : ""}
+        ${swatch(pal.raw, "dot")}<span>Raw cursor: the recorded position before that clamp. Tablets record beyond the field; no hit ever happened out there.</span>
+        ${swatch(pal.approach, "box")}<span>A note's hit area on approach. Neutral on purpose — nothing has been decided yet.</span>
+        ${swatch(pal.box, "box")}<span>The note was taken. The box freezes at the plane and stays until the hit, plus the linger time you set.</span>
+        ${swatch(pal.boxMiss, "box")}<span>The note was missed. It survives to the end of the hit window, then the line shows how far the cursor stayed away.</span>
+        ${swatch(pal.main, "dot")}<span>Verdict dot: where the cursor sat at the exact moment the note resolved.</span>
+      </div>`,
+    );
     html += card(
       "Show on the replay",
       `<div class="an-toggles">
@@ -2312,6 +2406,7 @@ async function loadData(key) {
   data = fresh;
   timeline = tl;
   dataKey = key;
+  collectMisses();
   // Geometry describes THIS replay on THIS field — never reuse any of it.
   geoCache.clear();
   segGeo = { times: [], list: [] };
@@ -2486,6 +2581,9 @@ window.addEventListener("DOMContentLoaded", async () => {
   $("an-play").addEventListener("click", () => setPlaying(!play.on));
   $("an-back").addEventListener("click", () => stepFrame(-1));
   $("an-fwd").addEventListener("click", () => stepFrame(1));
+  $("an-miss-prev").addEventListener("click", () => gotoMiss(-1));
+  $("an-miss-next").addEventListener("click", () => gotoMiss(1));
+  $("an-miss-loop").addEventListener("click", () => setMissLoop(!missLoop));
   $("an-speed").addEventListener("input", () => setSpeed(Number($("an-speed").value) / 100));
   $("an-speed-num").addEventListener("change", () => {
     const v = parseFloat(String($("an-speed-num").value).replace(",", "."));
@@ -2527,13 +2625,30 @@ window.addEventListener("DOMContentLoaded", async () => {
     if (e.buttons & 1) scrubSeek(e);
   });
 
+  // Hand focus back after a drag, so the very next key press is a playback
+  // key again instead of another nudge of the slider the user just let go of.
+  document.addEventListener("pointerup", (e) => {
+    const el = e.target;
+    if (el && el.tagName === "INPUT" && (el.type || "").toLowerCase() === "range") {
+      el.blur();
+    }
+  });
   document.addEventListener("mousemove", showChrome);
   document.addEventListener("visibilitychange", () => {
     if (document.hidden && play.on) setPlaying(false);
   });
+  // A range slider is an <input> too, so treating every input as "typing"
+  // meant one click on the volume or speed slider silently killed space and
+  // the arrow keys for the rest of the session.
+  const TEXT_INPUTS = new Set([
+    "text", "number", "search", "url", "email", "password", "tel", "date", "time",
+  ]);
   document.addEventListener("keydown", (e) => {
     const t = document.activeElement;
-    const typing = t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
+    const inputType = t && t.tagName === "INPUT" ? (t.type || "text").toLowerCase() : "";
+    const typing =
+      t && (t.tagName === "TEXTAREA" || t.isContentEditable || TEXT_INPUTS.has(inputType));
+    const onSlider = inputType === "range";
     if (e.key === "Escape") {
       toggleOptions(false);
       return;
@@ -2549,14 +2664,25 @@ window.addEventListener("DOMContentLoaded", async () => {
       setPlaying(!play.on);
       showChrome();
     } else if (e.key === "ArrowLeft") {
+      if (onSlider) return; // the focused slider owns its own arrows
       e.preventDefault();
       if (e.shiftKey) seek(currentMs - 1000);
       else stepFrame(-1);
       showChrome();
     } else if (e.key === "ArrowRight") {
+      if (onSlider) return;
       e.preventDefault();
       if (e.shiftKey) seek(currentMs + 1000);
       else stepFrame(1);
+      showChrome();
+    } else if (e.key === "," || e.key === "PageUp") {
+      e.preventDefault();
+      gotoMiss(-1);
+    } else if (e.key === "." || e.key === "PageDown") {
+      e.preventDefault();
+      gotoMiss(1);
+    } else if (e.key.toLowerCase() === "l") {
+      setMissLoop(!missLoop);
       showChrome();
     } else if (e.key.toLowerCase() === "o") {
       toggleOptions();

@@ -33,6 +33,11 @@
       <button class="btn small" id="an-play" title="Play / pause (Space)">▶</button>
       <button class="btn small ghost" id="an-back" title="One frame back (←)">⏴</button>
       <button class="btn small ghost" id="an-fwd" title="One frame forward (→)">⏵</button>
+      <span class="an-missnav">
+        <button class="btn small ghost" id="an-miss-prev" title="Previous miss (,)">⇤ miss</button>
+        <button class="btn small ghost" id="an-miss-next" title="Next miss (.)">miss ⇥</button>
+        <button class="btn small ghost" id="an-miss-loop" title="Loop the current miss (L)" aria-pressed="false">loop</button>
+      </span>
       <span class="an-speedbox">
         <input type="range" id="an-speed" min="1" max="400" step="1" value="100" title="Playback speed">
         <input type="number" id="an-speed-num" min="0.01" max="4" step="0.01" value="1">

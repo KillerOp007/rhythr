@@ -313,3 +313,31 @@ body.an-native #an-options {
   position: relative;
   z-index: 30;
 }
+
+/* Miss walker in the transport: same weight as the frame steps, with the
+   loop button reading as engaged while it is on. */
+.an-missnav { display: inline-flex; gap: 4px; align-items: center; }
+.an-missnav .btn { font-size: 11px; letter-spacing: 0.02em; }
+.an-missnav .btn.on {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+.an-missnav .btn:disabled { opacity: 0.35; }
+
+/* Overlay legend: swatch + sentence, so the key reads like the picture. */
+.an-legend {
+  display: grid;
+  grid-template-columns: 18px 1fr;
+  gap: 7px 9px;
+  align-items: start;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-dim, #9aa7b4);
+}
+.an-swatch { display: block; width: 16px; height: 16px; margin-top: 1px; }
+.an-sw-line { height: 0; border-top: 2px solid var(--sw); margin-top: 8px; }
+.an-sw-box { border: 2px solid var(--sw); border-radius: 1px; }
+.an-sw-dot {
+  width: 10px; height: 10px; margin: 4px 0 0 3px;
+  border-radius: 50%; background: var(--sw);
+}
