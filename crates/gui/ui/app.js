@@ -1866,6 +1866,20 @@ function initControls() {
     schedulePreview();
   });
 
+  $("btn-diagnostics").addEventListener("click", async () => {
+    const p = await dialog.save({
+      defaultPath: "rhythr-diagnostics.txt",
+      filters: [{ name: "Text", extensions: ["txt"] }],
+    });
+    if (!p) return;
+    try {
+      const written = await invoke("write_diagnostics", { path: p });
+      loadNote(`Diagnostics written: ${written}`);
+    } catch (e) {
+      loadNote(String(e));
+    }
+  });
+
   $("btn-render").addEventListener("click", startRender);
   $("btn-cancel").addEventListener("click", () => invoke("cancel_render"));
   $("btn-open-out").addEventListener("click", () => {

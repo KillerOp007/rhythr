@@ -926,6 +926,106 @@ fn window_pos_visible(window: &tauri::WebviewWindow, x: i32, y: i32) -> bool {
     })
 }
 
+/// A plain-text description of this build and what it is working with, for
+/// attaching to a bug report. Nothing here leaves the machine on its own —
+/// the user picks where it is written and reads it first.
+///
+/// Deliberately excluded: the replay's player name and any absolute path
+/// outside what the user already sees in the window, so sharing it does not
+/// leak more than the screenshot they would have sent anyway.
+#[tauri::command]
+fn write_diagnostics(state: tauri::State<'_, App>, path: String) -> Result<String, String> {
+    use std::fmt::Write as _;
+    let app = state.inner();
+    let inner = app.lock();
+    let mut s = String::new();
+    let _ = writeln!(s, "rhythr {}", env!("CARGO_PKG_VERSION"));
+    let _ = writeln!(s, "os: {} {}", std::env::consts::OS, std::env::consts::ARCH);
+
+    let ffmpeg = resolve_ffmpeg(&inner.settings);
+    let _ = writeln!(s, "\nffmpeg");
+    let _ = writeln!(s, "  resolved: {ffmpeg}");
+    let _ = writeln!(
+        s,
+        "  runs: {}",
+        rhythia_render::video::ffmpeg_runs(&ffmpeg)
+    );
+    for e in ["nvenc", "qsv", "vaapi"] {
+        match rhythia_render::video::encoder_error(&ffmpeg, e) {
+            None => {
+                let _ = writeln!(s, "  {e}: available");
+            }
+            Some(why) => {
+                let _ = writeln!(s, "  {e}: unavailable — {why}");
+            }
+        }
+    }
+
+    let _ = writeln!(s, "\nloaded");
+    match (&inner.replay, &inner.map) {
+        (Some((_, r)), m) => {
+            let _ = writeln!(
+                s,
+                "  replay: v{} · speed {:.2} · mods {} · {} hits / {} misses · {:.2}%",
+                r.version, r.speed, r.mods, r.hits, r.misses, r.accuracy_pct
+            );
+            let _ = writeln!(
+                s,
+                "  frames: {} · failed: {} · trailing bytes: {}",
+                r.frames.len(),
+                r.failed(),
+                r.trailing_bytes
+            );
+            match m {
+                Some((_, map)) => {
+                    let _ = writeln!(
+                        s,
+                        "  map: {} notes · hash match: {}",
+                        map.notes.len(),
+                        !inner.map_hash_mismatch
+                    );
+                    let report = integrity::verify_replay(r, map);
+                    let _ = writeln!(s, "  integrity: consistent = {}", report.consistent());
+                    for c in report.failed_checks() {
+                        let _ = writeln!(
+                            s,
+                            "    {} — expected {}, got {}",
+                            c.name, c.expected, c.actual
+                        );
+                    }
+                }
+                None => {
+                    let _ = writeln!(s, "  map: none loaded");
+                }
+            }
+        }
+        _ => {
+            let _ = writeln!(s, "  nothing loaded");
+        }
+    }
+
+    let cfg = &inner.settings;
+    let _ = writeln!(s, "\noutput");
+    let _ = writeln!(
+        s,
+        "  {}x{} @ {} fps · crf {} · encoder {} · preset {}",
+        cfg.width, cfg.height, cfg.fps, cfg.crf, cfg.encoder, cfg.preset
+    );
+    let _ = writeln!(
+        s,
+        "  skin config: {}",
+        if cfg.last_config.is_some() { "loaded" } else { "defaults" }
+    );
+    let _ = writeln!(
+        s,
+        "  game assets: {}",
+        if cfg.game_assets.is_some() { "connected" } else { "none" }
+    );
+
+    std::fs::write(&path, s).map_err(err_str)?;
+    Ok(path)
+}
+
 fn verify_dto(replay: &Replay, map: &Map, hash_mismatch: bool) -> VerifyDto {
     let report = integrity::verify_replay(replay, map);
     let problems = report
@@ -4054,6 +4154,7 @@ fn main() {
             export_card,
             start_render,
             planned_output_path,
+            write_diagnostics,
             cancel_render,
             probe_encoders,
         ])
