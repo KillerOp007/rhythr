@@ -353,16 +353,26 @@ pub struct SkinConfig {
 }
 
 impl Default for SkinConfig {
-    /// The game's own defaults (used when a field is absent).
+    /// The game's own defaults, used when a field is absent and when no
+    /// config is loaded at all — so a bare render looks like a fresh
+    /// install of the game rather than like somebody's personal setup.
+    ///
+    /// Every value below is the initialiser of the matching setting in the
+    /// game's `Rhythia.gd` (line numbers in the comments). Until v0.6 these
+    /// were one player's exported config — `notes/testdata-extra/
+    /// player_skin_config.json`, whose NoteScale 0.9 / ApproachRate 24.5 /
+    /// SpawnDistance 12 / Parallax 5 they reproduced value for value — which
+    /// made the out-of-the-box render systematically unlike the game: notes
+    /// were visible for 0.49 s instead of 1.0 s.
     fn default() -> Self {
         SkinConfig {
-            camera_fov: 70.0,
-            approach_rate: 24.5,
-            spawn_distance: 12.0,
-            note_scale: 0.9,
-            note_opacity: 1.0,
-            fade_length: 0.5,
-            parallax: 0.0,
+            camera_fov: 70.0,     // :606
+            approach_rate: 40.0,  // :563
+            spawn_distance: 40.0, // :567
+            note_scale: 1.0,      // :574 note_size
+            note_opacity: 1.0,    // :580
+            fade_length: 0.5,     // :581
+            parallax: 6.5,        // :594
             half_ghost: false,
             note_shape: NoteShape::Square,
             note_skin_name: String::new(),
@@ -371,12 +381,15 @@ impl Default for SkinConfig {
             trail_skin_name: String::new(),
             colorset_name: String::new(),
             border_color: [1.0, 1.0, 1.0],
-            border_opacity: 1.0,
+            // song.tscn: the Outer border plane's material is white at
+            // alpha 0.588235 — the frame is deliberately not full white.
+            border_opacity: 0.588_235,
             cursor_color: [1.0, 1.0, 1.0],
-            cursor_scale: 1.0,
-            cursor_trail_enabled: true,
+            cursor_scale: 1.0, // :642
+            // :636 — the game ships the trail off.
+            cursor_trail_enabled: false,
             cursor_trail_opacity: 0.5,
-            cursor_trail_fade_secs: 0.1,
+            cursor_trail_fade_secs: 0.15, // TrailTime, "[def. 0.15]"
             cursor_trail_spacing: 0.4,
             cursor_trail_color: [1.0, 1.0, 1.0],
             cursor_trail_inherit: true,
@@ -677,7 +690,7 @@ impl SkinConfig {
             note_scale: num("NoteScale", d.note_scale),
             note_opacity: num("NoteOpacity", d.note_opacity),
             fade_length: num("FadeLength", d.fade_length).clamp(0.01, 1.0),
-            parallax: num("Parallax", 0.0),
+            parallax: num("Parallax", d.parallax),
             half_ghost: boolean("HalfGhost", d.half_ghost),
             note_shape: NoteShape::from_skin(&note_skin_name),
             note_skin_name,
@@ -845,8 +858,15 @@ mod tests {
     #[test]
     fn missing_fields_fall_back_to_game_defaults() {
         let c = SkinConfig::from_json("{}").unwrap();
+        // These must stay the game's shipped values, not any one player's
+        // exported config — see the SkinConfig::default() docs.
         assert_eq!(c.camera_fov, 70.0);
-        assert!(c.cursor_trail_enabled);
+        assert_eq!(c.approach_rate, 40.0);
+        assert_eq!(c.spawn_distance, 40.0);
+        assert_eq!(c.note_scale, 1.0);
+        assert_eq!(c.parallax, 6.5);
+        assert_eq!(c.fade_length, 0.5);
+        assert!(!c.cursor_trail_enabled);
     }
 
     #[test]

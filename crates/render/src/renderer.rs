@@ -1355,7 +1355,7 @@ impl Renderer {
                 corner,
                 outline,
                 if config.border_is_corners() { 1.0 } else { 0.0 },
-                0.30,
+                BORDER_OUTLINE,
             ],
             tex_flags: skin.tex_flags,
             tex_flags2: skin.tex_flags2,
@@ -2825,11 +2825,14 @@ fn colorset_color(name: &str, i: usize) -> [f32; 3] {
             [0.635, 0.878, 1.000], // #a2e0ff
         ]
     } else {
+        // Cotton Candy — the game's own default colorset, and the one a
+        // fresh install plays with: Rhythia.gd:2352 selects "ssp_cottoncandy",
+        // registered at :1727-1731 as exactly these two colours. What stood
+        // here until v0.6 was an invented four-hue palette that no install
+        // ever shows.
         &[
-            [0.30, 0.85, 1.00],
-            [0.45, 0.55, 1.00],
-            [0.75, 0.45, 1.00],
-            [0.35, 0.95, 0.85],
+            [0.000, 1.000, 0.929], // #00ffed
+            [1.000, 0.561, 0.976], // #ff8ff9
         ]
     };
     palette[i % palette.len()]
@@ -2890,6 +2893,14 @@ impl CursorAt for Replay {
 
 /// How long a resolved hit-area box lingers at the plane so the eye can
 /// catch the verdict during playback.
+/// Width of the default playfield frame, as a fraction of its half-extent.
+/// The game's border is `grid_outer.png` on the 3.04-unit Outer plane
+/// (song.tscn): a sharp-cornered square outline 6 px deep out of 1200, i.e.
+/// 0.0152 world units — 0.01 of the 1.52 half-extent. Until v0.6 this was a
+/// hardcoded 0.05 in the shader, five times too heavy, with rounded corners
+/// the game does not have.
+const BORDER_OUTLINE: f32 = 0.01;
+
 pub const HITBOX_LINGER_MS: f64 = 350.0;
 
 /// Approach depth for a note's hit-area quad, or None once the box should

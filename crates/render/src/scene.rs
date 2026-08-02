@@ -59,7 +59,8 @@ pub struct SceneParams {
     /// Fraction of the approach over which a note fades in (`FadeLength`,
     /// config 0.5 → full opacity once depth ≤ spawn_depth·(1−FadeLength)).
     pub fade_length: f32,
-    /// Camera sway strength: the world shifts by −cursor·parallax.
+    /// Camera sway strength: the camera moves toward the cursor by
+    /// cursor·parallax, the way the game does it.
     pub parallax: f32,
     /// VR-style camera (`SpinCamera`): the view rotates to keep the cursor
     /// screen-centred, so the world pans around a fixed centre dot.
@@ -83,21 +84,29 @@ pub struct SceneParams {
     pub far: f32,
 }
 
-/// Mesh half-extent (±1) mapped to this many world units at NoteScale 1.0;
-/// with NoteScale ~0.9 this leaves the game's ~10% gap between cells.
-const BASE_NOTE_SCALE: f32 = 0.5;
+/// Mesh half-extent (±1) mapped to this many world units at NoteScale 1.0.
+/// The game's own factor: `NoteManager.gd:345` scales the note mesh by
+/// `0.45 * note_size * (note_hitbox_size / 1.14)`, and the hitbox term is
+/// exactly 1 at its 1.140 default — so a note is 0.45 world units at
+/// NoteScale 1.0, leaving the visible gap between adjacent cells.
+const BASE_NOTE_SCALE: f32 = 0.45;
 
 impl Default for SceneParams {
     fn default() -> Self {
         SceneParams {
             fov_y_deg: 70.0,
-            // Fixed camera distance (a game constant); calibrated against the
-            // real replay footage so the corner-bracket playfield fills ~51%
-            // of the frame height at fov 75.
-            eye_z: 3.25,
-            note_radius: BASE_NOTE_SCALE * 0.9,
-            spawn_depth: 12.0,
-            approach_rate: 24.5,
+            // The gameplay camera's fixed distance from the hit plane.
+            // song.tscn parks the camera at z=3.5, but the default camera
+            // mode overwrites it every frame: NoteManager.gd `do_half_lock`
+            // — the else-branch at :672, i.e. everything that is not VR or
+            // free-cam — sets the origin to z=3.75. Notes resolve at z=0
+            // (Game/Spawn sits at (-1,1,0) and a note's z is -current_dist),
+            // so 3.75 is the eye-to-plane distance.
+            eye_z: 3.75,
+            note_radius: BASE_NOTE_SCALE,
+            // Rhythia.gd:563/567 — the game's own note travel settings.
+            spawn_depth: 40.0,
+            approach_rate: 40.0,
             fade_length: 0.5,
             parallax: 0.0,
             spin: false,
@@ -122,8 +131,12 @@ impl From<&crate::config::SkinConfig> for SceneParams {
             spawn_depth: c.spawn_distance,
             approach_rate: c.approach_rate,
             fade_length: c.fade_length,
-            // The config slider (0..~10) scales a small sway factor.
-            parallax: c.parallax * 0.003,
+            // The game's mapping, not a guess: NoteManager.gd:529 and :537
+            // give `hlpower = 0.1 * parallax` and `hlm = 0.25`, and :541
+            // moves the camera by `centeroff * hlpower * hlm`. `centeroff`
+            // is `cursorpos - (1,-1,0)`, i.e. the cursor in exactly the
+            // world units we use — so one config unit is 0.025.
+            parallax: c.parallax * 0.025,
             spin: c.spin_camera,
             note_opacity: c.note_opacity,
             half_ghost: c.half_ghost,
@@ -162,10 +175,13 @@ impl SceneParams {
             let target = Vec3::new(cursor.0, cursor.1, 0.0);
             Mat4::look_at_rh(eye, target, Vec3::Y)
         } else {
-            // Camera sits in front of the hit plane looking toward −z, swayed
-            // opposite to the cursor so the field parallaxes as the player
-            // aims.
-            let sway = Vec3::new(-cursor.0 * self.parallax, -cursor.1 * self.parallax, 0.0);
+            // Camera sits in front of the hit plane looking toward −z and
+            // slides TOWARD the cursor as the player aims — the game
+            // translates the camera without re-aiming it
+            // (NoteManager.gd:539-541 sets only `cam.transform.origin`),
+            // which is what an unrotated look-at from the swayed position
+            // reproduces.
+            let sway = Vec3::new(cursor.0 * self.parallax, cursor.1 * self.parallax, 0.0);
             let eye = Vec3::new(0.0, 0.0, self.eye_z) + sway;
             let target = Vec3::new(sway.x, sway.y, 0.0);
             Mat4::look_at_rh(eye, target, Vec3::Y)
@@ -352,23 +368,26 @@ mod tests {
         assert_eq!(p.note_depth(1000.0, 1000.0), Some(0.0));
         // Depth = (ahead_ms/1000)·approach_rate.
         let d = p.note_depth(1000.0, 800.0).unwrap();
-        assert!((d - 0.2 * 24.5).abs() < 1e-3);
-        // Just spawned at the visible-window edge (~490 ms ahead).
+        assert!((d - 0.2 * 40.0).abs() < 1e-3);
+        // The game's defaults show a note for a full second: spawn 40 units
+        // travelled at 40 units/s.
+        assert!((p.approach_ms() - 1000.0).abs() < 1e-3);
+        // Just spawned at the visible-window edge.
         assert!(p
             .note_depth(1000.0, 1000.0 - p.approach_ms() as f64 + 1.0)
             .is_some());
         // Past its hit time, or not yet spawned.
         assert_eq!(p.note_depth(1000.0, 1001.0), None);
-        assert_eq!(p.note_depth(1000.0, 400.0), None);
+        assert_eq!(p.note_depth(1000.0, -100.0), None);
     }
 
     #[test]
     fn fade_is_full_after_first_half_then_ramps_to_zero() {
-        let p = SceneParams::default(); // spawn 12, fade_length 0.5
+        let p = SceneParams::default(); // spawn 40, fade_length 0.5
         assert_eq!(p.note_opacity(0.0), 1.0);
-        assert_eq!(p.note_opacity(6.0), 1.0); // full by depth 6
-        assert!(p.note_opacity(9.0) < 1.0 && p.note_opacity(9.0) > 0.0);
-        assert_eq!(p.note_opacity(12.0), 0.0); // gone at spawn distance
+        assert_eq!(p.note_opacity(20.0), 1.0); // full by half the approach
+        assert!(p.note_opacity(30.0) < 1.0 && p.note_opacity(30.0) > 0.0);
+        assert_eq!(p.note_opacity(40.0), 0.0); // gone at spawn distance
     }
 
     #[test]

@@ -120,11 +120,12 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             let mask = clamp(max(arm_v, arm_h), 0.0, 1.0);
             return vec4<f32>(in.color.rgb, in.color.a * mask);
         }
-        // Full rounded-rect frame.
-        let d = rrect_sd(in.local, globals.params.w);
+        // Default frame — the game's grid_outer.png is a SHARP square
+        // outline, so no corner rounding. params.w carries its width as a
+        // fraction of the half-extent (see BORDER_OUTLINE in renderer.rs).
+        let d = rrect_sd(in.local, 0.0);
         let aa = fwidth(d) + 1e-4;
-        let outline = 0.05;
-        let ring = (1.0 - smoothstep(0.0, aa, d)) * smoothstep(0.0, aa, d + outline);
+        let ring = (1.0 - smoothstep(0.0, aa, d)) * smoothstep(0.0, aa, d + globals.params.w);
         return vec4<f32>(in.color.rgb, in.color.a * ring);
     }
     if in.kind > 0.5 {
