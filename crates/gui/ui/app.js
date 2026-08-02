@@ -1360,6 +1360,30 @@ function updateRenderButton() {
       : status?.replay
         ? "Map missing — download or browse one"
         : "Load a replay to render";
+    // Which file this will produce was invisible until the render finished.
+    // Resolved by the backend so it matches exactly what gets written.
+    if (ready) showTargetFile();
+    else setTargetFile("");
+  }
+}
+
+/// Shows the file a render would write, next to the ready text.
+function setTargetFile(path) {
+  const el = $("render-target");
+  if (!el) return;
+  el.textContent = path ? path.split(/[\\/]/).pop() : "";
+  el.title = path || "";
+  el.hidden = !path;
+}
+
+let targetSeq = 0;
+async function showTargetFile() {
+  const mine = ++targetSeq;
+  try {
+    const planned = await invoke("planned_output_path");
+    if (mine === targetSeq) setTargetFile(planned.path);
+  } catch {
+    if (mine === targetSeq) setTargetFile("");
   }
 }
 

@@ -146,6 +146,11 @@ code { font-family: ui-monospace, Consolas, monospace; color: var(--accent); fon
 }
 #render-status { flex: 1; min-width: 0; }
 #render-text { font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* The file a render will write, so it is knowable before it runs. */
+#render-target {
+  font-size: 12px; opacity: 0.75; margin-top: 2px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 #render-progress-track {
   height: 6px; border-radius: 3px; background: var(--panel-2);
   overflow: hidden; margin-bottom: 5px;
