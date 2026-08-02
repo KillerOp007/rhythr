@@ -11,7 +11,7 @@
 
 use rhythia_formats::map::Map;
 use rhythia_formats::rhr::Replay;
-use rhythia_sim::hitreg::DEFAULT_WINDOW_MS;
+use rhythia_sim::hitreg::hit_window_ms;
 
 use crate::hud::HudState;
 
@@ -76,11 +76,13 @@ pub fn synced_race(main: &RaceSide, ghost: &RaceSide, t_ms: f64) -> SyncedRace {
         settled: 0,
     };
     let mut combo = [0i64; 2];
+    // Hardrock narrows the hit window, and only one side may be running it.
+    let windows = [hit_window_ms(sides[0].replay), hit_window_ms(sides[1].replay)];
     for i in 0..n {
         // When is this note's outcome known on each side?
         let mut known = 0.0f64;
         for s in 0..2 {
-            let reg = sides[s].map.notes[i].time_ms as f64 + DEFAULT_WINDOW_MS;
+            let reg = sides[s].map.notes[i].time_ms as f64 + windows[s];
             let k = if reg >= ends[s] {
                 // Frozen side: the game never resolved this note — the
                 // answer ("nothing") is known from the freeze on.
@@ -99,7 +101,7 @@ pub fn synced_race(main: &RaceSide, ghost: &RaceSide, t_ms: f64) -> SyncedRace {
         }
         out.settled += 1;
         for s in 0..2 {
-            let reg = sides[s].map.notes[i].time_ms as f64 + DEFAULT_WINDOW_MS;
+            let reg = sides[s].map.notes[i].time_ms as f64 + windows[s];
             if reg >= ends[s] {
                 continue;
             }
@@ -142,7 +144,7 @@ pub fn graph_zero_share(pos_max: i64, neg_max: i64) -> f32 {
 /// screen: a failed run is read at fail time + hit window.
 pub fn side_end(replay: &Replay) -> f64 {
     if replay.failed() {
-        replay.fail_time_ms as f64 + DEFAULT_WINDOW_MS + 1.0
+        replay.fail_time_ms as f64 + hit_window_ms(replay) + 1.0
     } else {
         f64::INFINITY
     }

@@ -768,6 +768,7 @@ impl Renderer {
             ])
         };
         let results = hud.map(|st| st.results());
+        let window_ms = rhythia_sim::hitreg::hit_window_ms(replay);
         let mut out = Vec::new();
         for (i, n) in map.notes.iter().enumerate() {
             let note_t = n.time_ms as f64;
@@ -777,6 +778,7 @@ impl Renderer {
                 song_time_ms,
                 results.map(|h| h[i]),
                 linger_ms,
+                window_ms,
             ) {
                 Some(d) => d,
                 None => continue,
@@ -1904,7 +1906,7 @@ impl Renderer {
         // margin lets the killing miss itself (note at ~fail time) register.
         let final_stats = |r: &Replay, state: &crate::hud::HudState| {
             let stats_end = if r.failed() {
-                r.fail_time_ms as f64 + rhythia_sim::hitreg::DEFAULT_WINDOW_MS + 1.0
+                r.fail_time_ms as f64 + rhythia_sim::hitreg::hit_window_ms(r) + 1.0
             } else {
                 f64::MAX
             };
@@ -2146,7 +2148,7 @@ impl Renderer {
     ) -> Result<Vec<u8>, Error> {
         let h = self.height as f32;
         let stats_end = if replay.failed() {
-            replay.fail_time_ms as f64 + rhythia_sim::hitreg::DEFAULT_WINDOW_MS + 1.0
+            replay.fail_time_ms as f64 + rhythia_sim::hitreg::hit_window_ms(replay) + 1.0
         } else {
             f64::MAX
         };
@@ -2904,6 +2906,8 @@ pub fn hitbox_depth(
     song_time_ms: f64,
     result: Option<rhythia_sim::hitreg::NoteResult>,
     linger_ms: f64,
+    // The run's hit window — when an unhit note's box stops being live.
+    window_ms: f64,
 ) -> Option<f32> {
     if let Some(d) = params.note_depth(note_t, song_time_ms) {
         return Some(d);
@@ -2914,7 +2918,7 @@ pub fn hitbox_depth(
     }
     let resolution = match result {
         Some(r) if r.hit => r.hit_ms.unwrap_or(note_t).max(note_t),
-        Some(_) => note_t + rhythia_sim::hitreg::DEFAULT_WINDOW_MS,
+        Some(_) => note_t + window_ms,
         None => return None,
     };
     (song_time_ms <= resolution + linger_ms).then_some(0.0)
@@ -2927,6 +2931,8 @@ mod hitbox_tests {
     use rhythia_sim::hitreg::NoteResult;
 
     const L: f64 = HITBOX_LINGER_MS;
+    /// A 1.45x run's hit window — what these lifetimes were calibrated on.
+    const W: f64 = 80.0;
 
     fn res(hit: bool, hit_ms: Option<f64>) -> Option<NoteResult> {
         Some(NoteResult {
@@ -2939,40 +2945,40 @@ mod hitbox_tests {
     #[test]
     fn hit_note_box_freezes_and_lingers_past_the_recorded_hit() {
         let p = SceneParams::default();
-        assert!(hitbox_depth(&p, 1000.0, 990.0, res(true, Some(1060.0)), L).unwrap() > 0.0);
-        assert_eq!(hitbox_depth(&p, 1000.0, 1055.0, res(true, Some(1060.0)), L), Some(0.0));
-        assert_eq!(hitbox_depth(&p, 1000.0, 1061.0, res(true, Some(1060.0)), L), Some(0.0));
-        assert!(hitbox_depth(&p, 1000.0, 1060.0 + L + 1.0, res(true, Some(1060.0)), L).is_none());
+        assert!(hitbox_depth(&p, 1000.0, 990.0, res(true, Some(1060.0)), L, W).unwrap() > 0.0);
+        assert_eq!(hitbox_depth(&p, 1000.0, 1055.0, res(true, Some(1060.0)), L, W), Some(0.0));
+        assert_eq!(hitbox_depth(&p, 1000.0, 1061.0, res(true, Some(1060.0)), L, W), Some(0.0));
+        assert!(hitbox_depth(&p, 1000.0, 1060.0 + L + 1.0, res(true, Some(1060.0)), L, W).is_none());
     }
 
     #[test]
     fn missed_note_box_survives_window_plus_linger() {
         let p = SceneParams::default();
-        assert_eq!(hitbox_depth(&p, 1000.0, 1079.0, res(false, None), L), Some(0.0));
-        assert_eq!(hitbox_depth(&p, 1000.0, 1081.0, res(false, None), L), Some(0.0));
-        assert!(hitbox_depth(&p, 1000.0, 1080.0 + L + 1.0, res(false, None), L).is_none());
+        assert_eq!(hitbox_depth(&p, 1000.0, 1079.0, res(false, None), L, W), Some(0.0));
+        assert_eq!(hitbox_depth(&p, 1000.0, 1081.0, res(false, None), L, W), Some(0.0));
+        assert!(hitbox_depth(&p, 1000.0, 1080.0 + L + 1.0, res(false, None), L, W).is_none());
     }
 
     #[test]
     fn zero_linger_removes_the_box_at_resolution() {
         let p = SceneParams::default();
-        assert_eq!(hitbox_depth(&p, 1000.0, 1059.0, res(true, Some(1060.0)), 0.0), Some(0.0));
-        assert!(hitbox_depth(&p, 1000.0, 1061.0, res(true, Some(1060.0)), 0.0).is_none());
+        assert_eq!(hitbox_depth(&p, 1000.0, 1059.0, res(true, Some(1060.0)), 0.0, W), Some(0.0));
+        assert!(hitbox_depth(&p, 1000.0, 1061.0, res(true, Some(1060.0)), 0.0, W).is_none());
     }
 
     #[test]
     fn lifetimes_survive_high_effective_approach_rates() {
         let mut p = SceneParams::default();
         p.apply_speed(0.25);
-        assert_eq!(hitbox_depth(&p, 1000.0, 1052.0, res(true, Some(1070.0)), L), Some(0.0));
-        assert_eq!(hitbox_depth(&p, 1000.0, 1079.0, res(false, None), L), Some(0.0));
+        assert_eq!(hitbox_depth(&p, 1000.0, 1052.0, res(true, Some(1070.0)), L, W), Some(0.0));
+        assert_eq!(hitbox_depth(&p, 1000.0, 1079.0, res(false, None), L, W), Some(0.0));
     }
 
     #[test]
     fn unresolved_notes_end_at_the_plane() {
         let p = SceneParams::default();
-        assert!(hitbox_depth(&p, 1000.0, 999.0, None, L).is_some());
-        assert!(hitbox_depth(&p, 1000.0, 1001.0, None, L).is_none());
+        assert!(hitbox_depth(&p, 1000.0, 999.0, None, L, W).is_some());
+        assert!(hitbox_depth(&p, 1000.0, 1001.0, None, L, W).is_none());
     }
 }
 

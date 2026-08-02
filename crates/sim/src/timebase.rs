@@ -12,7 +12,7 @@
 use rhythia_formats::map::Map;
 use rhythia_formats::rhr::Replay;
 
-use crate::hitreg::{match_hits, DEFAULT_WINDOW_MS};
+use crate::hitreg::{hit_window_ms, match_hits};
 
 /// The factor frame times must be multiplied by to become song time:
 /// 1.0 when they already are (or the replay has no speed mod), or the
@@ -22,12 +22,15 @@ pub fn time_scale(map: &Map, replay: &Replay) -> f64 {
     if (speed - 1.0).abs() < 0.005 || replay.frames.is_empty() || map.notes.is_empty() {
         return 1.0;
     }
-    let as_is = match_hits(&map.notes, &replay.frames, DEFAULT_WINDOW_MS).derived_hits();
+    // Both candidates are compared in song time, so both use the run's own
+    // window.
+    let window = hit_window_ms(replay);
+    let as_is = match_hits(&map.notes, &replay.frames, window).derived_hits();
     let mut scaled = replay.clone();
     for f in &mut scaled.frames {
         f.ms *= speed;
     }
-    let rescaled = match_hits(&map.notes, &scaled.frames, DEFAULT_WINDOW_MS).derived_hits();
+    let rescaled = match_hits(&map.notes, &scaled.frames, window).derived_hits();
     // Only switch on a clear win backed by real evidence. The ratio guards
     // against coincidental matches on a dense map; the absolute floor
     // guards against a WRONG map (hash-mismatch download, user-picked

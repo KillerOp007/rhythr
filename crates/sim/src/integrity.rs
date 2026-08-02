@@ -196,8 +196,9 @@ pub fn verify(replay: &Replay, map: &Map, outcome: &MatchOutcome) -> IntegrityRe
     }
 }
 
-/// Convenience: hitreg + verify in one call with the default window.
+/// Convenience: hitreg + verify in one call with the run's own hit window.
 pub fn verify_replay(replay: &Replay, map: &Map) -> IntegrityReport {
-    let outcome = hitreg::match_hits(&map.notes, &replay.frames, hitreg::DEFAULT_WINDOW_MS);
+    let window = hitreg::hit_window_ms(replay);
+    let outcome = hitreg::match_hits(&map.notes, &replay.frames, window);
     verify(replay, map, &outcome)
 }

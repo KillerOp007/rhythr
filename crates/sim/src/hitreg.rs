@@ -5,9 +5,9 @@
 //! are hit in chronological order, so flagged frames form an
 //! order-preserving subsequence of the notes: the correct alignment is a
 //! monotonic two-pointer walk. Validated against all four reference replays,
-//! this reproduces the header hit/miss counts exactly; observed
-//! |flag − note| deltas reach exactly 80 ms (the game's ~55 ms hit window
-//! plus ~17 ms frame quantization), which pins the default window.
+//! this reproduces the header hit/miss counts exactly. The tolerance is the
+//! game's own hit window, which scales with the run's speed — see
+//! [`hit_window_ms`].
 //!
 //! Unlike the naive walk in rhr2mp4, a flag that can no longer match any
 //! future note (its time is more than the window before the next
@@ -20,16 +20,45 @@
 //! of the flagged frame vs. the note's grid position. Totals are unaffected.
 
 use rhythia_formats::map::Note;
-use rhythia_formats::rhr::Frame;
+use rhythia_formats::rhr::{Frame, Replay};
 
-/// Tolerance between a flagged frame and its note. Empirical maximum on
-/// real replays is exactly 80 ms; see module docs.
-pub const DEFAULT_WINDOW_MS: f64 = 80.0;
+/// The game's base hit window: `Rhythia.gd` `hitwindow_ms`, default 55 ms.
+pub const BASE_HIT_WINDOW_MS: f64 = 55.0;
 
-/// Half-width of the game's hit area (NoteManager.gd `note_hitbox_size`
-/// 1.1375): the fixed square around a note's centre the cursor must
-/// cover, in world units. Attribution and the analyzer's hit-area boxes
-/// share this one constant.
+/// The hit window the given run was played with, in song-time milliseconds.
+///
+/// The window is one-sided — a note is missed the moment
+/// `ms > note_t + hit_window` (`NoteManager.gd:262`), and a flag never
+/// precedes its note. It is **not** a constant: the game scales it with the
+/// speed multiplier (`speed_hitwindow`, on by default), so it belongs to the
+/// replay.
+///
+/// Measured across 37 leaderboard replays covering every mod combination:
+/// with this window every recorded flag finds a note (zero orphans) and the
+/// latest attributed hit lands just under it at each speed — 55.0 at 1.00×,
+/// 63.0 at 1.15×, 68.0 at 1.25×, 74.0 at 1.35×, 79.0 at 1.45× — and never
+/// above. A flat 80 ms, which this replaced, was the 1.45× case generalised
+/// to every run; it stretched attribution ~25 ms past the game's own miss
+/// point on 1.00× replays.
+///
+/// Deliberately NOT modelled: `NoteManager.gd:398-399` narrows the window to
+/// 0.8× under hardrock. The one hardrock replay we hold (testdata
+/// `hardrock_score192.rhr`, 1.45×) contradicts it — its latest honest flag
+/// sits at 78 ms, which needs the full 79.75, while 0.8× (63.8) orphans 5
+/// flags and breaks the header totals. Either the factor postdates that
+/// recording or the online mod differs from the local one; until a hardrock
+/// replay actually demands it, applying it would corrupt real runs.
+pub fn hit_window_ms(replay: &Replay) -> f64 {
+    let speed = f64::from(replay.speed).max(0.01);
+    BASE_HIT_WINDOW_MS * speed
+}
+
+/// Half-width of the game's hit area, in world units: the fixed square
+/// around a note's centre the cursor must cover. `note_hitbox_size` is
+/// 1.140 by default, but the game special-cases exactly that value —
+/// `NoteManager.gd:193-194` reads `hbs = note_hitbox_size/2` and then
+/// `if hbs == 0.57: hbs = 0.56875`. Attribution and the analyzer's
+/// hit-area boxes share this one constant.
 pub const HITBOX_HALF: f32 = 0.56875;
 
 /// The game's cursor barrier: the cursor the game TESTS hits with is
@@ -270,6 +299,53 @@ fn match_hits_inner(
 mod tests {
     use super::*;
 
+    fn replay_with(mods: &str, speed: f32) -> Replay {
+        Replay {
+            version: 5,
+            timestamp_ticks: 0,
+            player_name: "t".into(),
+            legacy_map_id: String::new(),
+            map_id: 0,
+            start_from_ms: 0,
+            mode: String::new(),
+            passed: true,
+            mods: mods.to_string(),
+            spin: false,
+            speed,
+            total_score: 0,
+            accuracy_pct: 100.0,
+            hits: 0,
+            misses: 0,
+            points: 0.0,
+            fail_time_ms: -1,
+            beatmap_hash: String::new(),
+            frames: Vec::new(),
+            trailing_bytes: 0,
+        }
+    }
+
+    #[test]
+    fn hit_window_follows_speed_and_hardrock() {
+        let w = |mods: &str, speed: f32| hit_window_ms(&replay_with(mods, speed));
+        // The game's own numbers: 55 ms, scaled by the speed multiplier.
+        assert!((w("[]", 1.0) - 55.0).abs() < 1e-9);
+        assert!((w("[]", 1.45) - 79.75).abs() < 1e-4); // 1.45f32 is not exact
+        assert!((w("[]", 2.0) - 110.0).abs() < 1e-9);
+        // Mods do not touch it — including hardrock, whose 0.8 factor the
+        // one real hardrock replay contradicts (see hit_window_ms docs).
+        assert!((w("[\"mod_hardrock\"]", 1.0) - 55.0).abs() < 1e-9);
+        assert!((w("[\"mod_hardrock\"]", 1.45) - 79.75).abs() < 1e-4);
+        assert!((w("[\"mod_mirror\",\"mod_nofail\"]", 1.0) - 55.0).abs() < 1e-9);
+        // A malformed mods field must not widen or zero the window.
+        assert!((w("not json", 1.0) - 55.0).abs() < 1e-9);
+        assert!(w("[]", 0.0) > 0.0);
+    }
+
+    /// These cases exercise attribution mechanics, not the window value:
+    /// 80 ms is the window of a 1.45x run, which is what they were built
+    /// and validated against.
+    const TEST_WINDOW_MS: f64 = 80.0;
+
     fn note(time_ms: i64) -> Note {
         Note {
             time_ms,
@@ -292,7 +368,7 @@ mod tests {
     fn simple_hits_and_miss() {
         let notes = [note(1000), note(2000), note(3000)];
         let frames = [flag(1010.0), flag(3020.0)];
-        let out = match_hits(&notes, &frames, DEFAULT_WINDOW_MS);
+        let out = match_hits(&notes, &frames, TEST_WINDOW_MS);
         assert!(out.results[0].hit);
         assert!(!out.results[1].hit);
         assert!(out.results[2].hit);
@@ -306,7 +382,7 @@ mod tests {
         // pairs them one-to-one.
         let notes = [note(1000), note(1050)];
         let frames = [flag(1010.0), flag(1055.0)];
-        let out = match_hits(&notes, &frames, DEFAULT_WINDOW_MS);
+        let out = match_hits(&notes, &frames, TEST_WINDOW_MS);
         assert!(out.results[0].hit && out.results[1].hit);
         assert_eq!(out.results[0].hit_ms, Some(1010.0));
         assert_eq!(out.results[1].hit_ms, Some(1055.0));
@@ -320,7 +396,7 @@ mod tests {
         // spatial disambiguation is a documented later refinement.)
         let notes = [note(1000), note(1050)];
         let frames = [flag(1040.0)];
-        let out = match_hits(&notes, &frames, DEFAULT_WINDOW_MS);
+        let out = match_hits(&notes, &frames, TEST_WINDOW_MS);
         assert!(out.results[0].hit);
         assert!(!out.results[1].hit);
         assert_eq!(out.derived_hits(), 1);
@@ -332,7 +408,7 @@ mod tests {
         // (the rhr2mp4 stuck-pointer bug).
         let notes = [note(5000), note(6000)];
         let frames = [flag(1000.0), flag(5005.0), flag(6010.0)];
-        let out = match_hits(&notes, &frames, DEFAULT_WINDOW_MS);
+        let out = match_hits(&notes, &frames, TEST_WINDOW_MS);
         assert_eq!(out.orphan_flags, 1);
         assert!(out.results[0].hit);
         assert!(out.results[1].hit);
@@ -342,7 +418,7 @@ mod tests {
     fn double_flag_for_one_note_leaves_an_orphan() {
         let notes = [note(1000)];
         let frames = [flag(995.0), flag(1005.0)];
-        let out = match_hits(&notes, &frames, DEFAULT_WINDOW_MS);
+        let out = match_hits(&notes, &frames, TEST_WINDOW_MS);
         assert_eq!(out.derived_hits(), 1);
         assert_eq!(out.orphan_flags, 1);
     }
@@ -351,7 +427,7 @@ mod tests {
     fn trailing_orphan_after_last_note() {
         let notes = [note(1000)];
         let frames = [flag(1005.0), flag(9999.0)];
-        let out = match_hits(&notes, &frames, DEFAULT_WINDOW_MS);
+        let out = match_hits(&notes, &frames, TEST_WINDOW_MS);
         assert_eq!(out.derived_hits(), 1);
         assert_eq!(out.orphan_flags, 1);
     }
@@ -366,7 +442,7 @@ mod tests {
             Note { time_ms: 1005, x: 1.0, y: 2.0 }, // world (0, -1)
         ];
         let frames = [Frame { ms: 1004.0, x: 0.0, y: -1.0, health: 1.0, hit: true }];
-        let out = match_hits(&notes, &frames, DEFAULT_WINDOW_MS);
+        let out = match_hits(&notes, &frames, TEST_WINDOW_MS);
         assert!(!out.results[0].hit, "cursor never covered note 0");
         assert!(out.results[1].hit, "cursor sat on note 1");
         assert_eq!(out.results[1].hit_ms, Some(1004.0));
@@ -383,7 +459,7 @@ mod tests {
         ];
         // Cursor midway: covers both areas.
         let frames = [Frame { ms: 1004.0, x: -0.5, y: -1.0, health: 1.0, hit: true }];
-        let out = match_hits(&notes, &frames, DEFAULT_WINDOW_MS);
+        let out = match_hits(&notes, &frames, TEST_WINDOW_MS);
         assert!(out.results[0].hit);
         assert!(!out.results[1].hit);
     }
@@ -399,7 +475,7 @@ mod tests {
         // Flag at 1000 for note 0, but the cursor already left toward
         // note 1's cell (fast jump + frame quantization).
         let frames = [Frame { ms: 1000.0, x: 1.0, y: 1.0, health: 1.0, hit: true }];
-        let out = match_hits(&notes, &frames, DEFAULT_WINDOW_MS);
+        let out = match_hits(&notes, &frames, TEST_WINDOW_MS);
         assert!(out.results[0].hit, "note 0 keeps its flag");
         assert!(!out.results[1].hit, "a note 75 ms in the future must not steal it");
     }
@@ -420,7 +496,7 @@ mod tests {
             Frame { ms: 1005.0, x: 1.0, y: 0.0, health: 1.0, hit: true },  // on note 2
             Frame { ms: 1010.0, x: -1.0, y: 0.0, health: 1.0, hit: true }, // on note 0
         ];
-        let out = match_hits(&notes, &frames, DEFAULT_WINDOW_MS);
+        let out = match_hits(&notes, &frames, TEST_WINDOW_MS);
         let ms: Vec<f64> = out.results.iter().map(|r| r.hit_ms.unwrap()).collect();
         assert_eq!(ms, vec![1010.0, 1000.0, 1005.0]);
         // No two notes may share a flag.
@@ -442,7 +518,7 @@ mod tests {
             Frame { ms: 1008.0, x: 1.0, y: 1.0, health: 1.0, hit: true }, // on note 1
             Frame { ms: 1022.0, x: 0.0, y: 0.0, health: 1.0, hit: true }, // on note 2
         ];
-        let out = match_hits(&notes, &frames, DEFAULT_WINDOW_MS);
+        let out = match_hits(&notes, &frames, TEST_WINDOW_MS);
         assert_eq!(out.derived_hits(), 2);
         assert_eq!(out.orphan_flags, 0);
     }

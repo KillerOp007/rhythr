@@ -14,7 +14,7 @@ use fontdue::{Font, FontSettings};
 use crate::config::srgb8_to_linear;
 use rhythia_formats::map::Map;
 use rhythia_formats::rhr::Replay;
-use rhythia_sim::hitreg::{match_hits, MatchOutcome, DEFAULT_WINDOW_MS};
+use rhythia_sim::hitreg::{hit_window_ms, match_hits, MatchOutcome};
 
 const FONT_BYTES: &[u8] = include_bytes!("../assets/hud-font.ttf");
 /// Glyphs are rasterised once at this pixel height; text quads scale from it.
@@ -359,6 +359,9 @@ pub struct HudState {
     outcome: MatchOutcome,
     /// Per-hit detail for the optional error meters, sorted by hit time.
     hit_details: Vec<HitDetail>,
+    /// The hit window this run was played with; a miss resolves this long
+    /// after its note, and the meters scale to it.
+    window_ms: f64,
 }
 
 /// One registered hit: when, how early/late, and where the cursor sat
@@ -374,7 +377,8 @@ pub struct HitDetail {
 
 impl HudState {
     pub fn new(map: &Map, replay: &Replay) -> HudState {
-        let outcome = match_hits(&map.notes, &replay.frames, DEFAULT_WINDOW_MS);
+        let window_ms = hit_window_ms(replay);
+        let outcome = match_hits(&map.notes, &replay.frames, window_ms);
         // Cursor position at each hit: frames are time-sorted, so a single
         // merged walk resolves every hit's surrounding frame pair.
         let mut hit_details: Vec<HitDetail> = Vec::new();
@@ -412,6 +416,7 @@ impl HudState {
         HudState {
             outcome,
             hit_details,
+            window_ms,
         }
     }
 
@@ -451,11 +456,11 @@ impl HudState {
                     last_hit_ms = last_hit_ms.max(ht);
                     ring.on_hit(ht);
                 }
-            } else if note_t + DEFAULT_WINDOW_MS < song_time_ms {
+            } else if note_t + self.window_ms < song_time_ms {
                 misses += 1;
                 resolved += 1;
                 combo = 0;
-                last_miss_ms = note_t + DEFAULT_WINDOW_MS;
+                last_miss_ms = note_t + self.window_ms;
                 ring_fill_at_miss = ring.on_miss(last_miss_ms);
             }
         }
@@ -503,8 +508,7 @@ impl HudState {
                 // The game decides a miss when the hit window CLOSES —
                 // an X at the chart time pops up while the cursor could
                 // still legally take the note.
-                let miss_t =
-                    note.time_ms as f64 + rhythia_sim::hitreg::DEFAULT_WINDOW_MS;
+                let miss_t = note.time_ms as f64 + self.window_ms;
                 let age = song_time_ms - miss_t;
                 (0.0..MISS_X_MS)
                     .contains(&age)
@@ -1923,7 +1927,7 @@ fn meter_color(frac: f32, alpha: f32) -> [f32; 4] {
 }
 
 /// The optional danser-style meters: a timing bar (early ← → late over the
-/// ±80 ms hit window) and an aim scatter (cursor offset from the note
+/// run's own hit window, which scales with its speed mod) and an aim scatter (cursor offset from the note
 /// centre, a note spanning ±0.5 grid cells). Both fade each hit over
 /// [`METER_FADE_MS`] and follow user-set position/scale/alpha.
 fn draw_error_meters(
@@ -1991,7 +1995,7 @@ fn draw_error_meters(
         for d in recent() {
             let age = t - d.hit_ms;
             let env = meter_envelope(age);
-            let frac = (d.err_ms / rhythia_sim::hitreg::DEFAULT_WINDOW_MS) as f32;
+            let frac = (d.err_ms / state.window_ms) as f32;
             let x = x0 + frac.clamp(0.0, 1.0) * bar_w;
             let col = meter_color(frac, env * em.alpha);
             // Short and chunky: easier to read than the taller hairlines.
@@ -2004,7 +2008,7 @@ fn draw_error_meters(
             let vals: Vec<f64> = hits.iter().rev().skip(skip).take(20).map(|d| d.err_ms).collect();
             (!vals.is_empty()).then(|| {
                 (vals.iter().sum::<f64>() / vals.len() as f64
-                    / rhythia_sim::hitreg::DEFAULT_WINDOW_MS) as f32
+                    / state.window_ms) as f32
             })
         };
         if let Some(now_avg) = window_avg(0) {

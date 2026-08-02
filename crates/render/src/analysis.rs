@@ -12,7 +12,7 @@
 
 use rhythia_formats::map::Map;
 use rhythia_formats::rhr::Replay;
-use rhythia_sim::hitreg::{match_hits, DEFAULT_WINDOW_MS};
+use rhythia_sim::hitreg::{hit_window_ms, match_hits};
 use rhythia_sim::integrity;
 use serde::Serialize;
 
@@ -357,12 +357,13 @@ pub fn analyze(map: &Map, replay: &Replay) -> Analysis {
     } else {
         f64::NEG_INFINITY
     };
+    let window = hit_window_ms(replay);
     let attempt_hi = if replay.fail_time_ms >= 0 {
-        f64::from(replay.fail_time_ms) + DEFAULT_WINDOW_MS
+        f64::from(replay.fail_time_ms) + window
     } else {
         f64::INFINITY
     };
-    let outcome = match_hits(&map.notes, f, DEFAULT_WINDOW_MS);
+    let outcome = match_hits(&map.notes, f, window);
     let mut notes: Vec<NoteAnalysis> = Vec::with_capacity(map.notes.len());
     for (i, note) in map.notes.iter().enumerate() {
         if (note.time_ms as f64) < attempt_lo || (note.time_ms as f64) > attempt_hi {
@@ -634,8 +635,8 @@ pub fn analyze(map: &Map, replay: &Replay) -> Analysis {
     let mut sorted_e = errs.clone();
     sorted_e.sort_by(|a, b| a.total_cmp(b));
     let hist_bin = 5.0;
-    let hist_start = -(DEFAULT_WINDOW_MS + 2.5);
-    let bins = ((DEFAULT_WINDOW_MS * 2.0 + 5.0) / hist_bin).ceil() as usize;
+    let hist_start = -(window + 2.5);
+    let bins = ((window * 2.0 + 5.0) / hist_bin).ceil() as usize;
     let mut hist = vec![0u32; bins];
     for e in &errs {
         let b = (((e - hist_start) / hist_bin) as isize).clamp(0, bins as isize - 1) as usize;

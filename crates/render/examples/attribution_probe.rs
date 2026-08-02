@@ -12,7 +12,7 @@ fn main() {
     let map = rhythia_formats::map::Map::from_path(&a[1]).unwrap();
     let (map, _mods) = rhythia_render::mods::map_for_replay(&map, &replay);
 
-    let window = rhythia_sim::hitreg::DEFAULT_WINDOW_MS;
+    let window = rhythia_sim::hitreg::hit_window_ms(&replay);
     let out = rhythia_sim::hitreg::match_hits(&map.notes, &replay.frames, window);
 
     // Flag frames with their cursor positions.

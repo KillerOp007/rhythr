@@ -6,6 +6,4 @@ license.workspace = true
 
 [dependencies]
 rhythia-formats.workspace = true
-
-[dev-dependencies]
 serde_json.workspace = true

@@ -17,7 +17,7 @@ fn main() {
     let out = rhythia_sim::hitreg::match_hits(
         &map.notes,
         &replay.frames,
-        rhythia_sim::hitreg::DEFAULT_WINDOW_MS,
+        rhythia_sim::hitreg::hit_window_ms(&replay),
     );
     let cursor_at = |ms: f64| -> (f32, f32) {
         let i = replay.frames.partition_point(|f| f.ms <= ms);

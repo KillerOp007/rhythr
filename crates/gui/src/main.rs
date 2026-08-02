@@ -2072,17 +2072,14 @@ fn timeline(state: tauri::State<'_, App>, samples: usize) -> Result<TimelineDto,
         .map
         .as_ref()
         .map(|(_, m)| {
-            let outcome = rhythia_sim::hitreg::match_hits(
-                &m.notes,
-                frames,
-                rhythia_sim::hitreg::DEFAULT_WINDOW_MS,
-            );
+            let window = rhythia_sim::hitreg::hit_window_ms(replay);
+            let outcome = rhythia_sim::hitreg::match_hits(&m.notes, frames, window);
             outcome
                 .results
                 .iter()
                 .filter(|r| !r.hit)
                 .map(|r| m.notes[r.note_index].time_ms as f64)
-                .filter(|&t| t <= run_end + rhythia_sim::hitreg::DEFAULT_WINDOW_MS)
+                .filter(|&t| t <= run_end + window)
                 .collect()
         })
         .unwrap_or_default();

@@ -25,7 +25,7 @@ fn main() {
     let out = rhythia_sim::hitreg::match_hits(
         &map.notes,
         &replay.frames,
-        rhythia_sim::hitreg::DEFAULT_WINDOW_MS,
+        rhythia_sim::hitreg::hit_window_ms(&replay),
     );
     let derived = out.derived_hits();
     let header_hits = replay.frames.iter().filter(|f| f.hit).count() as u32;
