@@ -1843,7 +1843,12 @@ function initControls() {
   $("set-hitvol").addEventListener("input", () => { $("hitvol-val").textContent = `${$("set-hitvol").value}%`; });
   $("set-hitvol").addEventListener("change", () => pushOutput({ hitsound_volume: Number($("set-hitvol").value) }));
   $("set-filename").addEventListener("change", () => pushOutput({ file_name: $("set-filename").value }));
-  $("set-ffmpeg").addEventListener("change", () => pushOutput({ ffmpeg: $("set-ffmpeg").value }));
+  $("set-ffmpeg").addEventListener("change", async () => {
+    await pushOutput({ ffmpeg: $("set-ffmpeg").value });
+    // Re-probe: now that the gate actually blocks rendering, a corrected
+    // path has to lift it without a restart.
+    initEncoders();
+  });
   $("btn-outdir").addEventListener("click", async () => {
     const p = await dialog.open({ directory: true });
     if (p) pushOutput({ output_dir: p });
