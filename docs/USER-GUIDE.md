@@ -109,6 +109,14 @@ The replay fills the window; the gear (or `O`) opens an options drawer.
   live on the GPU — seeks are instant and there is nothing to buffer.
   The map's own music plays along, pitch-bent with the speed so you
   can find a spot by ear; the volume slider sits in the playbar.
+- **Walking your misses** is what the window is for: `,` and `.`
+  (or PageUp/PageDown, or the buttons next to the frame steps) move
+  through them in chart order. Each jump lands 900 ms *before* the
+  note, so you watch the approach rather than the aftermath, and `L`
+  loops the miss you are on until you turn it off. Your overlay,
+  linger and volume choices are remembered for next time.
+- **Not sure what you are looking at?** The Overlays tab opens with a
+  legend for every colour, box, dot and line on the picture.
 - **Hitboxes** show the game's TRUE hit area (a fixed square, larger
   than the visual note — adjacent areas genuinely overlap, that is
   the game's own rule). At the hit plane the box freezes, and a dot

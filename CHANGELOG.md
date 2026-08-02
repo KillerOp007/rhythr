@@ -3,6 +3,79 @@
 rhythr is an unofficial community tool and is not affiliated with or
 endorsed by Rhythia or Capo Games.
 
+## Unreleased
+
+The default render is measured against the game instead of approximating
+it, the hit window follows the run's speed the way the game does, and a
+round of quality-of-life work on top.
+
+### Fixed
+
+- **The hit window is no longer a constant.** The game misses a note once
+  `ms > note_t + hit_window`, and that window is 55 ms scaled by the speed
+  multiplier — its own settings screen documents it ("[def. 55ms] … 1.5x =
+  83; 2x = 110"). rhythr carried a flat 80 ms, which is exactly the 1.45x
+  case generalised to every run: on a 1.00x replay it accepted hits 25 ms
+  past the point the game had already scored a miss, and the miss X came up
+  just as late. Measured across 37 leaderboard replays covering every mod
+  combination — at 55 × speed every recorded hit flag finds a note and the
+  latest one lands just under the window at each speed, never above.
+- **The default look now comes from the game.** `SkinConfig::default()` was
+  documented as the game's defaults but reproduced one player's exported
+  config value for value. Every value is now the game's own, cross-checked
+  against both its source and the "[def. X]" tooltips on its settings page:
+
+  | | was | now |
+  |---|---|---|
+  | Camera distance | 3.25 | **3.75** — the playfield rendered 15% oversized |
+  | Approach rate | 24.5 | **40** — notes were visible 0.49 s instead of 1.0 s |
+  | Spawn distance | 12 | **40** |
+  | Note scale | 0.9 of 0.5 | **1.0 of 0.45** — an imported NoteScale was 11% too big |
+  | Parallax | 0, and swaying away from the cursor at 0.003/unit | **6.5, toward it at 0.025/unit** |
+  | Cursor trail | on | **off** |
+  | Colorset | an invented four-hue palette | **Cotton Candy** (#00ffed / #ff8ff9) |
+  | Playfield border | 5× too thick, rounded corners, opaque | **0.0152 units, sharp corners, 58.8% opacity** |
+
+- **ffmpeg failures say what happened.** Its stderr was inherited, which in
+  a windowed app means discarded, so every encode failure read "exited with
+  exit status: 1". Its last words are now part of the error. ffmpeg is also
+  probed before a render instead of x264 being advertised regardless.
+- **A mismatched map no longer accuses your replay.** Loading the wrong
+  chart reported "inconsistent — possibly modified"; it now says the map
+  does not match, which is what the evidence actually showed.
+- **Rendering twice no longer overwrites the first video** without asking.
+- **Your own `config.json` loads.** The backend always accepted it; only the
+  file dialog and drop handler insisted on `.rhs`.
+- **A crafted `.sspm` can no longer take the process down** — nested marker
+  arrays recursed without a depth limit.
+- **The analyze window's keyboard survives a slider.** One click on the
+  volume or speed control used to swallow space and the arrow keys for the
+  rest of the session.
+- Scrubbing resumes playback if it was playing; window geometry, and the
+  analyze window's overlay and playback settings, are remembered; deleting a
+  preset and resetting the HUD ask first; `settings.json` is written
+  atomically and a broken one is kept instead of silently replaced.
+
+### Added
+
+- **Walk your misses.** `,` and `.` (or PageUp/PageDown, or the buttons in
+  the transport) step through them in chart order, landing 900 ms before the
+  note so you see the approach rather than the aftermath. `L` loops the one
+  you are on.
+- **An overlay legend.** The Overlays tab explains the boxes, dots, lines
+  and colours, drawn from the same palette the overlay uses.
+- The empty preview panel can be clicked, not just dropped onto.
+
+### Performance
+
+- Vertical and square renders (1080×1920, 1080×1080) no longer allocate and
+  drop a frame-sized buffer every frame — their row stride is not
+  256-byte-aligned, so they took a de-padding copy that 1920×1080 never did.
+  Ghost races no longer deep-clone the whole skin config, texture blobs
+  included, once per frame. Both were real per-frame churn; measured
+  end-to-end the wall clock moves about 1–2%, because rendering, not memory,
+  is what a render waits on.
+
 ## v0.5.0 — 2026-08-01
 
 The replay analyzer: a full forensics view for any run — and the layout
