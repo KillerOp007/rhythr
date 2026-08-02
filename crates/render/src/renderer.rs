@@ -137,6 +137,11 @@ pub struct Renderer {
     /// frames (see `submit_frame`/`with_slot_pixels`).
     readback_bufs: [wgpu::Buffer; READBACK_SLOTS],
     readback_submissions: std::cell::RefCell<[Option<wgpu::SubmissionIndex>; READBACK_SLOTS]>,
+    /// Scratch for un-padding readback rows. Only widths whose byte stride
+    /// is not a multiple of 256 need it — 1080x1920 (Shorts) and 1080x1080
+    /// (square) do, 1920x1080 does not — and those used to allocate and
+    /// drop an 8 MB buffer for every single frame.
+    depad_scratch: std::cell::RefCell<Vec<u8>>,
 }
 
 /// Number of in-flight readback buffers; the video loop reads a frame only
@@ -728,6 +733,7 @@ impl Renderer {
             hud_vbuf,
             readback_bufs,
             readback_submissions: std::cell::RefCell::new([None, None, None]),
+            depad_scratch: std::cell::RefCell::new(Vec::new()),
         })
     }
 
@@ -1286,7 +1292,7 @@ impl Renderer {
                     }
                     _ => Vec::new(),
                 };
-                let mut ghost_cfg = config.clone();
+                let mut ghost_cfg = config.clone_without_asset_bytes();
                 ghost_cfg.cursor_color = g.color;
                 ghost_cfg.cursor_trail_color = g.color;
                 ghost_cfg.cursor_trail_gradient.clear();
@@ -1877,7 +1883,9 @@ impl Renderer {
         let result = if padded == unpadded {
             f(&mapped[..(unpadded * self.height) as usize])
         } else {
-            let mut pixels = Vec::with_capacity((unpadded * self.height) as usize);
+            let mut pixels = self.depad_scratch.borrow_mut();
+            pixels.clear();
+            pixels.reserve((unpadded * self.height) as usize);
             for row in 0..self.height {
                 let start = (row * padded) as usize;
                 pixels.extend_from_slice(&mapped[start..start + unpadded as usize]);

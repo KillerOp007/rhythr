@@ -3606,6 +3606,12 @@ struct EncoderProbe {
     available: Vec<String>,
     /// Encoder -> why it is unavailable (ffmpeg's own words).
     unavailable: BTreeMap<String, String>,
+    /// Set when ffmpeg itself cannot be run. Nothing will encode, and the
+    /// UI has to say so BEFORE a render — it used to advertise x264 as
+    /// available regardless and only fail minutes in.
+    ffmpeg_missing: bool,
+    /// The path or command that was tried, so the message can name it.
+    ffmpeg: String,
 }
 
 #[tauri::command]
@@ -3616,19 +3622,29 @@ async fn probe_encoders(state: tauri::State<'_, App>) -> Result<EncoderProbe, St
             let inner = app.lock();
             resolve_ffmpeg(&inner.settings)
         };
-        let mut available = vec!["auto".to_string(), "x264".to_string()];
+        // Can ffmpeg run at all? Everything else is moot if not.
+        let missing = !rhythia_render::video::ffmpeg_runs(&ffmpeg);
+        let mut available = if missing {
+            Vec::new()
+        } else {
+            vec!["auto".to_string(), "x264".to_string()]
+        };
         let mut unavailable = BTreeMap::new();
-        for e in ["nvenc", "qsv", "vaapi"] {
-            match rhythia_render::video::encoder_error(&ffmpeg, e) {
-                None => available.push(e.to_string()),
-                Some(reason) => {
-                    unavailable.insert(e.to_string(), reason);
+        if !missing {
+            for e in ["nvenc", "qsv", "vaapi"] {
+                match rhythia_render::video::encoder_error(&ffmpeg, e) {
+                    None => available.push(e.to_string()),
+                    Some(reason) => {
+                        unavailable.insert(e.to_string(), reason);
+                    }
                 }
             }
         }
         Ok(EncoderProbe {
             available,
             unavailable,
+            ffmpeg_missing: missing,
+            ffmpeg,
         })
     })
     .await

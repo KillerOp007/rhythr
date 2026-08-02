@@ -59,7 +59,7 @@ code { font-family: ui-monospace, Consolas, monospace; color: var(--accent); fon
   min-height: 0;
 }
 
-#sources, #settings { display: flex; flex-direction: column; gap: 10px; min-height: 0; overflow-y: auto; }
+#sources, #settings { display: flex; flex-direction: column; gap: 10px; min-height: 0; overflow-y: auto; overflow-x: hidden; }
 #center { display: flex; flex-direction: column; gap: 8px; min-width: 0; min-height: 0; justify-content: center; }
 
 /* ───────────────────────── cards ───────────────────────── */
@@ -77,7 +77,14 @@ code { font-family: ui-monospace, Consolas, monospace; color: var(--accent); fon
 .card-body .hint { margin: 4px 0; color: var(--muted); font-size: 13.5px; }
 
 .src-title { font-weight: 600; margin: 2px 0 3px; overflow-wrap: anywhere; }
-.src-meta { font-size: 13px; color: var(--muted); line-height: 1.55; }
+.src-meta { font-size: 13px; color: var(--muted); line-height: 1.55; overflow-wrap: anywhere; }
+/* A file path has no spaces to break at, so it used to widen the whole rail
+   and put a horizontal scrollbar under it. Keep it on one line, full text in
+   the tooltip. */
+.src-path {
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  direction: rtl; text-align: left;
+}
 .src-meta b { color: var(--text); font-weight: 500; }
 
 .chip {
@@ -168,6 +175,19 @@ code { font-family: ui-monospace, Consolas, monospace; color: var(--accent); fon
   color: #04211f; font-weight: 600; padding: 9px 22px;
 }
 .btn.primary:hover:not(:disabled) { filter: brightness(1.1); }
+/* One step below primary: marks the useful action in a toolbar without
+   competing with Render video, the page's single filled button. */
+.btn.accent {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.btn.accent:hover:not(:disabled) { border-color: var(--accent); }
+/* Separates the run-level actions from the HUD editing tools. */
+.tool-sep {
+  display: inline-block; width: 1px; height: 15px; margin: 0 4px -3px;
+  background: var(--border);
+}
 .btn.danger { background: transparent; border-color: var(--danger); color: var(--danger); }
 .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 

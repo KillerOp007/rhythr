@@ -116,7 +116,7 @@ function renderConfigCard() {
   const name = path.split(/[\\/]/).pop();
   body.innerHTML = `
     <div class="src-title">${esc(name)}</div>
-    <div class="src-meta">${esc(path)}</div>`;
+    <div class="src-meta src-path" title="${esc(path)}">${esc(path)}</div>`;
 }
 
 function renderGhostCard() {
@@ -1791,6 +1791,19 @@ function initControls() {
   });
 }
 
+/// ffmpeg could not be executed at the last probe.
+let ffmpegMissing = false;
+
+/// Keeps the render button honest about whether a render can even start.
+function updateRenderReady() {
+  const btn = $("btn-render");
+  if (!btn) return;
+  btn.disabled = ffmpegMissing;
+  btn.title = ffmpegMissing
+    ? "ffmpeg could not be run — set its path under Advanced, or install it"
+    : "";
+}
+
 async function initEncoders() {
   try {
     const probe = await invoke("probe_encoders");
@@ -1813,9 +1826,20 @@ async function initEncoders() {
       pushOutput({ encoder: "auto" });
     }
     const hw = list.filter((e) => e !== "auto" && e !== "x264");
-    $("topbar-info").textContent = hw.length
-      ? `Hardware encoder: ${hw.map((e) => labels[e]?.split(" ")[0] || e).join(", ")}`
-      : "Software encoding (x264)";
+    // No ffmpeg means no render at all. Say it here, not after the user has
+    // sat through one — and point at the setting that fixes it.
+    ffmpegMissing = !!probe.ffmpeg_missing;
+    if (ffmpegMissing) {
+      $("topbar-info").innerHTML =
+        `<span class="chip bad" title="${esc(
+          `Tried to run: ${probe.ffmpeg}\n\nSet the path under Advanced, or install ffmpeg.`
+        )}">ffmpeg not found — rendering unavailable</span>`;
+    } else {
+      $("topbar-info").textContent = hw.length
+        ? `Hardware encoder: ${hw.map((e) => labels[e]?.split(" ")[0] || e).join(", ")}`
+        : "Software encoding (x264)";
+    }
+    updateRenderReady();
     // Say WHY a hardware encoder is missing (e.g. nvenc wants a newer
     // NVIDIA driver) — otherwise "only x264" looks like a bug.
     const note = $("encoder-note");

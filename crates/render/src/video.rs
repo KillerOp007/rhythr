@@ -545,6 +545,20 @@ pub(crate) fn hide_console_window(cmd: &mut Command) {
     let _ = &cmd;
 }
 
+/// Whether this ffmpeg can be executed at all. Checked before a render so
+/// a missing or broken binary is reported up front, instead of surfacing as
+/// a failed encode after the user has waited through one.
+pub fn ffmpeg_runs(ffmpeg: &str) -> bool {
+    let mut cmd = Command::new(ffmpeg);
+    hide_console_window(&mut cmd);
+    cmd.arg("-version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
 /// Probes whether `ffmpeg` can actually encode with the given hardware
 /// encoder on this machine by encoding a tiny synthetic clip to null.
 pub fn encoder_works(ffmpeg: &str, encoder: &str) -> bool {

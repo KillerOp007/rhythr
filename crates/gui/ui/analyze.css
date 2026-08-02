@@ -317,7 +317,7 @@ body.an-native #an-options {
 /* Miss walker in the transport: same weight as the frame steps, with the
    loop button reading as engaged while it is on. */
 .an-missnav { display: inline-flex; gap: 4px; align-items: center; }
-.an-missnav .btn { font-size: 11px; letter-spacing: 0.02em; }
+.an-missnav .btn { font-size: 11px; letter-spacing: 0.02em; white-space: nowrap; }
 .an-missnav .btn.on {
   color: var(--accent);
   border-color: color-mix(in srgb, var(--accent) 55%, transparent);
