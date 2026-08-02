@@ -1292,7 +1292,15 @@ impl Renderer {
                     }
                     _ => Vec::new(),
                 };
-                let mut ghost_cfg = config.clone_without_asset_bytes();
+                // NOTE: this is a full clone, asset bytes included. An
+                // attempt to skip them with struct-update syntax was a
+                // no-op — `..self.clone()` evaluates the whole clone first
+                // and only then overwrites the fields — and measuring the
+                // ghost path with a 5.7 MB skin showed the copy is not what
+                // a render waits on. Doing it properly means Arc-ing the
+                // blobs, which is worth it only if a measurement ever says
+                // so.
+                let mut ghost_cfg = config.clone();
                 ghost_cfg.cursor_color = g.color;
                 ghost_cfg.cursor_trail_color = g.color;
                 ghost_cfg.cursor_trail_gradient.clear();
@@ -2899,8 +2907,6 @@ impl CursorAt for Replay {
     }
 }
 
-/// How long a resolved hit-area box lingers at the plane so the eye can
-/// catch the verdict during playback.
 /// Width of the default playfield frame, as a fraction of its half-extent.
 /// The game's border is `grid_outer.png` on the 3.04-unit Outer plane
 /// (song.tscn): a sharp-cornered square outline 6 px deep out of 1200, i.e.
@@ -2909,6 +2915,8 @@ impl CursorAt for Replay {
 /// the game does not have.
 const BORDER_OUTLINE: f32 = 0.01;
 
+/// How long a resolved hit-area box lingers at the plane so the eye can
+/// catch the verdict during playback.
 pub const HITBOX_LINGER_MS: f64 = 350.0;
 
 /// Approach depth for a note's hit-area quad, or None once the box should

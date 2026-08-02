@@ -912,6 +912,11 @@ fn open_releases_page(app: tauri::AppHandle) {
 /// Whether a remembered window origin still lands on a connected monitor.
 /// Screens get unplugged; a window restored onto one that is gone would be
 /// invisible with no way to drag it back.
+/// The main window's last known geometry, kept away from the global state
+/// lock so the event-loop thread never waits on a render worker.
+static LAST_WINDOW_RECT: std::sync::Mutex<Option<(i32, i32, u32, u32)>> =
+    std::sync::Mutex::new(None);
+
 fn window_pos_visible(window: &tauri::WebviewWindow, x: i32, y: i32) -> bool {
     let Ok(monitors) = window.available_monitors() else {
         return false;
@@ -1050,10 +1055,20 @@ fn wrong_map(replay: &Replay, report: &integrity::IntegrityReport, hash_mismatch
         return true;
     }
     let flags = report.flagged_frames;
-    // A third of the recorded hits finding no note at all, or barely half
-    // of them landing, is a different chart — not a doctored file.
-    let orphan_heavy = flags > 20 && u64::from(report.orphan_flags) * 3 > u64::from(flags);
     let header_hits = replay.hits.max(0) as u32;
+    // A wrong map cannot change the FILE: the number of flagged frames still
+    // matches the header it was written with. A header inflated past its own
+    // frames is the opposite — evidence about the replay, not the chart — so
+    // it must keep reading as inconsistent instead of being explained away.
+    if flags != header_hits {
+        return false;
+    }
+    // With an honest header, a third of the recorded hits finding no note at
+    // all, or barely half of them landing, is what a foreign chart looks
+    // like. It is also what injected hit flags would look like, which is why
+    // the wording this feeds is "may not match" rather than a verdict — only
+    // the map hash can tell those apart, and that is the branch above.
+    let orphan_heavy = flags > 20 && u64::from(report.orphan_flags) * 3 > u64::from(flags);
     let lost_most = header_hits > 20 && report.derived_hits * 2 < header_hits;
     orphan_heavy || lost_most
 }
@@ -4086,12 +4101,15 @@ fn main() {
                     let (Ok(pos), Ok(size)) = (w.outer_position(), w.inner_size()) else {
                         return;
                     };
-                    let shared = handle.state::<App>().inner().clone();
-                    let mut inner = shared.lock();
-                    let next = Some((pos.x, pos.y, size.width, size.height));
-                    if inner.settings.window_rect != next {
-                        inner.settings.window_rect = next;
-                        inner.settings.save();
+                    // Recorded in a lock of its own, and written ONCE on
+                    // exit. Taking the global state lock here would put the
+                    // event-loop thread behind whatever the render or
+                    // prefetch worker is holding — the documented way to
+                    // freeze this window — and a drag fires this per pixel,
+                    // so saving here meant rewriting settings.json hundreds
+                    // of times to move a window.
+                    if let Ok(mut slot) = LAST_WINDOW_RECT.lock() {
+                        *slot = Some((pos.x, pos.y, size.width, size.height));
                     }
                 });
             }
@@ -4162,6 +4180,20 @@ fn main() {
         .expect("error while building tauri application")
         .run(|app_handle, event| {
             if let tauri::RunEvent::ExitRequested { .. } = event {
+                // Persist the window geometry once, on the way out.
+                let rect = LAST_WINDOW_RECT
+                    .lock()
+                    .ok()
+                    .and_then(|slot| *slot);
+                if let Some(rect) = rect {
+                    let shared = app_handle.state::<App>();
+                    let mut inner = shared.lock();
+                    if inner.settings.window_rect != Some(rect) {
+                        inner.settings.window_rect = Some(rect);
+                        inner.settings.save();
+                    }
+                    drop(inner);
+                }
                 // Closing mid-render: cancel (kills ffmpeg, removes the
                 // partial file, drops the audio temp) and give the render
                 // thread a moment to finish that cleanup.

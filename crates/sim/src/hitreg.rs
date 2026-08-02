@@ -49,7 +49,14 @@ pub const BASE_HIT_WINDOW_MS: f64 = 55.0;
 /// recording or the online mod differs from the local one; until a hardrock
 /// replay actually demands it, applying it would corrupt real runs.
 pub fn hit_window_ms(replay: &Replay) -> f64 {
-    let speed = f64::from(replay.speed).max(0.01);
+    // Clamped at BOTH ends, because the speed is a header field a file can
+    // claim anything for: the parser only rejects values that are not > 0,
+    // so +inf and absurd finite values reach here. Consumers size buffers
+    // from the window (the error histogram in analysis.rs), and an infinite
+    // or gigantic one turns a forged header into a capacity-overflow panic
+    // or an out-of-memory abort that no Result can carry. 4x covers every
+    // speed the game offers with room to spare.
+    let speed = f64::from(replay.speed).clamp(0.01, 4.0);
     BASE_HIT_WINDOW_MS * speed
 }
 
@@ -338,7 +345,12 @@ mod tests {
         assert!((w("[\"mod_mirror\",\"mod_nofail\"]", 1.0) - 55.0).abs() < 1e-9);
         // A malformed mods field must not widen or zero the window.
         assert!((w("not json", 1.0) - 55.0).abs() < 1e-9);
+        // A header can claim any speed; the window must stay finite and
+        // positive so callers can size buffers from it.
         assert!(w("[]", 0.0) > 0.0);
+        assert!((w("[]", f32::INFINITY) - 220.0).abs() < 1e-9);
+        assert!((w("[]", 1.0e9) - 220.0).abs() < 1e-9);
+        assert!(w("[]", -5.0) > 0.0 && w("[]", -5.0).is_finite());
     }
 
     /// These cases exercise attribution mechanics, not the window value:

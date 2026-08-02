@@ -188,6 +188,16 @@ function replaySpeed() {
   return clamp(status?.replay?.speed || 1, 0.25, 3);
 }
 
+/// The run's hit window in song-time ms — the mirror of
+/// `rhythia_sim::hitreg::hit_window_ms`. The game misses a note once
+/// `ms > note_t + 55 * speed`, so an unhit note's box lives exactly that
+/// long. This was a hardcoded 80 here while the renderer had already moved
+/// to the real formula, which drifted the overlay away from the picture on
+/// every run that is not 1.45x.
+function hitWindowMs() {
+  return 55 * clamp(status?.replay?.speed || 1, 0.01, 4);
+}
+
 function sndRate() {
   return Math.max(0.001, play.factor * replaySpeed());
 }
@@ -884,6 +894,11 @@ function seek(t) {
     return;
   }
   if (play.on) {
+    // Bump the generation first, the way every other restart does: without
+    // it the streaming loop already running keeps its own generation valid
+    // and a second one starts beside it. A looped miss seeks on every wrap,
+    // so the loops would pile up for as long as the loop runs.
+    play.gen++;
     startStreaming();
     return;
   }
@@ -942,7 +957,12 @@ function gotoMiss(dir) {
   // prev goes to the previous one rather than re-seeking to the same spot.
   const onIt = Math.abs(currentMs - (missTimes[here] - MISS_LEAD_MS)) < 60;
   let next = dir > 0 ? here + 1 : here - (onIt ? 1 : 0);
-  if (!onIt && dir > 0 && missTimes[here] - MISS_LEAD_MS > currentMs) next = here;
+  if (!onIt && missTimes[here] - MISS_LEAD_MS > currentMs) {
+    // The playhead sits before this miss's lead-in, so it IS the next one;
+    // there is nothing earlier to step back to.
+    if (dir < 0) return;
+    next = here;
+  }
   next = clamp(next, 0, missTimes.length - 1);
   seek(Math.max(0, missTimes[next] - MISS_LEAD_MS));
   if (missLoop) setMissLoop(true); // re-anchor the loop on the new miss
@@ -1149,7 +1169,7 @@ function drawOverlay() {
         const judging = n && t >= n.t;
         let fade = 1;
         if (judging) {
-          const resolution = n.hit ? Math.max(n.hit_ms ?? n.t, n.t) : n.t + 80;
+          const resolution = n.hit ? Math.max(n.hit_ms ?? n.t, n.t) : n.t + hitWindowMs();
           const age = t - resolution;
           fade = age > 0 ? Math.max(0.3, 1 - age / Math.max(opt.linger, 1)) : 1;
           ctx.globalAlpha = 0.85 * fade;
@@ -2055,7 +2075,9 @@ function wireSection() {
   }
   body.querySelectorAll("input[data-q]").forEach((rb) => {
     rb.addEventListener("change", () => {
-      opt.quality = rb.dataset.q === "auto" ? "auto" : Number(rb.dataset.q);
+      // Kept as a string so the stored value always has the same type as
+      // the default; every reader coerces with Number()/String() anyway.
+      opt.quality = rb.dataset.q;
       saveOpt();
       autoScale = 100;
       autoNextCheck = 1200;
@@ -2732,7 +2754,12 @@ window.addEventListener("DOMContentLoaded", async () => {
     const inputType = t && t.tagName === "INPUT" ? (t.type || "text").toLowerCase() : "";
     const typing =
       t && (t.tagName === "TEXTAREA" || t.isContentEditable || TEXT_INPUTS.has(inputType));
+    // A focused control owns the keys it normally handles: a slider and a
+    // radio take the arrows, a checkbox and a radio take space. Swallowing
+    // those for playback would make the drawer unusable by keyboard.
     const onSlider = inputType === "range";
+    const takesSpace = inputType === "checkbox" || inputType === "radio";
+    const takesArrows = onSlider || inputType === "radio";
     if (e.key === "Escape") {
       toggleOptions(false);
       return;
@@ -2744,17 +2771,18 @@ window.addEventListener("DOMContentLoaded", async () => {
     }
     if (typing || e.ctrlKey || e.metaKey || e.altKey) return;
     if (e.code === "Space") {
+      if (takesSpace) return;
       e.preventDefault();
       setPlaying(!play.on);
       showChrome();
     } else if (e.key === "ArrowLeft") {
-      if (onSlider) return; // the focused slider owns its own arrows
+      if (takesArrows) return;
       e.preventDefault();
       if (e.shiftKey) seek(currentMs - 1000);
       else stepFrame(-1);
       showChrome();
     } else if (e.key === "ArrowRight") {
-      if (onSlider) return;
+      if (takesArrows) return;
       e.preventDefault();
       if (e.shiftKey) seek(currentMs + 1000);
       else stepFrame(1);

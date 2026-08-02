@@ -17,6 +17,8 @@ let previewBusy = false;
 let previewWanted = false;
 let lastOutPath = null;
 let rendering = false;
+/// ffmpeg could not be executed at the last probe — nothing will encode.
+let ffmpegMissing = false;
 let autoDownloadTried = 0;  // map id of the last automatic download attempt
 
 // ------------------------------------------------------------ formatting
@@ -61,8 +63,9 @@ function renderReplayCard() {
       chip = `<span class="chip warn" title="${esc(
         "The recorded hits do not line up with this chart:\n" +
           r.verify.problems.join("\n") +
-          "\n\nLoad the map this replay was played on."
-      )}">map doesn't match</span>`;
+          "\n\nMost often this means the loaded map is not the one that was played — " +
+          "try the chart this replay came from."
+      )}">map may not match</span>`;
     } else {
       chip = `<span class="chip bad" title="${esc(r.verify.problems.join("\n"))}">inconsistent — possibly modified</span>`;
     }
@@ -1416,7 +1419,11 @@ function initRenderEvents() {
 
 function updateRenderButton() {
   const ready = !!(status?.replay && status?.map);
-  $("btn-render").disabled = !ready || rendering;
+  const btn = $("btn-render");
+  btn.disabled = !ready || rendering || ffmpegMissing;
+  btn.title = ffmpegMissing
+    ? "ffmpeg could not be run — set its path under Advanced, or install it"
+    : "";
   if (!rendering) {
     const clip = status?.clip;
     const what = clip ? `the clip (${fmtTime(clip[1] - clip[0])})` : "the full run";
@@ -1594,6 +1601,9 @@ async function loadPath(path) {
       } catch (mapErr) {
         try {
           await call(() => invoke("load_config", { path }));
+          // The map attempt already painted its failure over the preview;
+          // clear it, or a successful skin load still reads as an error.
+          $("preview-msg").hidden = true;
           loadNote(`Loaded skin config: ${name}`);
           schedulePreview();
         } catch {
@@ -1925,17 +1935,12 @@ function initControls() {
   });
 }
 
-/// ffmpeg could not be executed at the last probe.
-let ffmpegMissing = false;
-
-/// Keeps the render button honest about whether a render can even start.
+/// The render button has ONE owner (updateRenderButton); this just asks it
+/// to re-evaluate after a probe. Setting `disabled` here directly both
+/// ignored whether a replay was loaded and was undone by the next status
+/// update.
 function updateRenderReady() {
-  const btn = $("btn-render");
-  if (!btn) return;
-  btn.disabled = ffmpegMissing;
-  btn.title = ffmpegMissing
-    ? "ffmpeg could not be run — set its path under Advanced, or install it"
-    : "";
+  updateRenderButton();
 }
 
 async function initEncoders() {
@@ -1954,11 +1959,14 @@ async function initEncoders() {
     const saved = status?.settings?.encoder || "auto";
     if (list.includes(saved)) {
       sel.value = saved;
-    } else {
+    } else if (list.length) {
       // e.g. settings from another machine — keep backend and UI in agreement.
       sel.value = "auto";
       pushOutput({ encoder: "auto" });
     }
+    // With no list at all (ffmpeg not runnable) the saved choice stands:
+    // overwriting it here would lose the user's encoder because of a broken
+    // path they are about to fix.
     const hw = list.filter((e) => e !== "auto" && e !== "x264");
     // No ffmpeg means no render at all. Say it here, not after the user has
     // sat through one — and point at the setting that fixes it.

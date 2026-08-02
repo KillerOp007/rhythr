@@ -352,27 +352,6 @@ pub struct SkinConfig {
     pub ambient: AmbientConfig,
 }
 
-impl SkinConfig {
-    /// A copy for per-frame use, without the asset byte blobs.
-    ///
-    /// The ghost side of a race needs its own config every frame (its cursor
-    /// colour and meter placement differ), but a full clone dragged the
-    /// note/border/cursor/trail PNGs and every background layer along with
-    /// it — megabytes copied sixty times a second. Those bytes are read
-    /// exactly once, in `Renderer::prepare_skin`, and live on the GPU from
-    /// then on; nothing in the per-frame path touches them.
-    pub fn clone_without_asset_bytes(&self) -> SkinConfig {
-        SkinConfig {
-            note_texture: None,
-            border_texture: None,
-            cursor_texture: None,
-            trail_texture: None,
-            background_images: Vec::new(),
-            ..self.clone()
-        }
-    }
-}
-
 impl Default for SkinConfig {
     /// The game's own defaults, used when a field is absent and when no
     /// config is loaded at all — so a bare render looks like a fresh
