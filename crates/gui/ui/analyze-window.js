@@ -65,6 +65,39 @@ const opt = {
   section: "overlays",
 };
 
+// Closing the window used to forget every one of those, so a preferred
+// overlay set, path window, linger and volume had to be dialled in again on
+// each open. Persisted locally; unknown or malformed stored values are
+// ignored rather than trusted.
+const OPT_STORE = "rhythr.analyze.opt";
+
+function loadOpt() {
+  let saved;
+  try {
+    saved = JSON.parse(localStorage.getItem(OPT_STORE) || "{}");
+  } catch {
+    return;
+  }
+  if (!saved || typeof saved !== "object") return;
+  for (const [k, v] of Object.entries(saved)) {
+    if (!(k in opt)) continue;
+    if (typeof v !== typeof opt[k]) continue;
+    opt[k] = v;
+  }
+}
+
+let saveOptTimer = null;
+function saveOpt() {
+  clearTimeout(saveOptTimer);
+  saveOptTimer = setTimeout(() => {
+    try {
+      localStorage.setItem(OPT_STORE, JSON.stringify(opt));
+    } catch {
+      /* private mode or a full quota — not worth bothering the user */
+    }
+  }, 400);
+}
+
 let status = null;
 let data = null;
 let dataKey = "";
@@ -236,6 +269,7 @@ function sndFollow() {
 
 function sndVolume(v) {
   opt.audioVol = v;
+  saveOpt();
   if (snd.gain) snd.gain.gain.value = v / 100;
   const s = $("an-vol");
   if (s && Number(s.value) !== v) s.value = String(v);
@@ -1907,6 +1941,7 @@ function wireSection() {
   body.querySelectorAll("input[data-view]").forEach((cb) => {
     cb.addEventListener("change", async () => {
       opt[cb.dataset.view] = cb.checked;
+      saveOpt();
       if (engine === "native") {
         invoke("live_cmd", {
           cmd: "view",
@@ -1949,6 +1984,7 @@ function wireSection() {
   body.querySelectorAll("input[data-opt]").forEach((cb) => {
     cb.addEventListener("change", () => {
       opt[cb.dataset.opt] = cb.checked;
+      saveOpt();
       if (cb.dataset.opt === "audio") {
         if (cb.checked) {
           sndLoad();
@@ -1967,6 +2003,7 @@ function wireSection() {
   if (win) {
     win.addEventListener("input", () => {
       opt.pathWindow = Number(win.value);
+      saveOpt();
       win.nextElementSibling.textContent = `${(opt.pathWindow / 1000).toFixed(2)}s`;
       drawFrame();
     });
@@ -1975,6 +2012,7 @@ function wireSection() {
   if (lin) {
     lin.addEventListener("input", () => {
       opt.linger = Number(lin.value);
+      saveOpt();
       lin.nextElementSibling.textContent =
         opt.linger === 0 ? "instant" : `${(opt.linger / 1000).toFixed(2)}s`;
       // 0 must mean INSTANT for the engine, but the backend treats 0 as
@@ -1989,6 +2027,7 @@ function wireSection() {
   body.querySelectorAll("input[data-q]").forEach((rb) => {
     rb.addEventListener("change", () => {
       opt.quality = rb.dataset.q === "auto" ? "auto" : Number(rb.dataset.q);
+      saveOpt();
       autoScale = 100;
       autoNextCheck = 1200;
       lastRenderH = 0;
@@ -2576,6 +2615,8 @@ async function bootNative() {
 }
 
 window.addEventListener("DOMContentLoaded", async () => {
+  // Before anything reads opt: restore what the last session chose.
+  loadOpt();
   $("an-gear").addEventListener("click", () => toggleOptions());
   $("an-close").addEventListener("click", () => toggleOptions(false));
   $("an-play").addEventListener("click", () => setPlaying(!play.on));
@@ -2590,6 +2631,8 @@ window.addEventListener("DOMContentLoaded", async () => {
     setSpeed(Number.isFinite(v) && v > 0 ? v : play.factor);
   });
   $("an-speed-reset").addEventListener("click", () => setSpeed(1));
+  // The slider's markup default is only a fallback; the stored choice wins.
+  $("an-vol").value = String(opt.audioVol);
   $("an-vol").addEventListener("input", () => sndVolume(Number($("an-vol").value)));
   $("an-canvas").addEventListener("click", pickNote);
   // Native mode: the canvas is click-transparent (it spans the window
@@ -2603,6 +2646,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     const b = e.target.closest("button[data-sec]");
     if (!b) return;
     opt.section = b.dataset.sec;
+    saveOpt();
     renderNav();
     drawSection();
   });
@@ -2616,13 +2660,24 @@ window.addEventListener("DOMContentLoaded", async () => {
     const r = $("an-scrub").getBoundingClientRect();
     seek(clamp((e.clientX - r.left) / r.width, 0, 1) * runEnd());
   };
+  // Scrubbing pauses while you drag — but it used to leave playback off
+  // afterwards, so finding a spot always cost an extra press of space.
+  let resumeAfterScrub = false;
   $("an-scrub").addEventListener("pointerdown", (e) => {
     $("an-scrub").setPointerCapture(e.pointerId);
+    resumeAfterScrub = play.on;
     setPlaying(false);
     scrubSeek(e);
   });
   $("an-scrub").addEventListener("pointermove", (e) => {
     if (e.buttons & 1) scrubSeek(e);
+  });
+  $("an-scrub").addEventListener("pointerup", () => {
+    if (resumeAfterScrub) setPlaying(true);
+    resumeAfterScrub = false;
+  });
+  $("an-scrub").addEventListener("pointercancel", () => {
+    resumeAfterScrub = false;
   });
 
   // Hand focus back after a drag, so the very next key press is a playback

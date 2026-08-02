@@ -119,6 +119,7 @@ code { font-family: ui-monospace, Consolas, monospace; color: var(--accent); fon
 #dropzone { text-align: center; color: var(--muted); }
 #dropzone svg { color: var(--accent); opacity: 0.8; margin-bottom: 8px; }
 #dropzone p { margin: 4px 0; }
+#dropzone button { margin-top: 12px; }
 #dropzone strong { color: var(--text); font-weight: 600; }
 
 #preview-msg {

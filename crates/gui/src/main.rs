@@ -46,6 +46,10 @@ const PREVIEW_H: u32 = 720;
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(default)]
 struct Settings {
+    /// Main window geometry from the last session: (x, y, width, height).
+    /// Reopening at the default size every launch meant re-arranging the
+    /// window on a large screen every single time.
+    window_rect: Option<(i32, i32, u32, u32)>,
     last_replay: Option<String>,
     last_config: Option<String>,
     game_assets: Option<String>,
@@ -106,6 +110,7 @@ struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Settings {
+            window_rect: None,
             last_replay: None,
             last_config: None,
             game_assets: None,
@@ -264,17 +269,40 @@ fn maps_cache_dir() -> PathBuf {
 impl Settings {
     fn load() -> Settings {
         let path = config_dir().join("settings.json");
-        std::fs::read_to_string(path)
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default()
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            return Settings::default();
+        };
+        match serde_json::from_str(&text) {
+            Ok(s) => s,
+            Err(e) => {
+                // Losing every preference in silence is worse than the
+                // parse failure itself: keep the file so it can be looked
+                // at (or hand-fixed) instead of overwriting it on the next
+                // save with defaults.
+                let backup = path.with_extension("json.broken");
+                let _ = std::fs::rename(&path, &backup);
+                eprintln!(
+                    "settings.json could not be read ({e}); kept a copy at {} and started from defaults",
+                    backup.display()
+                );
+                Settings::default()
+            }
+        }
     }
 
+    /// Writes via a temporary file and a rename, so an interrupted save (or
+    /// two windows saving at once) can never leave a half-written settings
+    /// file behind — the old one stays until the new one is complete.
     fn save(&self) {
         let dir = config_dir();
         let _ = std::fs::create_dir_all(&dir);
-        if let Ok(json) = serde_json::to_string_pretty(self) {
-            let _ = std::fs::write(dir.join("settings.json"), json);
+        let Ok(json) = serde_json::to_string_pretty(self) else {
+            return;
+        };
+        let final_path = dir.join("settings.json");
+        let tmp = dir.join("settings.json.tmp");
+        if std::fs::write(&tmp, json).is_ok() && std::fs::rename(&tmp, &final_path).is_err() {
+            let _ = std::fs::remove_file(&tmp);
         }
     }
 }
@@ -879,6 +907,23 @@ fn open_releases_page(app: tauri::AppHandle) {
     let _ = app
         .opener()
         .open_url("https://github.com/KillerOp007/rhythr/releases/latest", None::<&str>);
+}
+
+/// Whether a remembered window origin still lands on a connected monitor.
+/// Screens get unplugged; a window restored onto one that is gone would be
+/// invisible with no way to drag it back.
+fn window_pos_visible(window: &tauri::WebviewWindow, x: i32, y: i32) -> bool {
+    let Ok(monitors) = window.available_monitors() else {
+        return false;
+    };
+    monitors.iter().any(|m| {
+        let p = m.position();
+        let s = m.size();
+        x >= p.x - 32
+            && y >= p.y - 32
+            && x < p.x + s.width as i32
+            && y < p.y + s.height as i32
+    })
 }
 
 fn verify_dto(replay: &Replay, map: &Map, hash_mismatch: bool) -> VerifyDto {
@@ -3909,7 +3954,47 @@ fn main() {
                     );
                 }
             }
+            let rect = inner.settings.window_rect;
             drop(inner);
+
+            // Restore the last geometry, then keep it current. Clamped
+            // against the monitor list so a window remembered on a screen
+            // that is now gone cannot open off-screen.
+            if let Some(main) = app.handle().get_webview_window("main") {
+                if let Some((x, y, w, h)) = rect {
+                    if w >= 800 && h >= 600 && window_pos_visible(&main, x, y) {
+                        let _ = main.set_size(tauri::PhysicalSize::new(w, h));
+                        let _ = main.set_position(tauri::PhysicalPosition::new(x, y));
+                    }
+                }
+                let handle = app.handle().clone();
+                main.clone().on_window_event(move |e| {
+                    if !matches!(
+                        e,
+                        tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_)
+                    ) {
+                        return;
+                    }
+                    let Some(w) = handle.get_webview_window("main") else {
+                        return;
+                    };
+                    // Skip minimised/maximised states: restoring those
+                    // coordinates would reopen the window somewhere useless.
+                    if w.is_minimized().unwrap_or(false) || w.is_maximized().unwrap_or(false) {
+                        return;
+                    }
+                    let (Ok(pos), Ok(size)) = (w.outer_position(), w.inner_size()) else {
+                        return;
+                    };
+                    let shared = handle.state::<App>().inner().clone();
+                    let mut inner = shared.lock();
+                    let next = Some((pos.x, pos.y, size.width, size.height));
+                    if inner.settings.window_rect != next {
+                        inner.settings.window_rect = next;
+                        inner.settings.save();
+                    }
+                });
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

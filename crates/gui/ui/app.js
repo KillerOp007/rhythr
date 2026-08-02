@@ -1596,10 +1596,14 @@ function initDragDrop() {
 // ------------------------------------------------------------ wiring
 
 function initControls() {
-  $("btn-replay").addEventListener("click", async () => {
+  const pickReplay = async () => {
     const p = await dialog.open({ filters: [{ name: "Rhythia replay", extensions: ["rhr"] }] });
     if (p) await loadPath(p);
-  });
+  };
+  $("btn-replay").addEventListener("click", pickReplay);
+  // The empty-state panel invited a drop but did nothing on a click, which
+  // is the first thing anyone tries.
+  $("btn-drop-open").addEventListener("click", pickReplay);
   $("btn-map").addEventListener("click", async () => {
     const p = await dialog.open({ filters: [{ name: "Map", extensions: ["sspm", "rhm", "json"] }] });
     if (p) await loadPath(p);
@@ -1668,6 +1672,13 @@ function initControls() {
     const name = li.dataset.preset;
     try {
       if (e.target.closest(".del")) {
+        const ok = await dialog.ask(`Delete the preset "${name}"?`, {
+          title: "Delete preset",
+          kind: "warning",
+          okLabel: "Delete",
+          cancelLabel: "Keep",
+        });
+        if (!ok) return;
         await call(() => invoke("delete_preset", { name }));
         renderPresetsCard();
         loadNote(`Preset deleted: ${name}`);
@@ -1742,6 +1753,13 @@ function initControls() {
   });
 
   $("btn-hud-config-reset").addEventListener("click", async () => {
+    // This throws away every dragged position and size, which is often the
+    // result of a long session with the editor.
+    const ok = await dialog.ask(
+      "Put every HUD element back to the loaded config?\n\nDragged positions and sizes are lost.",
+      { title: "Reset HUD", kind: "warning", okLabel: "Reset", cancelLabel: "Cancel" }
+    );
+    if (!ok) return;
     await call(() => invoke("reset_hud_overrides"));
     schedulePreview();
   });
