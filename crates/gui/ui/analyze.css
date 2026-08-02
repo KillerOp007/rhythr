@@ -341,3 +341,22 @@ body.an-native #an-options {
   width: 10px; height: 10px; margin: 4px 0 0 3px;
   border-radius: 50%; background: var(--sw);
 }
+
+/* Shortcut table in the View tab. */
+.an-keys {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 5px 10px;
+  align-items: baseline;
+  font-size: 11.5px;
+}
+.an-keys kbd {
+  font: inherit;
+  font-family: ui-monospace, monospace;
+  white-space: nowrap;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+}
+.an-keys span { color: var(--text-dim, #9aa7b4); }

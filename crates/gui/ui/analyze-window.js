@@ -1302,7 +1302,17 @@ function pickNote(ev) {
   }
   selNote = best;
   drawFrame(); // the merged canvas has no clear of its own
-  if (opt.section === "notes") drawSection();
+  if (best >= 0) {
+    // Clicking a note is documented as the way to inspect it, but the
+    // inspector only ever redrew if the drawer already happened to be open
+    // on that tab — so for most people the click did nothing visible.
+    opt.section = "notes";
+    saveOpt();
+    renderNav();
+    toggleOptions(true);
+  } else if (opt.section === "notes") {
+    drawSection();
+  }
 }
 
 // ------------------------------------------------------------ scrubber
@@ -1848,6 +1858,25 @@ function drawSection() {
       </div><p class="hint">The card is a shareable summary; JSON and CSV carry the per-note data. The overlay snapshot saves exactly what you see — picture plus hitboxes/path — ideal for bug reports.</p>`,
     );
   } else if (opt.section === "view") {
+    // Every shortcut in one place — they were only discoverable by hovering
+    // the right button, and half of them have no button at all.
+    html += card(
+      "Keyboard",
+      `<div class="an-keys">
+        ${[
+          ["Space", "Play / pause"],
+          ["← →", "Step one frame"],
+          ["Shift + ← →", "Jump one second"],
+          [", .", "Previous / next miss"],
+          ["L", "Loop the current miss"],
+          ["O", "Options drawer"],
+          ["F8", "Save an overlay snapshot"],
+          ["Esc", "Close the drawer"],
+        ]
+          .map(([k, what]) => `<kbd>${k}</kbd><span>${what}</span>`)
+          .join("")}
+      </div>`,
+    );
     html += card(
       "Render resolution",
       `<div class="an-toggles">
