@@ -105,6 +105,83 @@ function renderMapCard() {
     <span class="chip info">${esc(src)}</span> ${warn}`;
 }
 
+// ---------------------------------------------------- collapsible sources
+
+const CARD_STORE = "rhythr.cards.collapsed";
+
+function collapsedCards() {
+  try {
+    const v = JSON.parse(localStorage.getItem(CARD_STORE) || "[]");
+    return new Set(Array.isArray(v) ? v.filter((x) => typeof x === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function initOptionalCards() {
+  const stored = collapsedCards();
+  const first = localStorage.getItem(CARD_STORE) === null;
+  for (const card of document.querySelectorAll(".card.optional")) {
+    // First run: fold the optional sources so the rail opens compact.
+    if (first || stored.has(card.id)) card.classList.add("collapsed");
+    const title = card.querySelector(".card-head h2");
+    if (!title) continue;
+    title.tabIndex = 0;
+    title.setAttribute("role", "button");
+    const toggle = () => {
+      card.classList.toggle("collapsed");
+      const now = collapsedCards();
+      card.classList.contains("collapsed") ? now.add(card.id) : now.delete(card.id);
+      try {
+        localStorage.setItem(CARD_STORE, JSON.stringify([...now]));
+      } catch { /* nothing we can do, and nothing worth saying */ }
+    };
+    title.addEventListener("click", toggle);
+    title.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        toggle();
+      }
+    });
+  }
+  syncOptionalCards();
+}
+
+/// A card that now holds something real opens itself once — a loaded ghost
+/// or background should never be hidden behind a fold the user forgot.
+function syncOptionalCards() {
+  const filled = {
+    "card-ghost": !!status?.ghost,
+    "card-background": !!status?.settings?.background,
+    "card-game": !!status?.settings?.game_assets,
+  };
+  for (const [id, has] of Object.entries(filled)) {
+    const card = $(id);
+    if (has && card && card.classList.contains("collapsed")) {
+      card.classList.remove("collapsed");
+      const now = collapsedCards();
+      now.delete(id);
+      try {
+        localStorage.setItem(CARD_STORE, JSON.stringify([...now]));
+      } catch { /* ignore */ }
+    }
+  }
+}
+
+/// Trims a path from the middle, keeping the root and the file name — the
+/// two ends that tell you where something is. CSS ellipsis alone can only
+/// cut one end, and the rtl trick that cuts the front visibly moves the
+/// leading slash to the back.
+function shortenPath(path, max = 46) {
+  if (path.length <= max) return path;
+  const sep = path.includes("\\") ? "\\" : "/";
+  const parts = path.split(sep);
+  const name = parts.pop() || "";
+  const root = parts.slice(0, 3).join(sep);
+  const short = `${root}${sep}…${sep}${name}`;
+  return short.length < path.length ? short : `…${sep}${name}`;
+}
+
 function renderConfigCard() {
   const body = $("config-body");
   const path = status?.config?.path;
@@ -116,7 +193,7 @@ function renderConfigCard() {
   const name = path.split(/[\\/]/).pop();
   body.innerHTML = `
     <div class="src-title">${esc(name)}</div>
-    <div class="src-meta src-path" title="${esc(path)}">${esc(path)}</div>`;
+    <div class="src-meta src-path" title="${esc(path)}">${esc(shortenPath(path))}</div>`;
 }
 
 function renderGhostCard() {
@@ -1416,6 +1493,7 @@ async function applyStatus(st) {
   renderConfigCard();
   renderGameCard();
   renderRecent();
+  syncOptionalCards();
   renderHudTab();
   renderOutputTab();
   renderClipRow();
@@ -1959,6 +2037,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   initHudEdit();
   initDragDrop();
   initRenderEvents();
+  initOptionalCards();
   const st = await invoke("get_status");
   await applyStatus(st);
   initEncoders();

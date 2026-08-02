@@ -73,6 +73,27 @@ code { font-family: ui-monospace, Consolas, monospace; color: var(--accent); fon
 }
 .card-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
 .card-head h2 { margin: 0; font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); font-weight: 600; }
+
+/* Optional sources (game link, ghost, background, presets) each held a
+   paragraph of explanation forever, so the rail was eight equally loud
+   cards. They fold away; the title stays as the way back in. */
+.card.optional .card-head h2 {
+  cursor: pointer;
+  display: inline-flex; align-items: center; gap: 6px;
+  user-select: none;
+}
+.card.optional .card-head h2::before {
+  content: ""; width: 0; height: 0;
+  border-left: 4px solid currentColor;
+  border-top: 3.5px solid transparent;
+  border-bottom: 3.5px solid transparent;
+  transform: rotate(90deg);
+  transition: transform 120ms ease;
+}
+.card.optional.collapsed .card-head h2::before { transform: rotate(0deg); }
+.card.optional.collapsed .card-body { display: none; }
+.card.optional .card-head h2:hover { color: var(--text); }
+.card.optional.collapsed .card-head { margin-bottom: 0; }
 .head-actions { display: flex; gap: 6px; }
 .card-body .hint { margin: 4px 0; color: var(--muted); font-size: 13.5px; }
 
@@ -83,7 +104,6 @@ code { font-family: ui-monospace, Consolas, monospace; color: var(--accent); fon
    the tooltip. */
 .src-path {
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  direction: rtl; text-align: left;
 }
 .src-meta b { color: var(--text); font-weight: 500; }
 
