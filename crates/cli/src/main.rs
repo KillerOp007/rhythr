@@ -3,6 +3,7 @@
 
 mod manifest;
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -10,6 +11,7 @@ use anyhow::Context;
 use clap::{Parser, Subcommand};
 use rhythia_formats::{map::Map, rhr::Replay};
 use rhythia_sim::integrity;
+use serde::Deserialize;
 
 #[derive(Parser)]
 #[command(
@@ -68,6 +70,15 @@ enum Command {
         /// + notes/borders/cursors) to resolve built-in skin references.
         #[arg(long)]
         game_assets: Option<PathBuf>,
+        /// Apply the HUD layout arranged in the desktop app (element
+        /// positions, sizes, visibility, error/aim meters). Without an app
+        /// settings file the render is unchanged.
+        #[arg(long)]
+        app_layout: bool,
+        /// Take that layout from this settings.json instead of the app's
+        /// own; implies --app-layout.
+        #[arg(long, value_name = "FILE")]
+        app_layout_file: Option<PathBuf>,
     },
     /// Render a replay to an MP4 video (frames → ffmpeg + audio).
     Video {
@@ -131,6 +142,14 @@ enum Command {
         /// skin references (see `frame --game-assets`).
         #[arg(long)]
         game_assets: Option<PathBuf>,
+        /// Apply the HUD layout arranged in the desktop app (see
+        /// `frame --app-layout`).
+        #[arg(long)]
+        app_layout: bool,
+        /// Take that layout from this settings.json instead of the app's
+        /// own; implies --app-layout.
+        #[arg(long, value_name = "FILE")]
+        app_layout_file: Option<PathBuf>,
         /// Ghost races: hide the score-lead widget (numbers + bar) and the
         /// results delta graph.
         #[arg(long)]
@@ -182,6 +201,182 @@ fn load_config(
         cfg.resolve_builtins(&rhythia_render::BuiltinAssets::load(dir));
     }
     Ok(cfg)
+}
+
+// -------------------------------------------------------------- app layout
+
+/// The layout half of the desktop app's settings file: where the drag editor
+/// put each HUD element, how large, which ones are on, and the optional
+/// overlay meters. The rest of what the app stores (resolution, encoder,
+/// output paths, background) already has its own flag here and is ignored —
+/// a CLI render must stay driven by its command line.
+///
+/// This mirrors `Settings` in crates/gui/src/main.rs by FIELD NAME; the app
+/// is a binary crate, so its types cannot be imported. Any rename there has
+/// to be repeated here (see also its `apply_overrides`).
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct AppLayout {
+    hud_overrides: BTreeMap<String, bool>,
+    hud_positions: BTreeMap<String, [f32; 2]>,
+    hud_scales: BTreeMap<String, f32>,
+    /// Absent = the app never wrote this meter; keep the config's own.
+    error_meter: Option<MeterSettings>,
+    aim_meter: Option<MeterSettings>,
+    race_delta: Option<MeterSettings>,
+}
+
+/// One overlay meter's placement, as the app stores it.
+#[derive(Deserialize, Clone, Copy)]
+#[serde(default)]
+struct MeterSettings {
+    enabled: bool,
+    x: f32,
+    y: f32,
+    ghost_x: Option<f32>,
+    ghost_y: Option<f32>,
+    scale: f32,
+    alpha: f32,
+}
+
+impl Default for MeterSettings {
+    fn default() -> Self {
+        MeterSettings {
+            enabled: false,
+            x: 0.5,
+            y: 0.88,
+            ghost_x: None,
+            ghost_y: None,
+            scale: 1.0,
+            alpha: 0.9,
+        }
+    }
+}
+
+impl MeterSettings {
+    fn apply(self, target: &mut rhythia_render::config::ErrorMeter) {
+        target.enabled = self.enabled;
+        target.x = self.x.clamp(0.0, 1.0);
+        target.y = self.y.clamp(0.0, 1.0);
+        target.ghost_x = self.ghost_x.map(|v| v.clamp(0.0, 1.0));
+        target.ghost_y = self.ghost_y.map(|v| v.clamp(0.0, 1.0));
+        target.scale = self.scale.clamp(0.4, 2.5);
+        target.alpha = self.alpha.clamp(0.05, 1.0);
+    }
+}
+
+impl AppLayout {
+    /// Applies the layout onto a loaded config, in the app's own order. An
+    /// element the user never overrode keeps the skin config's value, so
+    /// `--config` still decides everything the app was not asked about.
+    fn apply(&self, cfg: &mut rhythia_render::SkinConfig) {
+        for (key, &on) in &self.hud_overrides {
+            let h = &mut cfg.hud;
+            match key.as_str() {
+                "song_info" => h.song_info = on,
+                "song_progress" => h.song_progress_bar = on,
+                "combo_ring" => h.combo_ring = on,
+                "pauses" => h.pauses = on,
+                "grade" => h.grade = on,
+                "accuracy" => h.accuracy = on,
+                "score" => h.score = on,
+                "points" => h.points = on,
+                "misses" => h.misses = on,
+                "notes" => h.notes = on,
+                "health_bar" => h.health_bar = on,
+                // Both of these are hidden in the game by zeroing an
+                // opacity, so switching them back on needs a visible value.
+                "combo_text" => {
+                    h.playfield_combo_text = on;
+                    if on && h.combo_text_opacity <= 0.0 {
+                        h.combo_text_opacity = 0.05;
+                    }
+                }
+                "miss_marker" => {
+                    if !on {
+                        h.miss_effect_opacity = 0.0;
+                    } else if h.miss_effect_opacity <= 0.0 {
+                        h.miss_effect_opacity = 1.0;
+                    }
+                }
+                "speed_label" => h.speed_label = on,
+                _ => {}
+            }
+        }
+        // The app clamps drags and resizes as they happen; a hand-edited or
+        // older file carries no such promise.
+        cfg.hud.positions = self
+            .hud_positions
+            .iter()
+            .map(|(k, p)| (k.clone(), [p[0].clamp(0.0, 1.0), p[1].clamp(0.0, 1.0)]))
+            .collect();
+        cfg.hud.scales = self
+            .hud_scales
+            .iter()
+            .map(|(k, &s)| (k.clone(), s.clamp(0.4, 2.5)))
+            .collect();
+        if let Some(m) = self.error_meter {
+            m.apply(&mut cfg.hud.error_meter);
+        }
+        if let Some(m) = self.aim_meter {
+            m.apply(&mut cfg.hud.aim_meter);
+        }
+        if let Some(m) = self.race_delta {
+            m.apply(&mut cfg.hud.race_delta);
+        }
+    }
+}
+
+/// Where the desktop app keeps its settings. Spelled out rather than pulled
+/// in via the app's `dirs` dependency — one platform rule is cheaper here
+/// than a crate, but it has to keep matching `config_dir()` over there.
+fn app_settings_path() -> PathBuf {
+    let base = if cfg!(windows) {
+        std::env::var_os("APPDATA").map(PathBuf::from)
+    } else if cfg!(target_os = "macos") {
+        std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Library/Application Support"))
+    } else {
+        std::env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            // The spec says a relative XDG_CONFIG_HOME is to be ignored.
+            .filter(|p| p.is_absolute())
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
+    };
+    base.unwrap_or_else(|| PathBuf::from("."))
+        .join("rhythr")
+        .join("settings.json")
+}
+
+/// None = nothing to apply: neither flag given, or the app has never written
+/// its settings file. Somebody who only ever used the CLI renders exactly as
+/// before.
+fn load_app_layout(use_app: bool, file: &Option<PathBuf>) -> anyhow::Result<Option<AppLayout>> {
+    let (path, named) = match file {
+        Some(p) => (p.clone(), true),
+        None if use_app => (app_settings_path(), false),
+        None => return Ok(None),
+    };
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        // A file the user named is a typo when it's missing; the app's own
+        // is simply absent until the app has run once.
+        Err(e) if named || e.kind() != std::io::ErrorKind::NotFound => {
+            return Err(anyhow::Error::new(e)
+                .context(format!("reading app layout {}", path.display())))
+        }
+        Err(_) => {
+            eprintln!(
+                "note: no app settings at {} — rendering the config's own HUD layout",
+                path.display()
+            );
+            return Ok(None);
+        }
+    };
+    // Loud on a broken file: silently rendering the wrong look costs an
+    // encode, and the app keeps a `.broken` copy for exactly this case.
+    let layout: AppLayout = serde_json::from_str(&text)
+        .with_context(|| format!("parsing app layout {}", path.display()))?;
+    Ok(Some(layout))
 }
 
 fn parse_time_ms(text: &str) -> anyhow::Result<f64> {
@@ -243,6 +438,8 @@ fn run() -> anyhow::Result<bool> {
             height,
             config,
             game_assets,
+            app_layout,
+            app_layout_file,
         } => {
             let song_ms = parse_time_ms(&at).context("parsing --at")?;
             let r = Replay::from_path(&replay)
@@ -250,7 +447,10 @@ fn run() -> anyhow::Result<bool> {
             let m = Map::from_path(&map).with_context(|| format!("reading {}", map.display()))?;
             let mut r = r;
             rhythia_sim::timebase::normalize(&mut r, &m);
-            let cfg = load_config(&config, &game_assets)?;
+            let mut cfg = load_config(&config, &game_assets)?;
+            if let Some(layout) = load_app_layout(app_layout, &app_layout_file)? {
+                layout.apply(&mut cfg);
+            }
 
             // Surface tampering before spending time rendering.
             let report = integrity::verify_replay(&r, &m);
@@ -302,6 +502,8 @@ fn run() -> anyhow::Result<bool> {
             ffmpeg,
             config,
             game_assets,
+            app_layout,
+            app_layout_file,
             no_racing_delta,
             background,
             background_dim,
@@ -330,7 +532,14 @@ fn run() -> anyhow::Result<bool> {
                 }
             }
             let mut cfg = load_config(&config, &game_assets)?;
-            cfg.hud.race_delta.enabled = !no_racing_delta;
+            if let Some(layout) = load_app_layout(app_layout, &app_layout_file)? {
+                layout.apply(&mut cfg);
+            }
+            // The opt-out wins over the app layout; the widget is otherwise
+            // on by default (HudConfig::default), as it always was.
+            if no_racing_delta {
+                cfg.hud.race_delta.enabled = false;
+            }
             let mut background_video = None;
             if let Some(bg) = &background {
                 let bg_opts = rhythia_render::background::BackgroundOptions {
