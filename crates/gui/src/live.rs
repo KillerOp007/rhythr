@@ -206,6 +206,11 @@ pub fn spawn(
         let mut linger_ms = init.linger_ms;
         let mut t = 0.0f64;
         let mut playing = false;
+        // What the last overlay tick was computed from. While paused nothing
+        // it describes can change unless a command or a resize changed it,
+        // and recomputing every note's screen quad ~40 times a second for a
+        // still picture is 3400 notes a tick on a dense map, for nothing.
+        let mut last_tick: Option<(u64, u64, u64, u32, u32, [u32; 4], bool)> = None;
         let mut speed = 1.0f64;
         let mut last = std::time::Instant::now();
         let mut fps = 0.0f32;
@@ -343,9 +348,26 @@ pub fn spawn(
 
             // Overlay tick at ~half display rate — plenty for the canvas.
             tick_counter += 1;
-            if tick_counter.is_multiple_of(2) || !playing {
-                let (fw, fh) = renderer.dimensions();
-                let (rx0, ry0, rvw, rvh) = presenter.frame_rect(&renderer);
+            let (fw, fh) = renderer.dimensions();
+            let (rx0, ry0, rvw, rvh) = presenter.frame_rect(&renderer);
+            let tick_key = (
+                t.to_bits(),
+                speed.to_bits(),
+                linger_ms.to_bits(),
+                fw,
+                fh,
+                [rx0.to_bits(), ry0.to_bits(), rvw.to_bits(), rvh.to_bits()],
+                playing,
+            );
+            // Playing: half the display rate, plenty for the canvas. Paused:
+            // only when something actually moved.
+            let send_tick = if playing {
+                tick_counter.is_multiple_of(2)
+            } else {
+                last_tick != Some(tick_key)
+            };
+            if send_tick {
+                last_tick = Some(tick_key);
                 let sides = renderer
                     .field_projections(
                         &params,
