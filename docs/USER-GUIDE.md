@@ -40,6 +40,12 @@ endorsed by Rhythia or Capo Games.
    `users/steamuser/AppData/Roaming/CapoRhythia/exports` — the numeric
    `<appid>` folder is the one that contains `pfx`. Exported replays
    land next to it in `CapoRhythia`.
+   Never exported anything? The game's own `config.json`, in that same
+   `CapoRhythia` folder, loads just as well — it carries your settings,
+   though only a `.rhs` can bring custom textures and a colorset along.
+   Skip this step entirely and the render looks like a fresh install of
+   the game: Cotton Candy colors, the full one-second approach, notes
+   at standard size.
 5. **Drop both files into the app** — the map downloads automatically
    from rhythia.com (verified against the replay and cached), a live
    preview appears, and **Render video** does the rest. Done.
@@ -87,17 +93,38 @@ endorsed by Rhythia or Capo Games.
 - **HUD tab** — toggle any HUD element (combo ring, accuracy, score,
   miss markers, …) on or off. Your choices are saved and apply to every
   future render; the yellow dot marks elements that differ from the
-  skin config. "Reset all to config" clears every override.
+  skin config. "Reset all to config" clears every override — it asks
+  first, because it also discards every position and size you dragged.
 - **Output tab** — resolution, frame rate, quality (CRF: lower = better,
-  bigger file), results-screen length, output folder and file name.
+  bigger file), results-screen length, output folder and file name. The
+  file the next render will write is named under the render button, and
+  if something is already there the app asks before overwriting it:
+  **Replace**, or **Keep both**, which writes `name (2).mp4` alongside.
 - **Encoder** — "Auto" picks the fastest working encoder (NVENC on
   NVIDIA, Quick Sync on Intel, VAAPI, otherwise x264 software). If a
   hardware encoder is unavailable, the reason appears right under the
-  selector — an outdated GPU driver is the most common cause.
+  selector — an outdated GPU driver is the most common cause. Renders
+  finish quicker than they used to, a video background most of all.
+- **Interface size** — the window's text and panels scale from 80% to
+  160%: Ctrl+= larger, Ctrl+- smaller, Ctrl+0 back to 100%, or the
+  slider under **Advanced** at the foot of the Output tab. It changes
+  the interface only — the render itself is untouched — and the Analyze
+  window follows the same setting.
+- **Save diagnostics…** — also under Advanced, and worth attaching to a
+  bug report: a plain text file with the build and operating system,
+  which ffmpeg was found and whether it runs, each hardware encoder with
+  ffmpeg's own reason when it is unavailable, what is loaded (including
+  any integrity check that failed) and your output settings. You pick
+  where it goes and can read it first; it deliberately leaves out the
+  player name and any path the window does not already show, so sending
+  it gives away no more than a screenshot would.
 - **Verified badge** — every replay is integrity-checked: the hits,
   misses and accuracy are re-derived from the raw inputs and compared
   against the file's header. "inconsistent — possibly modified" means
-  the numbers don't add up.
+  the numbers don't add up. "map may not match" is the milder case —
+  the recorded hits fit no note on the chart that is loaded, which
+  usually means it is not the chart that was played; load the right one
+  before doubting the run.
 
 ## The Analyze window
 
@@ -116,14 +143,17 @@ The replay fills the window; the gear (or `O`) opens an options drawer.
   loops the miss you are on until you turn it off. Your overlay,
   linger and volume choices are remembered for next time.
 - **Not sure what you are looking at?** The Overlays tab opens with a
-  legend for every colour, box, dot and line on the picture.
+  legend for every colour, box, dot and line on the picture, and the
+  View tab lists every keyboard shortcut the window has.
 - **Hitboxes** show the game's TRUE hit area (a fixed square, larger
   than the visual note — adjacent areas genuinely overlap, that is
   the game's own rule). At the hit plane the box freezes, and a dot
   marks exactly where your cursor was at the deciding moment: dot
-  inside the box = hit, outside = miss (with a distance line). A note
-  stays visible until the cursor actually takes it, so late hits read
-  correctly even in slow motion.
+  inside the box = hit, outside = miss (with a distance line). The box
+  then lives out the run's own hit window — the game's 55 ms stretched
+  by the speed you played at, so about 80 ms on a 1.45x run — and a
+  note stays visible until the cursor actually takes it, so late hits
+  read correctly even in slow motion.
 - **Overlays**: cursor path (recorded aim, clamped to the field
   barrier like in the game), raw cursor cross, heatmap, and per-note
   inspection — click any note to see its timing and offset.
