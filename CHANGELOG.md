@@ -5,21 +5,58 @@ endorsed by Rhythia or Capo Games.
 
 ## Unreleased
 
-The default render is measured against the game instead of approximating
-it, the hit window follows the run's speed the way the game does, and a
-round of quality-of-life work on top.
+The default render is measured against the game instead of approximating it,
+the hit window follows the run's speed the way the game does, renders got
+substantially faster, and a round of quality-of-life work on top.
+
+### Faster
+
+- **Renders are 30-40% faster**, and more on the formats that were worst off.
+  The bottleneck turned out to be neither the GPU nor the encoder: it was
+  pushing 8 MB of uncompressed RGBA per frame (33 MB at 4K) down a pipe. With
+  ffmpeg fed NV12 instead — 1.5 bytes per pixel rather than 4 — the same
+  picture crosses in 38% of the bytes and ffmpeg no longer converts it on the
+  far side either.
+
+  | | before | after |
+  |---|---|---|
+  | 1080p, hardware encoder | 8.34 s | **5.63 s** |
+  | 1080p, x264 | 9.71 s | 7.91 s |
+  | vertical 1080×1920 | 10.34 s | 7.24 s |
+  | 1080p with a video background | 14.15 s | 11.66 s |
+
+  (15 s of video on a Ryzen 5 with integrated graphics.) The colour space is
+  not a guess: ffmpeg was asked what it had been producing all along, which
+  is BT.601 limited range, and the result was checked against its own output,
+  against the previous path on real gameplay, and against an uncompressed
+  still from the renderer — the new path is marginally closer to that still
+  than the old one was.
+
+- **A video background costs a third of what it did** (20.1 s → 11.7 s on the
+  same clip). It was decoded in the middle of the render loop, blocking on a
+  pipe for a whole frame before the GPU got any work; it now runs on its own
+  thread. It also copied every frame an extra time for no reason, and — worst
+  of it — a 30 fps background under a 60 fps render made ffmpeg duplicate
+  every frame and pushed both copies through the pipe and up to the GPU. At
+  4K/120 over a 30 fps background that was four copies of 33 MB per picture.
+
+- The Analyze window stopped recomputing a still picture forty times a second
+  while paused: it was rebuilding the screen geometry of every note in the
+  map, 3400 of them on a dense chart, describing something that was not
+  moving.
 
 ### Fixed
 
 - **The hit window is no longer a constant.** The game misses a note once
   `ms > note_t + hit_window`, and that window is 55 ms scaled by the speed
   multiplier — its own settings screen documents it ("[def. 55ms] … 1.5x =
-  83; 2x = 110"). rhythr carried a flat 80 ms, which is exactly the 1.45x
-  case generalised to every run: on a 1.00x replay it accepted hits 25 ms
+  83; 2x = 110"). rhythr carried a flat 80 ms, which is exactly the 1.45×
+  case generalised to every run: on a 1.00× replay it accepted hits 25 ms
   past the point the game had already scored a miss, and the miss X came up
   just as late. Measured across 37 leaderboard replays covering every mod
-  combination — at 55 × speed every recorded hit flag finds a note and the
-  latest one lands just under the window at each speed, never above.
+  combination: at 55 × speed every recorded flag finds a note and the latest
+  one lands just under the window at each speed, never above.
+
 - **The default look now comes from the game.** `SkinConfig::default()` was
   documented as the game's defaults but reproduced one player's exported
   config value for value. Every value is now the game's own, cross-checked
@@ -31,26 +68,49 @@ round of quality-of-life work on top.
   | Approach rate | 24.5 | **40** — notes were visible 0.49 s instead of 1.0 s |
   | Spawn distance | 12 | **40** |
   | Note scale | 0.9 of 0.5 | **1.0 of 0.45** — an imported NoteScale was 11% too big |
-  | Parallax | 0, and swaying away from the cursor at 0.003/unit | **6.5, toward it at 0.025/unit** |
+  | Note shape | square | **rounded**, the mesh a fresh install selects |
+  | Parallax | 0, swaying away from the cursor at 0.003/unit | **6.5, toward it at 0.025/unit** |
   | Cursor trail | on | **off** |
   | Colorset | an invented four-hue palette | **Cotton Candy** (#00ffed / #ff8ff9) |
   | Playfield border | 5× too thick, rounded corners, opaque | **0.0152 units, sharp corners, 58.8% opacity** |
+  | HalfGhost floor | 0.26 | **0.20** |
 
-- **ffmpeg failures say what happened.** Its stderr was inherited, which in
-  a windowed app means discarded, so every encode failure read "exited with
-  exit status: 1". Its last words are now part of the error. ffmpeg is also
-  probed before a render instead of x264 being advertised regardless.
-- **A mismatched map no longer accuses your replay.** Loading the wrong
-  chart reported "inconsistent — possibly modified"; it now says the map
-  does not match, which is what the evidence actually showed.
+- **Ghost and nearsighted runs render as they were played.** The replay's
+  visibility mods were ignored, so a run played half blind came out as a
+  comfortable read of itself.
+- The cursor trail was a third too short under a speed mod — its lifetime is
+  real seconds in the game but was being measured in song time.
+- Cover art is no longer minified into aliasing on the results screen and the
+  score card, and the grade letter follows the HUD's opacity like everything
+  around it.
+- The song-info header is fitted to the frame. A long name and a long song
+  ran off the edge, and on a split-screen race into the other player's half.
+- **ffmpeg failures say what happened.** Its stderr was inherited, which in a
+  windowed app means discarded, so every encode failure read "exited with
+  exit status: 1". ffmpeg is also probed before a render instead of x264
+  being advertised regardless, and a corrected path re-probes.
+- **A mismatched map no longer accuses your replay.** Loading the wrong chart
+  reported "inconsistent — possibly modified"; it now says the map may not
+  match, and only when the frames actually back the header — an inflated
+  header still reads as inconsistent, because that is what it is.
+- **A GPU that will not start says what to try**, and the live path honours
+  `WGPU_BACKEND` so there is something to try.
 - **Rendering twice no longer overwrites the first video** without asking.
 - **Your own `config.json` loads.** The backend always accepted it; only the
   file dialog and drop handler insisted on `.rhs`.
 - **A crafted `.sspm` can no longer take the process down** — nested marker
   arrays recursed without a depth limit.
+- A panic while rendering an Analyze segment left the window waiting on a
+  progress pill forever; the startup sweep of leftover files deleted the
+  segments a second running instance was playing from, and ran before the
+  window was usable.
 - **The analyze window's keyboard survives a slider.** One click on the
   volume or speed control used to swallow space and the arrow keys for the
-  rest of the session.
+  rest of the session. Focused checkboxes and radios keep their own keys.
+- The advertised 0.01× slow motion now exists — the bottom sixteenth of the
+  speed slider did nothing.
+- The playbar wraps instead of being cut off at the window's own minimum
+  width.
 - Scrubbing resumes playback if it was playing; window geometry, and the
   analyze window's overlay and playback settings, are remembered; deleting a
   preset and resetting the HUD ask first; `settings.json` is written
@@ -62,19 +122,35 @@ round of quality-of-life work on top.
   the transport) step through them in chart order, landing 900 ms before the
   note so you see the approach rather than the aftermath. `L` loops the one
   you are on.
-- **An overlay legend.** The Overlays tab explains the boxes, dots, lines
-  and colours, drawn from the same palette the overlay uses.
+- **An overlay legend**, and a list of every shortcut, in the Analyze window.
+- **An interface scale**, 80% to 160%, on Ctrl+= / Ctrl+- / Ctrl+0 or a
+  slider under Advanced.
+- **A diagnostics file** under Advanced: build, OS, which ffmpeg was resolved
+  and whether it runs, each hardware encoder with ffmpeg's own reason when it
+  does not, what is loaded, and the output settings. You choose where it goes
+  and can read it first; it deliberately leaves out the player name and any
+  path beyond what the window already shows.
+- The render target's file name is shown before the render, not after.
 - The empty preview panel can be clicked, not just dropped onto.
+- Optional source cards fold away, and open themselves when they hold
+  something.
+- Focus is visible on every control, and the preset and recent lists can be
+  reached by keyboard.
 
-### Performance
+### Not done, and why
 
-- Vertical and square renders (1080×1920, 1080×1080) no longer allocate and
-  drop a frame-sized buffer every frame — their row stride is not
-  256-byte-aligned, so they took a de-padding copy that 1920×1080 never did.
-  Ghost races no longer deep-clone the whole skin config, texture blobs
-  included, once per frame. Both were real per-frame churn; measured
-  end-to-end the wall clock moves about 1–2%, because rendering, not memory,
-  is what a render waits on.
+- Handing frames to a writer thread, and running more frames in flight: both
+  built, both measured, both slower or flat, both reverted. There is nothing
+  to overlap with — the render side of a frame is done in 0.6 ms and the GPU
+  wait is 0.02 ms.
+- Skipping the asset bytes when the ghost side's config is cloned each frame:
+  the struct-update syntax it used evaluates the whole clone first, so it did
+  strictly more work than the plain clone it replaced. Removed rather than
+  patched with a field list that would silently drop the next field added.
+- Shadows behind the HUD text on bright backgrounds: the game does not have
+  them, and this release is about matching the game.
+- Mipmaps for the glyph atlas: inspected at 4× magnification and there are no
+  visible artefacts to fix.
 
 ## v0.5.0 — 2026-08-01
 
