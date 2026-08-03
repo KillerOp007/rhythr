@@ -28,6 +28,20 @@ function fmtTime(ms) {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
 
+/// mm:ss.ms — the clip fields need the milliseconds fmtTime rounds away.
+function fmtClock(ms) {
+  const t = Math.max(0, ms);
+  const min = Math.floor(t / 60000);
+  return `${min}:${((t - min * 60000) / 1000).toFixed(3).padStart(6, "0")}`;
+}
+
+/// "1:23.456", "1:23", "83.4" or "83" → ms; null when it reads as nothing.
+function parseClock(text) {
+  const m = String(text).trim().match(/^(?:(\d+):)?(\d+(?:[.,]\d+)?)$/);
+  if (!m) return null;
+  return (Number(m[1] || 0) * 60 + Number(m[2].replace(",", "."))) * 1000;
+}
+
 function fmtSpeed(v) {
   const r = Math.round(v * 100) / 100;
   return `${r}x`;
@@ -238,11 +252,54 @@ let tempClip = null;
 function renderClipRow() {
   const clip = status?.clip;
   $("btn-clip-clear").hidden = !clip;
-  $("clip-label").textContent = clip
-    ? `${fmtTime(clip[0])}–${fmtTime(clip[1])} (${fmtTime(clip[1] - clip[0])})`
-    : "";
+  // The bounds are in the fields; the label keeps the one thing they do
+  // not say, which is how long the clip actually is.
+  $("clip-label").textContent = clip ? fmtTime(clip[1] - clip[0]) : "";
+  writeClipFields(false);
   renderClipSuggestions();
   drawScrubber();
+}
+
+/// The clip bounds are editable, so a refresh must not overwrite what is
+/// being typed — except right after a commit, when the value that actually
+/// applies has to land in the field the user still has focus in.
+function writeClipFields(force) {
+  const clip = status?.clip;
+  const put = (id, ms, whole) => {
+    const el = $(id);
+    if (!el || (!force && document.activeElement === el)) return;
+    el.value = ms == null ? "" : fmtClock(ms);
+    el.placeholder = fmtClock(whole);
+  };
+  put("clip-in", clip ? clip[0] : null, 0);
+  put("clip-out", clip ? clip[1] : null, timelineData?.length_ms || 0);
+}
+
+/// One nudge: a frame at the rate this will render at, a second with Shift.
+/// A clip that cannot be moved by single frames cannot be cut on the beat.
+function clipStep(big) {
+  return big ? 1000 : 1000 / (status?.settings?.fps || 60);
+}
+
+/// Moves one edge of the clip and leaves the other where it is, creating
+/// the clip from the full run if there was none.
+async function applyClipBound(isIn, ms) {
+  const len = timelineData?.length_ms || 0;
+  const cur = status?.clip;
+  let s = cur ? cur[0] : 0;
+  let e = cur ? cur[1] : len;
+  // The backend rejects anything under half a second: hold the edited edge
+  // there instead of bouncing an error off the user.
+  if (isIn) s = Math.min(Math.max(0, ms), e - 500);
+  else e = Math.max(Math.min(len, ms), s + 500);
+  try {
+    await call(() => invoke("set_clip", { startMs: s, endMs: e }));
+  } catch (err) {
+    loadNote(String(err));
+  }
+  writeClipFields(true);
+  // Frame-exact only means something if you can see the frame.
+  seekTo(isIn ? s : e);
 }
 
 // Suggestions computed from the run itself — offered, never imposed: a
@@ -581,16 +638,36 @@ function renderHudTab() {
 function renderOutputTab() {
   const s = status?.settings;
   if (!s) return;
+  // A field being typed into owns its value until the change lands.
+  const put = (id, v) => {
+    const el = $(id);
+    if (document.activeElement !== el) el.value = v;
+  };
+  // Resolution and frame rate fall back to their custom fields for anything
+  // the lists don't hold; picking "Custom…" keeps them open even though the
+  // stored value is still one of the presets.
   const res = `${s.width}x${s.height}`;
   const resSel = $("set-res");
-  if (![...resSel.options].some((o) => o.value === res)) {
+  const resCustom =
+    resSel.value === "custom" || ![...resSel.options].some((o) => o.value === res);
+  resSel.value = resCustom ? "custom" : res;
+  $("res-custom").hidden = !resCustom;
+  put("set-res-w", String(s.width));
+  put("set-res-h", String(s.height));
+  const fpsSel = $("set-fps");
+  const fpsCustom =
+    fpsSel.value === "custom" || ![...fpsSel.options].some((o) => o.value === String(s.fps));
+  fpsSel.value = fpsCustom ? "custom" : String(s.fps);
+  $("set-fps-custom").hidden = !fpsCustom;
+  put("set-fps-custom", String(s.fps));
+  const presetSel = $("set-preset");
+  if (![...presetSel.options].some((o) => o.value === s.preset)) {
     const opt = document.createElement("option");
-    opt.value = res;
-    opt.textContent = `${s.width} × ${s.height}`;
-    resSel.appendChild(opt);
+    opt.value = s.preset;
+    opt.textContent = s.preset;
+    presetSel.appendChild(opt);
   }
-  resSel.value = res;
-  $("set-fps").value = String(s.fps);
+  presetSel.value = s.preset;
   $("set-crf").value = String(s.crf);
   $("crf-val").textContent = String(s.crf);
   $("set-encoder").value = s.encoder;
@@ -734,14 +811,18 @@ function drawScrubber() {
   ctx.fillRect(px - 1, 0, 2, h);
 }
 
+function seekTo(ms) {
+  currentMs = Math.min(timelineData?.length_ms || 0, Math.max(0, ms));
+  $("scrub-time").textContent = fmtTime(currentMs);
+  drawScrubber();
+  schedulePreview();
+}
+
 function scrubTo(clientX) {
   const canvas = $("scrubber");
   const rect = canvas.getBoundingClientRect();
   const frac = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
-  currentMs = frac * (timelineData?.length_ms || 0);
-  $("scrub-time").textContent = fmtTime(currentMs);
-  drawScrubber();
-  schedulePreview();
+  seekTo(frac * (timelineData?.length_ms || 0));
 }
 
 // Meter geometry in preview-image pixels, mirroring hud.rs. In a ghost
@@ -936,6 +1017,19 @@ async function refreshHudBoxes() {
   drawEditGrid();
 }
 
+/// The history is global — Ctrl+Z works anywhere and the HUD tab pushes
+/// steps of its own — so the buttons follow can_undo/can_redo rather than
+/// the editor, which would hide them in the very moment something became
+/// undoable. The editor keeps them in place while it is open.
+function syncHistoryButtons() {
+  const undo = $("btn-hud-undo");
+  const redo = $("btn-hud-redo");
+  undo.hidden = !(hudEditOn || status?.can_undo);
+  redo.hidden = !(hudEditOn || status?.can_redo);
+  undo.disabled = !status?.can_undo;
+  redo.disabled = !status?.can_redo;
+}
+
 function initHudEdit() {
   const wrap = $("preview-wrap");
   const layer = document.createElement("div");
@@ -947,8 +1041,7 @@ function initHudEdit() {
     $("btn-edit-hud").classList.toggle("active", hudEditOn);
     $("btn-hud-reset").hidden = !hudEditOn;
     $("btn-hud-grid").hidden = !hudEditOn;
-    $("btn-hud-undo").hidden = !hudEditOn;
-    $("btn-hud-redo").hidden = !hudEditOn;
+    syncHistoryButtons();
     if (!hudEditOn) gridMenu.hidden = true;
     refreshHudBoxes();
   });
@@ -1353,6 +1446,46 @@ function showPreviewMsg(text) {
 
 // ------------------------------------------------------------ render flow
 
+// A render runs for minutes and people alt-tab away, so the end of one has
+// to be visible from outside the window. The title is the one channel a
+// webview always owns; it goes back to normal the moment the window is
+// looked at again. No focus stealing, no dialog.
+const BASE_TITLE = document.title;
+let titleNotice = false;
+let notifyAsked = false;
+
+function setWindowNotice(text) {
+  if (document.hasFocus()) return;
+  titleNotice = true;
+  document.title = `${text} — ${BASE_TITLE}`;
+  // A real notification on top, where the webview has them and the user has
+  // already allowed them. Optional by design: it must never throw.
+  try {
+    if (window.Notification && Notification.permission === "granted") {
+      new Notification(BASE_TITLE, { body: text });
+    }
+  } catch { /* no notifications in this webview — the title said it */ }
+}
+
+function clearWindowNotice() {
+  if (!titleNotice) return;
+  titleNotice = false;
+  document.title = BASE_TITLE;
+}
+
+/// Asked when a render starts, never at launch: that is the one moment the
+/// question makes sense, and the window still has focus to answer it in.
+function askNotifyPermission() {
+  if (notifyAsked) return;
+  notifyAsked = true;
+  try {
+    if (window.Notification && Notification.permission === "default") {
+      const p = Notification.requestPermission();
+      if (p && typeof p.catch === "function") p.catch(() => {});
+    }
+  } catch { /* nothing to ask */ }
+}
+
 function setRenderingUi(on) {
   rendering = on;
   $("btn-render").hidden = on;
@@ -1382,6 +1515,7 @@ async function startRender() {
   try {
     lastOutPath = await invoke("start_render", { keepExisting });
     setRenderingUi(true);
+    askNotifyPermission();
     $("render-text").textContent = "Starting…";
   } catch (e) {
     $("render-text").textContent = String(e);
@@ -1406,6 +1540,7 @@ function initRenderEvents() {
     lastOutPath = e.payload;
     $("render-text").textContent = `Done — ${e.payload}`;
     $("btn-open-out").hidden = false;
+    setWindowNotice("Render finished");
   });
   listen("render-cancelled", () => {
     setRenderingUi(false);
@@ -1416,6 +1551,7 @@ function initRenderEvents() {
     setRenderingUi(false);
     updateRenderButton();
     $("render-text").textContent = `Error: ${e.payload}`;
+    setWindowNotice("Render failed");
   });
 }
 
@@ -1507,8 +1643,7 @@ async function applyStatus(st) {
   renderOutputTab();
   renderClipRow();
   updateRenderButton();
-  $("btn-hud-undo").disabled = !st.can_undo;
-  $("btn-hud-redo").disabled = !st.can_redo;
+  syncHistoryButtons();
 
   // A page (re)load during an active render must show the rendering state.
   if (st.rendering && !rendering) setRenderingUi(true);
@@ -1818,6 +1953,36 @@ function initControls() {
   // Clip range.
   $("btn-clip-in").addEventListener("click", () => setClipEdge(true));
   $("btn-clip-out").addEventListener("click", () => setClipEdge(false));
+  const wireClipField = (id, isIn) => {
+    const el = $(id);
+    el.addEventListener("keydown", (e) => {
+      const dir = e.key === "ArrowUp" ? 1 : e.key === "ArrowDown" ? -1 : 0;
+      if (!dir) return;
+      e.preventDefault();
+      const base = parseClock(el.value) ?? (isIn ? 0 : timelineData?.length_ms || 0);
+      const next = base + dir * clipStep(e.shiftKey);
+      // Written before the round trip, so a held arrow key keeps counting
+      // from where it already is instead of from a stale field.
+      el.value = fmtClock(next);
+      applyClipBound(isIn, next);
+    });
+    el.addEventListener("change", () => {
+      const ms = parseClock(el.value);
+      // Unreadable: put the bound that actually applies back in the field.
+      if (ms == null) {
+        writeClipFields(true);
+        return;
+      }
+      // Blurring after a nudge fires this with the value the nudge already
+      // set; re-sending it would seek the preview a second time.
+      const cur = status?.clip;
+      const now = cur ? (isIn ? cur[0] : cur[1]) : null;
+      if (now != null && Math.abs(now - ms) < 0.5) return;
+      applyClipBound(isIn, ms);
+    });
+  };
+  wireClipField("clip-in", true);
+  wireClipField("clip-out", false);
   $("btn-clip-clear").addEventListener("click", async () => {
     await call(() => invoke("clear_clip"));
     renderClipRow();
@@ -1846,10 +2011,55 @@ function initControls() {
 
   // Output settings.
   $("set-res").addEventListener("change", () => {
+    if ($("set-res").value === "custom") {
+      // Nothing changes until a number is entered — just open the fields.
+      $("res-custom").hidden = false;
+      $("set-res-w").focus();
+      $("set-res-w").select();
+      return;
+    }
     const [w, h] = $("set-res").value.split("x").map(Number);
     pushOutput({ width: w, height: h });
   });
-  $("set-fps").addEventListener("change", () => pushOutput({ fps: Number($("set-fps").value) }));
+  // h.264 in yuv420p cannot encode an odd side: round here rather than let
+  // ffmpeg refuse the job minutes in. The bounds are the backend's own.
+  const fitEven = (v, lo, hi) => Math.min(hi, Math.max(lo, Math.round(v / 2) * 2));
+  const pushRes = () => {
+    const w = Number($("set-res-w").value.trim());
+    const h = Number($("set-res-h").value.trim());
+    if (!Number.isFinite(w) || !Number.isFinite(h) || w < 1 || h < 1) {
+      $("set-res-w").value = String(status?.settings?.width ?? 1920);
+      $("set-res-h").value = String(status?.settings?.height ?? 1080);
+      return;
+    }
+    const fw = fitEven(w, 320, 7680);
+    const fh = fitEven(h, 240, 4320);
+    $("set-res-w").value = String(fw);
+    $("set-res-h").value = String(fh);
+    pushOutput({ width: fw, height: fh });
+  };
+  $("set-res-w").addEventListener("change", pushRes);
+  $("set-res-h").addEventListener("change", pushRes);
+  $("set-fps").addEventListener("change", () => {
+    if ($("set-fps").value === "custom") {
+      $("set-fps-custom").hidden = false;
+      $("set-fps-custom").focus();
+      $("set-fps-custom").select();
+      return;
+    }
+    pushOutput({ fps: Number($("set-fps").value) });
+  });
+  $("set-fps-custom").addEventListener("change", () => {
+    const v = Math.round(Number($("set-fps-custom").value.trim()));
+    if (!Number.isFinite(v) || v < 1) {
+      $("set-fps-custom").value = String(status?.settings?.fps ?? 60);
+      return;
+    }
+    const fps = Math.min(240, Math.max(24, v));
+    $("set-fps-custom").value = String(fps);
+    pushOutput({ fps });
+  });
+  $("set-preset").addEventListener("change", () => pushOutput({ preset: $("set-preset").value }));
   $("set-crf").addEventListener("input", () => { $("crf-val").textContent = $("set-crf").value; });
   $("set-crf").addEventListener("change", () => pushOutput({ crf: Number($("set-crf").value) }));
   $("set-encoder").addEventListener("change", () => pushOutput({ encoder: $("set-encoder").value }));
@@ -2106,6 +2316,10 @@ async function initUpdater() {
 
 window.addEventListener("DOMContentLoaded", async () => {
   initUiScale();
+  window.addEventListener("focus", clearWindowNotice);
+  // Insurance: a webview that swallows the window focus event must not be
+  // able to leave the title stuck on an old render.
+  document.addEventListener("pointerdown", clearWindowNotice);
   window.__TAURI__.app.getVersion().then((v) => { $("app-ver").textContent = `v${v}`; });
   $("preview-img").draggable = false;
   // The rAF below the src swap can race the decode; the load event is the

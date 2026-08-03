@@ -121,6 +121,14 @@ code { font-family: ui-monospace, Consolas, monospace; color: var(--accent); fon
 }
 .src-meta b { color: var(--text); font-weight: 500; }
 
+/* Numeric fields want tabular figures, but `input, select { font: inherit }`
+   further down outranks the .mono class, so they are named here instead. */
+#clip-row input,
+#tab-output input.mono {
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
 .chip {
   display: inline-flex; align-items: center; gap: 5px;
   font-size: var(--fs-xs); padding: 2px 8px; border-radius: var(--radius-pill);

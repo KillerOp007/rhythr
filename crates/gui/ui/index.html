@@ -161,7 +161,14 @@
       <div id="clip-row" hidden>
         <button class="btn small" id="btn-clip-in" title="Clip starts at the playhead">Set start</button>
         <button class="btn small" id="btn-clip-out" title="Clip ends at the playhead">Set end</button>
-        <span id="clip-label" class="mono muted"></span>
+        <input type="text" id="clip-in" class="mono" inputmode="decimal" spellcheck="false"
+               style="width:6.4rem" aria-label="Clip start"
+               title="Clip start as mm:ss.ms — type it, or nudge with ↑ / ↓ (one frame, Shift = one second)" />
+        <span class="muted" aria-hidden="true">–</span>
+        <input type="text" id="clip-out" class="mono" inputmode="decimal" spellcheck="false"
+               style="width:6.4rem" aria-label="Clip end"
+               title="Clip end as mm:ss.ms — type it, or nudge with ↑ / ↓ (one frame, Shift = one second)" />
+        <span id="clip-label" class="mono muted" title="Clip length"></span>
         <button class="btn small ghost" id="btn-clip-clear" hidden title="Render the full run again">✕</button>
         <span style="flex:1"></span>
         <span id="clip-suggest"></span>
@@ -187,7 +194,7 @@
       </nav>
 
       <div class="tab-page" id="tab-output">
-        <label class="field">
+        <div class="field">
           <span>Resolution</span>
           <select id="set-res">
             <option value="1280x720">1280 × 720</option>
@@ -196,16 +203,27 @@
             <option value="3840x2160">3840 × 2160</option>
             <option value="1080x1920">1080 × 1920 (vertical)</option>
             <option value="720x1280">720 × 1280 (vertical)</option>
+            <option value="custom">Custom…</option>
           </select>
-        </label>
-        <label class="field">
+          <div class="row" id="res-custom" hidden>
+            <input type="text" id="set-res-w" class="mono" inputmode="numeric" spellcheck="false"
+                   aria-label="Width" title="Width in pixels (320–7680, rounded to an even number)" />
+            <span class="sub" style="align-self:center">×</span>
+            <input type="text" id="set-res-h" class="mono" inputmode="numeric" spellcheck="false"
+                   aria-label="Height" title="Height in pixels (240–4320, rounded to an even number)" />
+          </div>
+        </div>
+        <div class="field">
           <span>Frame rate</span>
           <select id="set-fps">
             <option value="30">30 fps</option>
             <option value="60" selected>60 fps</option>
             <option value="120">120 fps</option>
+            <option value="custom">Custom…</option>
           </select>
-        </label>
+          <input type="text" id="set-fps-custom" class="mono" inputmode="numeric" spellcheck="false"
+                 aria-label="Frames per second" title="Frames per second (24–240)" hidden />
+        </div>
         <label class="field">
           <span>Quality <em id="crf-val" class="mono">18</em></span>
           <input type="range" id="set-crf" min="14" max="30" step="1" value="18" />
@@ -217,6 +235,21 @@
             <option value="auto" selected>Auto (fastest available)</option>
           </select>
           <span class="sub" id="encoder-note" hidden></span>
+        </label>
+        <label class="field">
+          <span>Speed preset</span>
+          <select id="set-preset">
+            <option value="ultrafast">Ultrafast</option>
+            <option value="superfast">Superfast</option>
+            <option value="veryfast" selected>Very fast</option>
+            <option value="faster">Faster</option>
+            <option value="fast">Fast</option>
+            <option value="medium">Medium</option>
+            <option value="slow">Slow</option>
+            <option value="slower">Slower</option>
+            <option value="veryslow">Very slow</option>
+          </select>
+          <span class="sub">x264 only — a slower preset encodes longer and writes a smaller file at the same quality. Hardware encoders bring their own.</span>
         </label>
         <label class="field">
           <span>Motion blur</span>
