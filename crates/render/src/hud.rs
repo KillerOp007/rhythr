@@ -881,7 +881,10 @@ pub fn build_hud(
             y + value_px * 0.9,
             value_px * 1.5,
             Align::Center,
-            srgb8_to_linear(g.color(), 1.0),
+            // Its own colour (the game's, per grade) but the panel's
+            // opacity: at 1.0 it was the one element that ignored a dimmed
+            // HUD and sat there at full strength among faded neighbours.
+            srgb8_to_linear(g.color(), panel_a),
         );
         if !portrait {
             fan_tilt(&mut b, el, x, y + value_px * 0.6);

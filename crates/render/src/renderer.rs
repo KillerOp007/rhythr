@@ -1954,6 +1954,20 @@ impl Renderer {
                 .and_then(decode_image_rgba)
                 .unwrap_or((vec![28, 28, 32, 255], 1, 1));
         let (pixels, cw, ch) = cover_rgba;
+        // Pooled down to about twice its on-screen size before upload. Covers
+        // arrive at 1000 px and up but are drawn at roughly a third of the
+        // frame height, and a bilinear sample of a texture minified 3x aliases
+        // visibly on the fine detail cover art tends to have. Two texels per
+        // pixel is enough for the filter to do the rest cleanly.
+        let display_px = (self.height as f32 * 0.303).max(self.width as f32 * 0.28);
+        let (pixels, cw, ch) = {
+            let target = (display_px * 2.0).ceil() as u32;
+            if cw.max(ch) > target {
+                average_pool(&pixels, cw, ch, target)
+            } else {
+                (pixels, cw, ch)
+            }
+        };
         let cover_tex = self.upload_rgba(&pixels, cw, ch);
         let (bp, bw, bh) = average_pool(&pixels, cw, ch, 20);
         let blur_tex = self.upload_rgba(&bp, bw, bh);
@@ -2180,6 +2194,17 @@ impl Renderer {
             .and_then(decode_image_rgba)
             .unwrap_or((vec![28, 28, 32, 255], 1, 1));
         let (pixels, cw, ch) = cover_rgba;
+        // Same reason as the results screen: pooled to about twice the size
+        // it is drawn at, so a bilinear sample is not minifying by 3x.
+        let (_, _, display_px) = crate::hud::card_cover_rect(self.width, self.height);
+        let (pixels, cw, ch) = {
+            let target = (display_px * 2.0).ceil() as u32;
+            if cw.max(ch) > target {
+                average_pool(&pixels, cw, ch, target)
+            } else {
+                (pixels, cw, ch)
+            }
+        };
         let cover_tex = self.upload_rgba(&pixels, cw, ch);
         let cover_view = cover_tex.create_view(&Default::default());
         let bind = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
