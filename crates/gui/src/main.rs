@@ -642,6 +642,26 @@ fn err_str(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
 
+/// A GPU that cannot be brought up reaches the user as one line of text, so
+/// that line has to carry the next step: which layer failed, why it usually
+/// fails, and the two escapes that exist (a driver the backend can use, or a
+/// different backend). Errors that are not GPU bring-up keep their own text.
+fn gpu_err(e: &rhythia_render::Error) -> String {
+    match e {
+        rhythia_render::Error::NoAdapter => "no usable GPU: no graphics adapter accepted the \
+             renderer. rhythr draws through Vulkan (Linux, Windows), DX12 (Windows) or Metal \
+             (macOS) — on Linux a driver without Vulkan support is the usual cause. Update the \
+             graphics driver, or start rhythr with WGPU_BACKEND=gl to force the OpenGL backend."
+            .to_string(),
+        rhythia_render::Error::Device(msg) => format!(
+            "the GPU was found but would not open a device ({msg}). That is normally an \
+             out-of-date or wedged graphics driver; updating it, or starting rhythr with \
+             WGPU_BACKEND=gl, is the next thing to try."
+        ),
+        other => other.to_string(),
+    }
+}
+
 /// Placement/looks of an optional overlay meter (normalised position).
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq)]
 #[serde(default)]
@@ -2402,104 +2422,118 @@ fn prepare_segment(
     };
     let out = dir.join(format!("seg{token}.mp4"));
 
+    let panic_out = out.clone();
+    let panic_handle = app_handle.clone();
     std::thread::spawn(move || {
-        let emit_err = |msg: String| {
-            let _ = app_handle.emit("segment-error", serde_json::json!({"token": token, "message": msg}));
-        };
-        let renderer = match rhythia_render::Renderer::new(w, h, cfg.hud_font.as_deref()) {
-            Ok(r) => r,
-            Err(e) => return emit_err(e.to_string()),
-        };
-        let ghost_opts = ghost.map(|g| rhythia_render::video::GhostOptions {
-            replay: g,
-            color: GHOST_COLOR,
-        });
-        let opts = rhythia_render::video::VideoOptions {
-            fps,
-            start_ms: start,
-            end_ms: end,
-            ffmpeg,
-            audio: None,
-            crf: 20,
-            preset: "ultrafast".into(),
-            encoder,
-            results_secs: 0.0,
-            motion_blur: 0,
-            music_volume: 0.0,
-            hitsounds: None,
-            ghost: ghost_opts,
-            // Starts instantly and seeks anywhere: the moov atom up front
-            // and a keyframe twice a second.
-            extra_output_args: vec![
-                "-movflags".into(),
-                "+faststart".into(),
-                "-g".into(),
-                (fps / 2).max(1).to_string(),
-            ],
-            background_video: None,
-        };
-        let app2 = app.clone();
-        let handle2 = app_handle.clone();
-        let mut last_pct = u64::MAX;
-        let res = rhythia_render::video::render_video(
-            &renderer,
-            &params,
-            &cfg,
-            &replay,
-            &main_map,
-            &out,
-            &opts,
-            move |done, total| {
-                if app2.segment_gen.load(Ordering::SeqCst) != token {
-                    return false; // superseded — stop rendering
-                }
-                let pct = if total > 0 { done * 100 / total } else { 0 };
-                if pct != last_pct {
-                    last_pct = pct;
-                    let _ = handle2.emit(
-                        "segment-progress",
-                        serde_json::json!({"token": token, "pct": pct}),
+        // A panic in the job (wgpu device loss, driver reset, …) must still
+        // reach the Analyze window: it clears its "Rendering …" pill only on
+        // segment-ready or segment-error, so a silent death hangs it forever.
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let emit_err = |msg: String| {
+                let _ = app_handle.emit("segment-error", serde_json::json!({"token": token, "message": msg}));
+            };
+            let renderer = match rhythia_render::Renderer::new(w, h, cfg.hud_font.as_deref()) {
+                Ok(r) => r,
+                Err(e) => return emit_err(gpu_err(&e)),
+            };
+            let ghost_opts = ghost.map(|g| rhythia_render::video::GhostOptions {
+                replay: g,
+                color: GHOST_COLOR,
+            });
+            let opts = rhythia_render::video::VideoOptions {
+                fps,
+                start_ms: start,
+                end_ms: end,
+                ffmpeg,
+                audio: None,
+                crf: 20,
+                preset: "ultrafast".into(),
+                encoder,
+                results_secs: 0.0,
+                motion_blur: 0,
+                music_volume: 0.0,
+                hitsounds: None,
+                ghost: ghost_opts,
+                // Starts instantly and seeks anywhere: the moov atom up front
+                // and a keyframe twice a second.
+                extra_output_args: vec![
+                    "-movflags".into(),
+                    "+faststart".into(),
+                    "-g".into(),
+                    (fps / 2).max(1).to_string(),
+                ],
+                background_video: None,
+            };
+            let app2 = app.clone();
+            let handle2 = app_handle.clone();
+            let mut last_pct = u64::MAX;
+            let res = rhythia_render::video::render_video(
+                &renderer,
+                &params,
+                &cfg,
+                &replay,
+                &main_map,
+                &out,
+                &opts,
+                move |done, total| {
+                    if app2.segment_gen.load(Ordering::SeqCst) != token {
+                        return false; // superseded — stop rendering
+                    }
+                    let pct = if total > 0 { done * 100 / total } else { 0 };
+                    if pct != last_pct {
+                        last_pct = pct;
+                        let _ = handle2.emit(
+                            "segment-progress",
+                            serde_json::json!({"token": token, "pct": pct}),
+                        );
+                    }
+                    true
+                },
+            );
+            if app.segment_gen.load(Ordering::SeqCst) != token {
+                let _ = std::fs::remove_file(&out);
+                return;
+            }
+            match res {
+                Ok(()) => {
+                    {
+                        let mut seg = app.segment.lock().unwrap_or_else(|p| p.into_inner());
+                        if let Some(old) = seg.ready.take() {
+                            let _ = std::fs::remove_file(&old.path);
+                        }
+                        seg.ready = Some(ReadySegment {
+                            token,
+                            path: out.clone(),
+                            start_ms: start,
+                            span_ms: end - start,
+                            out_fps: fps,
+                        });
+                    }
+                    let _ = app_handle.emit(
+                        "segment-ready",
+                        serde_json::json!({
+                            "token": token,
+                            "startMs": start,
+                            "spanMs": end - start,
+                            "outFps": fps,
+                        }),
                     );
                 }
-                true
-            },
-        );
-        if app.segment_gen.load(Ordering::SeqCst) != token {
-            let _ = std::fs::remove_file(&out);
-            return;
-        }
-        match res {
-            Ok(()) => {
-                {
-                    let mut seg = app.segment.lock().unwrap_or_else(|p| p.into_inner());
-                    if let Some(old) = seg.ready.take() {
-                        let _ = std::fs::remove_file(&old.path);
-                    }
-                    seg.ready = Some(ReadySegment {
-                        token,
-                        path: out.clone(),
-                        start_ms: start,
-                        span_ms: end - start,
-                        out_fps: fps,
-                    });
+                Err(rhythia_render::Error::Cancelled) => {
+                    let _ = std::fs::remove_file(&out);
                 }
-                let _ = app_handle.emit(
-                    "segment-ready",
-                    serde_json::json!({
-                        "token": token,
-                        "startMs": start,
-                        "spanMs": end - start,
-                        "outFps": fps,
-                    }),
-                );
+                Err(e) => {
+                    let _ = std::fs::remove_file(&out);
+                    emit_err(gpu_err(&e));
+                }
             }
-            Err(rhythia_render::Error::Cancelled) => {
-                let _ = std::fs::remove_file(&out);
-            }
-            Err(e) => {
-                let _ = std::fs::remove_file(&out);
-                emit_err(e.to_string());
-            }
+        }));
+        if outcome.is_err() {
+            let _ = std::fs::remove_file(&panic_out);
+            let _ = panic_handle.emit(
+                "segment-error",
+                serde_json::json!({"token": token, "message": "segment renderer crashed"}),
+            );
         }
     });
     Ok(token)
@@ -2603,7 +2637,11 @@ async fn start_live_session(
     let win2 = window.clone();
     window
         .run_on_main_thread(move || {
-            let instance = wgpu::Instance::default();
+            // Built from the environment, not `default()`: WGPU_BACKEND is
+            // the only escape hatch a user has when the picked backend is
+            // the broken one, and wgpu reads it only when asked to.
+            let instance =
+                wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
             let surface = instance.create_surface(win2.clone()).map_err(|e| e.to_string());
             let _ = stx.send(surface.map(|s| (instance, s)));
         })
@@ -2924,7 +2962,7 @@ fn ensure_preview_ctx(app: &App, _time_ms: f64) -> Result<(), String> {
                 (base_h * PREVIEW_W / PREVIEW_H, base_h)
             };
             let renderer = rhythia_render::Renderer::new(pw.max(64), ph, cfg.hud_font.as_deref())
-                .map_err(err_str)?;
+                .map_err(|e| gpu_err(&e))?;
             let mut params = SceneParams::from(&cfg);
             let skin = renderer.prepare_skin(&cfg);
             let (_, r) = inner.replay.as_ref().unwrap();
@@ -3395,7 +3433,7 @@ async fn export_frame(
         let (w, h) = (inner.settings.width, inner.settings.height);
         let mut params = SceneParams::from(&cfg);
         let renderer =
-            rhythia_render::Renderer::new(w, h, cfg.hud_font.as_deref()).map_err(err_str)?;
+            rhythia_render::Renderer::new(w, h, cfg.hud_font.as_deref()).map_err(|e| gpu_err(&e))?;
         let skin = renderer.prepare_skin(&cfg);
         let (m, mods) = rhythia_render::mods::map_for_replay(m, r);
         params.grid_scale = mods.grid_scale;
@@ -3430,7 +3468,7 @@ async fn export_card(
         let (_, m) = inner.map.as_ref().ok_or("no map loaded")?;
         let cfg = effective_config(&inner);
         let renderer =
-            rhythia_render::Renderer::new(w, h, cfg.hud_font.as_deref()).map_err(err_str)?;
+            rhythia_render::Renderer::new(w, h, cfg.hud_font.as_deref()).map_err(|e| gpu_err(&e))?;
         let hud = rhythia_render::hud::HudState::new(m, r);
         let pixels = renderer.render_card(r, m, &hud, &cfg).map_err(err_str)?;
         rhythia_render::write_png(Path::new(&path), &pixels, w, h).map_err(err_str)
@@ -3605,7 +3643,7 @@ fn start_render(
                 let _ = app_handle.emit("render-cancelled", ());
             }
             Ok(Err(e)) => {
-                let _ = app_handle.emit("render-error", e.to_string());
+                let _ = app_handle.emit("render-error", gpu_err(&e));
             }
             Err(panic) => {
                 let msg = panic
@@ -3813,6 +3851,60 @@ async fn probe_encoders(state: tauri::State<'_, App>) -> Result<EncoderProbe, St
 
 // -------------------------------------------------------------------- main
 
+/// How long a segment directory must have sat untouched before a platform
+/// without a PID probe may delete it. Anything younger could still belong to
+/// a rhythr that is playing from it right now.
+const SEGMENT_DIR_STALE_SECS: u64 = 6 * 60 * 60;
+
+/// Whether a PID still belongs to a running process. `None` where the
+/// platform has no cheap answer and the caller has to fall back on age.
+#[cfg(target_os = "linux")]
+fn pid_alive(pid: u32) -> Option<bool> {
+    Some(Path::new("/proc").join(pid.to_string()).exists())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn pid_alive(_pid: u32) -> Option<bool> {
+    None
+}
+
+/// Drops `rhythr-segments-<pid>` directories that no live rhythr can own.
+/// A second launch runs this before the single-instance plugin turns it away
+/// (that happens inside the Tauri builder), so at this point it is a real
+/// process next to the first one — and the first one's segments are the
+/// video its Analyze window is playing from.
+fn sweep_stale_segments() {
+    let Ok(rd) = std::fs::read_dir(std::env::temp_dir()) else {
+        return;
+    };
+    let own = std::process::id();
+    for e in rd.flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        let Some(pid) = name
+            .strip_prefix("rhythr-segments-")
+            .and_then(|p| p.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        // Ours is created lazily on the first segment — while this sweep runs.
+        if pid == own {
+            continue;
+        }
+        let stale = match pid_alive(pid) {
+            Some(alive) => !alive,
+            None => e
+                .metadata()
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.elapsed().ok())
+                .is_some_and(|age| age.as_secs() > SEGMENT_DIR_STALE_SECS),
+        };
+        if stale {
+            let _ = std::fs::remove_dir_all(e.path());
+        }
+    }
+}
+
 fn main() {
     // WebKitGTK's DMA-BUF renderer is broken on many Linux/Wayland driver
     // combinations (blank window or a Wayland protocol-error crash,
@@ -3873,15 +3965,9 @@ fn main() {
         }
     }
 
-    // Segments from a previous run (a crash, a kill) are dead weight.
-    if let Ok(rd) = std::fs::read_dir(std::env::temp_dir()) {
-        for e in rd.flatten() {
-            let name = e.file_name().to_string_lossy().into_owned();
-            if name.starts_with("rhythr-segments-") {
-                let _ = std::fs::remove_dir_all(e.path());
-            }
-        }
-    }
+    // Segments from a previous run (a crash, a kill) are dead weight, but
+    // scanning temp is filesystem I/O the window should not wait behind.
+    std::thread::spawn(sweep_stale_segments);
 
     tauri::Builder::default()
         // Frame channel for the Analyze window: PNG bytes straight into
@@ -4212,6 +4298,16 @@ fn main() {
                     });
                     // A stalled ffmpeg must not hang the exit forever.
                     let _ = rx.recv_timeout(std::time::Duration::from_secs(5));
+                }
+                // This session's segments die with it, so the next launch's
+                // sweep normally has nothing left to decide about.
+                let seg_dir = {
+                    let mut seg = shared.segment.lock().unwrap_or_else(|p| p.into_inner());
+                    seg.ready = None;
+                    seg.dir.take()
+                };
+                if let Some(dir) = seg_dir {
+                    let _ = std::fs::remove_dir_all(dir);
                 }
             }
         });
