@@ -5,10 +5,16 @@
 Rhythia or Capo Games.
 
 **[Download from the releases page](https://github.com/KillerOp007/rhythr/releases/latest)** —
-then connect your game once via *Advanced → Detect game* and drop a
-replay. GPU renderer (wgpu) aiming for pixel-parity with the game, so a
-rendered video looks exactly like watching the replay in-game with your
-own skin.
+then start it and drop a replay into the window: the map downloads
+itself, a live preview appears and **Render video** does the rest. Your
+game install is detected on startup — the **Game** card reports it, and
+carries *Detect* / *Locate…* for installs in unusual places — so built-in
+skins use its own textures and colors. Rendering works without it.
+GPU renderer (wgpu) aiming for pixel-parity with the game, so a rendered
+video looks exactly like watching the replay in-game with your own skin.
+
+Step by step, including how to export a replay and your skin from the
+game: **[the user guide](docs/USER-GUIDE.md)**.
 
 - **Windows** — `rhythr_x.y.z_x64-setup.exe`. Click through SmartScreen
   ("More info" → "Run anyway"; the installer is not code-signed).
@@ -28,7 +34,7 @@ own skin.
   native install against your rolling-release system libraries, no
   FUSE involved.
 
-The game runs through Proton on Linux; *Detect game* finds the Steam
+The game runs through Proton on Linux; the startup scan finds the Steam
 (native, Flatpak or Snap) install and reads the built-in assets from it
 just like on Windows.
 
@@ -36,6 +42,16 @@ just like on Windows.
 (pixel-calibrated against real footage: notes, skins, HUD, results screen)
 and a desktop app are functional, with Windows and Linux packages on the
 releases page.
+
+## Screenshot
+
+*Placeholder — no screenshot is committed yet.*
+
+<!-- Drop a current shot of the app window into the repo as
+     docs/screenshot-app.png and replace this whole section body with:
+     ![The rhythr desktop app](docs/screenshot-app.png)
+     A second image is worth more than any wording here: one game frame
+     next to the rendered frame, which is the pixel-parity claim above. -->
 
 ## Anti-cheat statement
 
@@ -59,7 +75,7 @@ This tool is a strict **read-only renderer**:
 | `crates/formats` | Read-only parsers: `.rhr` replays (all 5 version gates), map cache JSON, `.rhm` |
 | `crates/sim` | Hit registration (frame flags → per-note results), integrity check |
 | `crates/render` | wgpu GPU renderer: scene, skins/`.rhs` import, HUD, results screen, video export |
-| `crates/cli` | `rhythia-render` binary: `info`, `verify`, `check`, `frame`, `video` |
+| `crates/cli` | `rhythr-cli` binary: `info`, `verify`, `check`, `frame`, `video` |
 | `crates/gui` | Desktop app (Tauri): preview + scrubber, HUD overrides, map auto-download, video export |
 
 ```sh
