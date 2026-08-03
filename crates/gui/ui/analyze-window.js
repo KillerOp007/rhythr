@@ -350,17 +350,27 @@ const videoUrl = (token) => {
     : `rhvideo://localhost/seg.mp4?${q}`;
 };
 
+/// A media element refuses a playbackRate below this and quietly clamps
+/// it back up — and the segment engine READS the playhead off that
+/// element, so a slower speed would run the whole clock too fast. This is
+/// the video path's own floor, not the analyzer's: below it the frame
+/// stream (no rate limit at all) carries playback instead.
+const VIDEO_MIN_RATE = 0.0625;
+
+/// Whether a rendered segment can serve the speed that was asked for.
+const segmentsUsable = () => engine === "video" && play.factor >= VIDEO_MIN_RATE;
+
 /// Frames per SONG second so the played result still shows ~60 frames a
 /// second at the chosen speed: 60 at 1x, 240 at 0.25x. Every displayed
 /// frame is a real rendered frame — no duplicates, no stutter.
 function segmentFps() {
-  return Math.round(clamp(60 / clamp(play.factor, 0.0625, 4), 60, 480));
+  return Math.round(clamp(60 / clamp(play.factor, VIDEO_MIN_RATE, 4), 60, 480));
 }
 
 /// The video's duration equals its song span, so the element's rate IS
 /// the playback speed.
 function videoRate() {
-  return clamp(play.factor, 0.0625, 4);
+  return clamp(play.factor, VIDEO_MIN_RATE, 4);
 }
 
 /// Song time per segment: capped by render effort (~900 frames), so slow
@@ -503,7 +513,7 @@ async function onSegmentReady(info) {
   showPrep(false);
   await primeSegmentGeometry(entry);
   const playingVideo = play.on && !$("an-video").hidden;
-  if (seg.switchOnReady && play.on && engine === "video" && entryCovers(entry, currentMs)) {
+  if (seg.switchOnReady && play.on && segmentsUsable() && entryCovers(entry, currentMs)) {
     seg.switchOnReady = false;
     freeEntry(seg.current);
     seg.current = entry;
@@ -873,7 +883,7 @@ function seek(t) {
     invoke("live_cmd", { cmd: "seek", value: currentMs }).catch(() => {});
     return;
   }
-  if (play.on && engine === "video") {
+  if (play.on && segmentsUsable()) {
     if (segmentCovers(currentMs) && !$("an-video").hidden) {
       // Inside the buffered stretch: instant.
       $("an-video").currentTime = (currentMs - seg.current.startMs) / 1000 / replaySpeed();
@@ -1453,7 +1463,7 @@ function setPlaying(on) {
     invoke("live_cmd", { cmd: "play" }).catch((e) => msg(String(e)));
     return;
   }
-  if (engine === "video") {
+  if (segmentsUsable()) {
     if (segmentCovers(currentMs)) {
       loadAndPlayCurrent();
       return;
@@ -1620,7 +1630,9 @@ function stepFrame(dir) {
 let speedTimer = null;
 
 function setSpeed(v) {
-  const next = clamp(v, 0.0625, 4);
+  // 0.01x is what the live engine accepts (live.rs clamps its speed
+  // command to 0.01..4) and what the slider and the number box offer.
+  const next = clamp(v, 0.01, 4);
   const changed = next !== play.factor;
   play.factor = next;
   $("an-speed").value = String(Math.round(play.factor * 100));
@@ -1641,10 +1653,25 @@ function setSpeed(v) {
   seg.next = null;
   if (play.on) {
     if (!$("an-video").hidden) {
+      if (play.factor < VIDEO_MIN_RATE) {
+        // The element cannot go this slow, and its clock is the playhead —
+        // hand the run back to the frame stream, which has no such floor.
+        dropSegment();
+        switchToStreamingNow();
+        return;
+      }
       $("an-video").playbackRate = videoRate(); // instant, until the re-render lands
+    } else {
+      // The stream clock counts wall time in steps of the CURRENT speed,
+      // so a new step rescales everything already played unless the
+      // measurement restarts here.
+      play.startWall = performance.now();
+      play.startMs = Math.round(currentMs);
+      play.k = -1;
+      lastPrefetchK = -1e9;
     }
     speedTimer = setTimeout(() => {
-      if (play.on) requestSegment(currentMs, true);
+      if (play.on && segmentsUsable()) requestSegment(currentMs, true);
     }, 500);
   } else {
     freeEntry(seg.current);
@@ -2810,6 +2837,13 @@ window.addEventListener("DOMContentLoaded", async () => {
     clearTimeout(resizeTimer);
     resizeTimer = setTimeout(syncRenderSize, 250);
   }).observe($("stage"));
+
+  // The playbar folds to a second row on a narrow window; the render pill
+  // rides above whatever height it ends up with instead of landing on the
+  // transport.
+  new ResizeObserver(() => {
+    $("stage").style.setProperty("--playbar-h", `${$("an-playbar").offsetHeight}px`);
+  }).observe($("an-playbar"));
 
   // The main window drives which replay is loaded; follow its changes.
   listen("sources-changed", () => {
