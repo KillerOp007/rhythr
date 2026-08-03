@@ -23,6 +23,12 @@ pub struct ResolvedMods {
     pub grid_scale: f32,
     /// Mirror flips applied to the notes (x, y).
     pub flip: (bool, bool),
+    /// Ghost: notes fade to nothing before reaching the plane
+    /// (`NoteManager.gd:425-428`, fade_out_base stays 1).
+    pub ghost: bool,
+    /// Nearsighted: notes stay invisible until late in the approach
+    /// (`NoteManager.gd:436-438`).
+    pub nearsighted: bool,
 }
 
 impl ResolvedMods {
@@ -30,6 +36,8 @@ impl ResolvedMods {
         ResolvedMods {
             grid_scale: 1.0,
             flip: (false, false),
+            ghost: false,
+            nearsighted: false,
         }
     }
 }
@@ -110,8 +118,17 @@ pub fn map_for_replay(map: &Map, replay: &Replay) -> (Map, ResolvedMods) {
     if has("mod_hardrock") {
         resolved.grid_scale = HARDROCK_GRID_SCALE;
     }
+    // Visibility mods change nothing about the notes themselves, only when
+    // they can be seen — but a render that ignores them shows a comfortable
+    // read of a run that was played half blind.
+    resolved.ghost = has("mod_ghost");
+    resolved.nearsighted = has("mod_nearsighted");
 
-    if resolved == ResolvedMods::none() {
+    // Only the mods that MOVE notes force a rebuilt map — mirror flips and
+    // the hardrock grid scale, both applied in the loop below. The
+    // visibility mods ride along on the params and must not be part of this
+    // test, or a ghost run would rebuild the map for nothing.
+    if resolved.flip == (false, false) && resolved.grid_scale == 1.0 {
         return (map.clone(), resolved);
     }
     let mut out = map.clone();

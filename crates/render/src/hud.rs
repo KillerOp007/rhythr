@@ -364,22 +364,25 @@ pub struct HudState {
     window_ms: f64,
 }
 
-/// Shortens `text` with an ellipsis until it fits `max_px`, keeping the
-/// end that identifies it: the song, not the "Watching <name> play" lead-in.
+/// Shortens `text` until it fits `max_px`, keeping the end that identifies
+/// it: the song, not the "Watching <name> play" lead-in.
+///
+/// The marker is three ASCII dots, not a single ellipsis character: the
+/// glyph atlas holds printable ASCII only, so U+2026 would be neither drawn
+/// nor measured — the text would simply lose its first characters with
+/// nothing to show for it.
 fn fit_to_width(atlas: &FontAtlas, text: &str, px: f32, max_px: f32) -> String {
     if max_px <= 0.0 || atlas.measure(text, px) <= max_px {
         return text.to_string();
     }
-    // Character by character from the front, so a long player name gives way
-    // before the title does.
     let chars: Vec<char> = text.chars().collect();
     for cut in 1..chars.len() {
-        let candidate: String = std::iter::once('…').chain(chars[cut..].iter().copied()).collect();
+        let candidate: String = "...".chars().chain(chars[cut..].iter().copied()).collect();
         if atlas.measure(&candidate, px) <= max_px {
             return candidate;
         }
     }
-    "…".to_string()
+    "...".to_string()
 }
 
 /// One registered hit: when, how early/late, and where the cursor sat
@@ -1033,9 +1036,12 @@ pub fn build_hud(
         };
         // The only title in the HUD that is not width-fitted: a long name
         // and a long song ran off the frame, and on a split-screen race
-        // straight into the other player's half.
+        // straight into the other player's half. The limit is the VIEWPORT,
+        // not the playfield — the header is allowed to be wider than the
+        // brackets, as it is in the game — with a margin so it never touches
+        // the edge or the seam.
         let size = refd * 0.0187;
-        let title = fit_to_width(b.atlas, &title, size, field.half * 2.0);
+        let title = fit_to_width(b.atlas, &title, size, w * 0.94);
         b.text(&title, field.cx, ty, size, Align::Center, value_col);
         finish_element(&mut b, el, "song_info", hud, w, _h, &mut boxes);
     }
@@ -1083,7 +1089,9 @@ mod tests {
         // Room for about half of it.
         let fitted = super::fit_to_width(&atlas, long, size, full * 0.5);
         assert!(atlas.measure(&fitted, size) <= full * 0.5);
-        assert!(fitted.starts_with('…'), "cut from the front: {fitted}");
+        assert!(fitted.starts_with("..."), "cut from the front: {fitted}");
+        // The marker must be drawable: the atlas is ASCII only.
+        assert!(fitted.chars().all(|c| (' '..='~').contains(&c)), "ascii only: {fitted}");
         assert!(fitted.ends_with("Song Title"), "kept the song: {fitted}");
         // Something that already fits comes back untouched.
         assert_eq!(super::fit_to_width(&atlas, long, size, full * 2.0), long);

@@ -67,8 +67,13 @@ pub struct SceneParams {
     pub spin: bool,
     /// Overall note opacity (`NoteOpacity`).
     pub note_opacity: f32,
-    /// HalfGhost mod: notes fade toward half opacity near the hit plane.
+    /// HalfGhost mod: notes fade toward a fifth opacity near the hit plane.
     pub half_ghost: bool,
+    /// Ghost mod: notes fade to NOTHING before the plane. Takes precedence
+    /// over half_ghost, as it does in the game.
+    pub ghost: bool,
+    /// Nearsighted mod: notes stay invisible until late in the approach.
+    pub nearsighted: bool,
     /// Grid half-extent of the playfield (1.0; hardrock widens it to
     /// [`crate::mods::HARDROCK_GRID_SCALE`]). Note positions are already
     /// transformed in the map; this only widens the border.
@@ -112,6 +117,8 @@ impl Default for SceneParams {
             spin: false,
             note_opacity: 1.0,
             half_ghost: false,
+            ghost: false,
+            nearsighted: false,
             grid_scale: 1.0,
             speed: 1.0,
             near: 0.01,
@@ -277,28 +284,46 @@ impl SceneParams {
     /// footage**, not SS+'s documented defaults: a near note measures ~6.5%
     /// opacity (not the 20% a base-0.8 fade gives), and the fade pulls in
     /// more sharply toward the plane (`^2.0`, gentle far → steep near). See
-    /// [`HALFGHOST_FLOOR`]/[`HALFGHOST_CURVE`].
+    /// [`HALFGHOST_FLOOR`]/[`FADE_CURVE`].
     pub fn note_opacity(&self, depth: f32) -> f32 {
-        let fade_in_len = (self.spawn_depth * self.fade_length).max(1e-3);
-        let fade_in = ((self.spawn_depth - depth) / fade_in_len)
-            .clamp(0.0, 1.0)
-            .powf(1.3);
-        let mut alpha = fade_in;
-        if self.half_ghost {
-            // The fade zone is a fixed pair of world depths derived from the
-            // CONFIG approach rate — the game's thresholds don't move under a
-            // speed mod (apply_speed only slows the approach motion), so undo
-            // its division here.
-            let config_ar = self.approach_rate * self.speed;
-            let start = 12.0 / 50.0 * config_ar;
-            let end = 3.0 / 50.0 * config_ar;
-            let t = ((depth - end) / (start - end))
-                .clamp(0.0, 1.0)
-                .powf(HALFGHOST_CURVE);
-            let fade_out = HALFGHOST_FLOOR + t * (1.0 - HALFGHOST_FLOOR);
-            alpha = alpha.min(fade_out);
-        }
-        alpha * self.note_opacity
+        // Every threshold below is a DEPTH derived from the CONFIG approach
+        // rate: the game's zones do not move under a speed mod, while
+        // apply_speed divides ours, so undo that division here.
+        let config_ar = self.approach_rate * self.speed;
+        // linstep as the game defines it: 0 at `a`, 1 at `b`, whichever
+        // side of the value they sit on.
+        let linstep = |a: f32, b: f32, x: f32| ((x - a) / (b - a)).clamp(0.0, 1.0);
+
+        // Fade in. Nearsighted replaces the normal spawn fade with a much
+        // later one (NoteManager.gd:436-438).
+        let (fi_start, fi_end) = if self.nearsighted {
+            (30.0 / 50.0 * config_ar, 5.0 / 50.0 * config_ar)
+        } else {
+            (
+                self.spawn_depth,
+                self.spawn_depth * (1.0 - self.fade_length),
+            )
+        };
+        let fade_in = if self.nearsighted || self.fade_length != 0.0 {
+            linstep(fi_start, fi_end, depth).powf(FADE_CURVE)
+        } else {
+            1.0
+        };
+
+        // Fade out. Ghost wins over half-ghost, as in NoteManager.gd:425-434,
+        // and its fade_out_base stays at the default 1, which is why a ghost
+        // note reaches zero while a half-ghost one stops at a fifth.
+        let fade_out = if self.ghost {
+            let t = linstep(6.0 / 50.0 * config_ar, 18.0 / 50.0 * config_ar, depth);
+            t.powf(FADE_CURVE)
+        } else if self.half_ghost {
+            let t = linstep(3.0 / 50.0 * config_ar, 12.0 / 50.0 * config_ar, depth);
+            HALFGHOST_FLOOR + t.powf(FADE_CURVE) * (1.0 - HALFGHOST_FLOOR)
+        } else {
+            1.0
+        };
+
+        fade_in.min(fade_out) * self.note_opacity
     }
 }
 
@@ -321,7 +346,7 @@ pub const HALFGHOST_FLOOR: f32 = 0.20;
 /// Curvature of the HalfGhost fade-out. `> 1` keeps the note bright through
 /// the far part of the window and pulls opacity down as it nears the
 /// plane; 1.3 fits the footage at −200/−120/−70 ms (α 0.80/0.44/0.28).
-pub const HALFGHOST_CURVE: f32 = 1.3;
+pub const FADE_CURVE: f32 = 1.3;
 
 #[cfg(test)]
 mod tests {
