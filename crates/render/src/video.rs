@@ -412,8 +412,16 @@ pub fn render_video(
         }
         None => None,
     };
+    // Where the wall clock goes, per stage, under RHYTHR_TIME_STAGES. This
+    // is how the bottleneck was found and it costs one Instant per stage per
+    // frame, which is nothing next to a frame: the answer was that building
+    // and submitting a frame takes 0.6 ms while handing it to ffmpeg takes
+    // 8.5 ms, i.e. the pipe is the render's speed limit, not the GPU.
+    let timing = std::env::var_os("RHYTHR_TIME_STAGES").is_some();
+    let (mut t_submit, mut t_hand) = (0.0f64, 0.0f64);
     for i in 0..play_frames {
         let song_ms = opts.start_ms + i as f64 * song_dt_ms;
+        let mark = std::time::Instant::now();
         if let Some(frame) = bg_stream.as_mut().and_then(|s| s.next_frame()) {
             renderer.stream_background(&skin, frame);
         }
@@ -428,6 +436,10 @@ pub fn render_video(
             ghost_input.as_ref(),
             slot(i),
         )?;
+        if timing {
+            t_submit += mark.elapsed().as_secs_f64();
+        }
+        let mark = std::time::Instant::now();
         // Read a frame that has DEPTH newer frames in flight behind it —
         // headroom that lets a fast GPU keep rendering while we encode.
         if i >= DEPTH {
@@ -437,6 +449,17 @@ pub fn render_video(
                 return Err(Error::Cancelled);
             }
         }
+        if timing {
+            t_hand += mark.elapsed().as_secs_f64();
+        }
+    }
+    if timing {
+        let per = |v: f64| v * 1000.0 / play_frames.max(1) as f64;
+        eprintln!(
+            "\nSTAGES per frame: build+submit {:.2} ms | readback+write {:.2} ms",
+            per(t_submit),
+            per(t_hand)
+        );
     }
     for j in play_frames.saturating_sub(DEPTH.min(play_frames))..play_frames {
         renderer.with_slot_pixels(slot(j), |px| write_frame(px, j, &mut guard.child))??;
