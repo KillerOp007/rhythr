@@ -374,7 +374,9 @@ impl Default for SkinConfig {
             fade_length: 0.5,     // :581
             parallax: 6.5,        // :594
             half_ghost: false,
-            note_shape: NoteShape::Square,
+            // Rhythia.gd:2354 selects "ssp_rounded" on a fresh install —
+            // the rounded mesh, not the square one.
+            note_shape: NoteShape::Rounded,
             note_skin_name: String::new(),
             border_skin_name: String::new(),
             cursor_skin_name: String::new(),

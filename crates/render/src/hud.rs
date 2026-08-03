@@ -364,6 +364,24 @@ pub struct HudState {
     window_ms: f64,
 }
 
+/// Shortens `text` with an ellipsis until it fits `max_px`, keeping the
+/// end that identifies it: the song, not the "Watching <name> play" lead-in.
+fn fit_to_width(atlas: &FontAtlas, text: &str, px: f32, max_px: f32) -> String {
+    if max_px <= 0.0 || atlas.measure(text, px) <= max_px {
+        return text.to_string();
+    }
+    // Character by character from the front, so a long player name gives way
+    // before the title does.
+    let chars: Vec<char> = text.chars().collect();
+    for cut in 1..chars.len() {
+        let candidate: String = std::iter::once('…').chain(chars[cut..].iter().copied()).collect();
+        if atlas.measure(&candidate, px) <= max_px {
+            return candidate;
+        }
+    }
+    "…".to_string()
+}
+
 /// One registered hit: when, how early/late, and where the cursor sat
 /// relative to the note centre (in grid cells; a note spans ±0.5).
 #[derive(Debug, Clone, Copy)]
@@ -1010,14 +1028,12 @@ pub fn build_hud(
                 replay.player_name, map.meta.song_name
             )
         };
-        b.text(
-            &title,
-            field.cx,
-            ty,
-            refd * 0.0187,
-            Align::Center,
-            value_col,
-        );
+        // The only title in the HUD that is not width-fitted: a long name
+        // and a long song ran off the frame, and on a split-screen race
+        // straight into the other player's half.
+        let size = refd * 0.0187;
+        let title = fit_to_width(b.atlas, &title, size, field.half * 2.0);
+        b.text(&title, field.cx, ty, size, Align::Center, value_col);
         finish_element(&mut b, el, "song_info", hud, w, _h, &mut boxes);
     }
 
@@ -1054,6 +1070,22 @@ pub fn build_hud(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_long_title_is_cut_from_the_front_not_the_song() {
+        let atlas = super::FontAtlas::new(None);
+        let long = "Watching SomeVeryLongPlayerNameIndeed play Artist - A Rather Long Song Title";
+        let size = 20.0;
+        let full = atlas.measure(long, size);
+        // Room for about half of it.
+        let fitted = super::fit_to_width(&atlas, long, size, full * 0.5);
+        assert!(atlas.measure(&fitted, size) <= full * 0.5);
+        assert!(fitted.starts_with('…'), "cut from the front: {fitted}");
+        assert!(fitted.ends_with("Song Title"), "kept the song: {fitted}");
+        // Something that already fits comes back untouched.
+        assert_eq!(super::fit_to_width(&atlas, long, size, full * 2.0), long);
+    }
+
     use super::*;
 
     #[test]

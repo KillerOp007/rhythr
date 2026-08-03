@@ -2420,7 +2420,14 @@ impl Renderer {
             // ribbon, 2.0 as separate dots), cursor-wide at the head and
             // tapering to a tip, with a steep fade so the bright tail is
             // much shorter than the lifetime.
-            let span_ms = (config.cursor_trail_fade_secs as f64 * 1000.0).max(1.0);
+            // TrailTime is REAL seconds in the game, but this walk steps
+            // through SONG time, and a speed mod makes the two run at
+            // different rates: at 1.45x a 0.15 s trail was living 0.103 s of
+            // wall clock, a third short. Scaling by the run's speed keeps
+            // the trail the length the player saw.
+            let span_ms =
+                (f64::from(config.cursor_trail_fade_secs) * 1000.0 * f64::from(params.speed))
+                    .max(1.0);
             let base = if config.cursor_trail_inherit {
                 config.cursor_color
             } else {
