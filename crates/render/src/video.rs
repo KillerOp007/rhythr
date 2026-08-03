@@ -206,8 +206,17 @@ pub fn render_video(
     if opts.encoder == "vaapi" {
         cmd.args(["-vaapi_device", "/dev/dri/renderD128"]);
     }
-    // Input 0: raw frames on stdin.
-    cmd.args(["-f", "rawvideo", "-pix_fmt", "rgba"]);
+    // Input 0: raw frames on stdin. NV12 where the frame size allows it —
+    // 1.5 bytes per pixel instead of 4, on a pipe that was measured to be
+    // the render's entire speed limit. See crate::nv12.
+    let feed_nv12 = crate::nv12::nv12_supported(width as usize, height as usize)
+        && std::env::var_os("RHYTHR_NO_NV12").is_none();
+    cmd.args([
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        if feed_nv12 { "nv12" } else { "rgba" },
+    ]);
     cmd.args(["-s", &format!("{width}x{height}")]);
     cmd.args(["-r", &opts.fps.to_string()]);
     cmd.args(["-i", "pipe:0"]);
@@ -264,7 +273,9 @@ pub fn render_video(
     };
     match opts.encoder.as_str() {
         "vaapi" => {
-            cmd.args(["-vf", &vf("format=nv12,hwupload"), "-c:v", "h264_vaapi"]);
+            // Already NV12 on the way in: no swscale pass to pay for.
+            let chain = if feed_nv12 { "hwupload" } else { "format=nv12,hwupload" };
+            cmd.args(["-vf", &vf(chain), "-c:v", "h264_vaapi"]);
             cmd.args(["-qp", &crf]);
         }
         "nvenc" => {
@@ -360,8 +371,22 @@ pub fn render_video(
         out,
         done: false,
     };
+    // Reused across frames: converting into a fresh buffer each time would
+    // hand back the allocation churn this change exists to remove.
+    let mut nv12_buf = if feed_nv12 {
+        vec![0u8; crate::nv12::nv12_len(width as usize, height as usize)]
+    } else {
+        Vec::new()
+    };
     let mut write_frame = |pixels: &[u8], i: u64, child: &mut std::process::Child| {
-        if let Err(e) = stdin.write_all(pixels) {
+        let payload: &[u8] = if feed_nv12
+            && crate::nv12::rgba_to_nv12(pixels, width as usize, height as usize, &mut nv12_buf)
+        {
+            &nv12_buf
+        } else {
+            pixels
+        };
+        if let Err(e) = stdin.write_all(payload) {
             // A broken pipe here means ffmpeg died; its own last words say
             // why far better than the errno does.
             let status = child.wait();
