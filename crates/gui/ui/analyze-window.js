@@ -714,6 +714,43 @@ function msg(text) {
   el.hidden = false;
 }
 
+// ------------------------------------------------------------ UI scale
+
+// The interface size belongs to the whole app, not to the analyzer: the
+// main window owns the control, and both windows share an origin, so the
+// stored factor is simply readable here. Not an entry in opt — a window
+// that opened at another size than the one the user set is a bug.
+const SCALE_STORE = "rhythr.ui.scale";
+const SCALE_MIN = 0.8;
+const SCALE_MAX = 1.6;
+
+function applyUiScale() {
+  let v = 1;
+  try {
+    const stored = Number(localStorage.getItem(SCALE_STORE));
+    if (Number.isFinite(stored) && stored > 0) v = clamp(stored, SCALE_MIN, SCALE_MAX);
+  } catch {
+    /* private mode or a wiped store: the default size is a fine answer */
+  }
+  document.documentElement.style.setProperty("--ui-scale", String(v));
+}
+
+// At load, not at DOMContentLoaded: the window should open at the user's
+// size rather than lay itself out twice in front of them.
+applyUiScale();
+
+// The scale can change in the main window while this one is open; the
+// storage event is how the other documents of an origin hear about it.
+window.addEventListener("storage", (e) => {
+  if (e.key != null && e.key !== SCALE_STORE) return;
+  applyUiScale();
+  // Canvases take their bitmap from their CSS box and only follow it on a
+  // redraw — and the stage observer stays silent when nothing but the
+  // controls inside it changed size.
+  drawScrub();
+  refreshLive();
+});
+
 // ------------------------------------------------------------ preview
 
 function schedulePreview() {
