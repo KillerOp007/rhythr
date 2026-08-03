@@ -218,11 +218,13 @@ function renderPresetsCard() {
   // Typing a name must survive status refreshes.
   if (document.activeElement === $("preset-name")) return;
   const names = Object.keys(status?.settings?.presets || {});
+  // The rows are focusable but carry no role="button": that would turn the ✕
+  // inside them into a presentational child and hide deleting from a reader.
   $("preset-list").innerHTML = names.length
     ? names
         .map(
           (n) =>
-            `<li data-preset="${esc(n)}" title="Apply this preset"><span class="name">${esc(n)}</span><button class="del" title="Delete preset">✕</button></li>`,
+            `<li data-preset="${esc(n)}" tabindex="0" title="Apply this preset"><span class="name">${esc(n)}</span><button class="del" title="Delete preset">✕</button></li>`,
         )
         .join("")
     : `<li style="cursor:default">No presets yet — set up a look and hit Save.</li>`;
@@ -341,7 +343,7 @@ function renderRecent() {
   const list = status?.settings?.recent_replays || [];
   $("card-recent").hidden = list.length === 0;
   $("recent-list").innerHTML = list
-    .map((p) => `<li data-path="${esc(p)}" title="${esc(p)}">${esc(p.split(/[\\/]/).pop())}</li>`)
+    .map((p) => `<li data-path="${esc(p)}" role="button" tabindex="0" title="${esc(p)}">${esc(p.split(/[\\/]/).pop())}</li>`)
     .join("");
 }
 
@@ -1804,6 +1806,14 @@ function initControls() {
       loadNote(String(err));
     }
   });
+  $("preset-list").addEventListener("keydown", (e) => {
+    if (e.key !== " " && e.key !== "Enter") return;
+    // The ✕ is a real button and already answers Enter and Space itself.
+    const li = e.target.closest("li[data-preset]");
+    if (!li || e.target.closest(".del")) return;
+    e.preventDefault();
+    li.click();
+  });
 
   // Clip range.
   $("btn-clip-in").addEventListener("click", () => setClipEdge(true));
@@ -1816,6 +1826,13 @@ function initControls() {
   $("recent-list").addEventListener("click", (e) => {
     const li = e.target.closest("li[data-path]");
     if (li) loadPath(li.dataset.path);
+  });
+  $("recent-list").addEventListener("keydown", (e) => {
+    if (e.key !== " " && e.key !== "Enter") return;
+    const li = e.target.closest("li[data-path]");
+    if (!li) return;
+    e.preventDefault();
+    li.click();
   });
 
   // Tabs.
@@ -2000,6 +2017,47 @@ async function initEncoders() {
   } catch { /* probing is best-effort */ }
 }
 
+// ------------------------------------------------------------ UI scale
+
+// The webview's own zoom shortcuts are off, so the size of the interface is
+// ours to offer: style.css measures everything against the root font size,
+// and --ui-scale is the factor on it.
+const SCALE_STORE = "rhythr.ui.scale";
+const SCALE_MIN = 0.8;
+const SCALE_MAX = 1.6;
+const SCALE_STEP = 0.1;
+let uiScale = 1;
+
+function setUiScale(v, announce) {
+  uiScale = Math.min(SCALE_MAX, Math.max(SCALE_MIN, Math.round(v * 20) / 20));
+  document.documentElement.style.setProperty("--ui-scale", String(uiScale));
+  const pct = Math.round(uiScale * 100);
+  $("set-uiscale").value = String(pct);
+  $("uiscale-val").textContent = `${pct}%`;
+  // The scrubber is a canvas — its bitmap only follows the new box on redraw.
+  drawScrubber();
+  try {
+    localStorage.setItem(SCALE_STORE, String(uiScale));
+  } catch { /* nothing we can do, and nothing worth saying */ }
+  if (announce) loadNote(`Interface size ${pct}%`);
+}
+
+function initUiScale() {
+  const stored = Number(localStorage.getItem(SCALE_STORE));
+  setUiScale(Number.isFinite(stored) && stored > 0 ? stored : 1);
+  $("set-uiscale").addEventListener("input", () =>
+    setUiScale(Number($("set-uiscale").value) / 100));
+  document.addEventListener("keydown", (e) => {
+    if (!(e.ctrlKey || e.metaKey)) return;
+    // Zoom belongs to the window, not to whichever field holds focus.
+    if (e.key === "=" || e.key === "+") setUiScale(uiScale + SCALE_STEP, true);
+    else if (e.key === "-" || e.key === "_") setUiScale(uiScale - SCALE_STEP, true);
+    else if (e.key === "0") setUiScale(1, true);
+    else return;
+    e.preventDefault();
+  });
+}
+
 // ------------------------------------------------------------ boot
 
 async function initUpdater() {
@@ -2047,6 +2105,7 @@ async function initUpdater() {
 }
 
 window.addEventListener("DOMContentLoaded", async () => {
+  initUiScale();
   window.__TAURI__.app.getVersion().then((v) => { $("app-ver").textContent = `v${v}`; });
   $("preview-img").draggable = false;
   // The rAF below the src swap can race the decode; the load event is the
