@@ -380,25 +380,41 @@ pub fn render_video(
     // Custom video background: a second ffmpeg decodes it muted, looped
     // and scaled-to-cover — one RGBA frame per output frame, streamed
     // into the skin's persistent background texture. If it dies mid-way
-    // the last good frame stays.
+    // the last good frame stays. It runs on its own thread: decoding it
+    // inline blocked the render loop on a pipe for a whole frame before
+    // the GPU got any work at all.
     let (fw, fh) = renderer.dimensions();
-    let mut bg_decoder = match &opts.background_video {
-        Some(bg) => Some(
-            crate::background::VideoDecoder::spawn(
+    let mut bg_stream = match &opts.background_video {
+        Some(bg) => {
+            // Decode at the video's OWN rate, capped at the output rate.
+            // Asking for the output rate made ffmpeg duplicate frames and
+            // push every copy through the pipe: a 30 fps background under a
+            // 60 fps render moved twice the bytes for the same picture.
+            let (_, native_fps) = crate::background::probe_video(&opts.ffmpeg, &bg.path);
+            let decode_fps = native_fps
+                .map(|f| f.round().clamp(1.0, f64::from(opts.fps)) as u32)
+                .unwrap_or(opts.fps);
+            let decoder = crate::background::VideoDecoder::spawn(
                 &opts.ffmpeg,
                 &bg.path,
                 fw,
                 fh,
-                opts.fps,
+                decode_fps,
                 &bg.opts,
             )
-            .map_err(Error::Ffmpeg)?,
-        ),
+            .map_err(Error::Ffmpeg)?;
+            Some(crate::background::BackgroundStream::spawn(
+                decoder,
+                (fw * fh * 4) as usize,
+                f64::from(decode_fps),
+                f64::from(opts.fps),
+            ))
+        }
         None => None,
     };
     for i in 0..play_frames {
         let song_ms = opts.start_ms + i as f64 * song_dt_ms;
-        if let Some(frame) = bg_decoder.as_mut().and_then(|d| d.next_frame()) {
+        if let Some(frame) = bg_stream.as_mut().and_then(|s| s.next_frame()) {
             renderer.stream_background(&skin, frame);
         }
         renderer.submit_frame_with_ghost(
