@@ -377,8 +377,29 @@ pub fn render_video(
         out,
         done: false,
     };
+    // Ask the GPU to convert instead. It reports back whether it took the
+    // job: the compute path needs a width it can address, and everything it
+    // turns down falls through to the CPU conversion unchanged.
+    // RHYTHR_NO_GPU_NV12 forces that fallback, which is the way out if a
+    // driver ever miscompiles the shader — the CPU path stays the reference
+    // and both are held to producing the same bytes by a test.
+    let gpu_nv12 = feed_nv12
+        && std::env::var_os("RHYTHR_NO_GPU_NV12").is_none()
+        && renderer.enable_nv12_readback(true);
+    // The renderer outlives this call in the desktop app, and a slot left in
+    // NV12 mode would hand a live preview 1.5 bytes per pixel where it
+    // expects 4. Switched back however this returns, cancellation included.
+    struct Nv12Reset<'a>(&'a Renderer);
+    impl Drop for Nv12Reset<'_> {
+        fn drop(&mut self) {
+            self.0.enable_nv12_readback(false);
+        }
+    }
+    let _nv12_reset = Nv12Reset(renderer);
     // Reused across frames: converting into a fresh buffer each time would
-    // hand back the allocation churn this change exists to remove.
+    // hand back the allocation churn this change exists to remove. The
+    // results screen still comes back as RGBA, so this is needed even when
+    // the GPU handles the replay's own frames.
     let mut nv12_buf = if feed_nv12 {
         vec![0u8; crate::nv12::nv12_len(width as usize, height as usize)]
     } else {
@@ -389,9 +410,14 @@ pub fn render_video(
     // apart from our own colour conversion and from ffmpeg's backpressure.
     let t_conv = std::cell::Cell::new(0.0f64);
     let t_pipe = std::cell::Cell::new(0.0f64);
-    let mut write_frame = |pixels: &[u8], i: u64, child: &mut std::process::Child| {
+    let mut write_frame = |pixels: &[u8],
+                           i: u64,
+                           already_nv12: bool,
+                           child: &mut std::process::Child| {
         let mark = std::time::Instant::now();
-        let payload: &[u8] = if feed_nv12
+        let payload: &[u8] = if already_nv12 {
+            pixels
+        } else if feed_nv12
             && crate::nv12::rgba_to_nv12(pixels, width as usize, height as usize, &mut nv12_buf)
         {
             &nv12_buf
@@ -488,7 +514,8 @@ pub fn render_video(
         // headroom that lets a fast GPU keep rendering while we encode.
         if i >= DEPTH {
             let j = i - DEPTH;
-            renderer.with_slot_pixels(slot(j), |px| write_frame(px, j, &mut guard.child))??;
+            renderer
+                .with_slot_pixels(slot(j), |px| write_frame(px, j, gpu_nv12, &mut guard.child))??;
             if !progress(j + 1, total_frames) {
                 return Err(Error::Cancelled);
             }
@@ -511,7 +538,7 @@ pub fn render_video(
         );
     }
     for j in play_frames.saturating_sub(DEPTH.min(play_frames))..play_frames {
-        renderer.with_slot_pixels(slot(j), |px| write_frame(px, j, &mut guard.child))??;
+        renderer.with_slot_pixels(slot(j), |px| write_frame(px, j, gpu_nv12, &mut guard.child))??;
         if !progress(j + 1, total_frames) {
             return Err(Error::Cancelled);
         }
@@ -520,7 +547,7 @@ pub fn render_video(
         // The results screen is static: render once, repeat.
         let pixels = renderer.render_results(replay, map, &hud_state, config, ghost_input.as_ref())?;
         for i in 0..results_frames {
-            write_frame(&pixels, play_frames + i, &mut guard.child)?;
+            write_frame(&pixels, play_frames + i, false, &mut guard.child)?;
             if !progress(play_frames + i + 1, total_frames) {
                 return Err(Error::Cancelled);
             }

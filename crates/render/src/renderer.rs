@@ -142,6 +142,11 @@ pub struct Renderer {
     /// (square) do, 1920x1080 does not — and those used to allocate and
     /// drop an 8 MB buffer for every single frame.
     depad_scratch: std::cell::RefCell<Vec<u8>>,
+    /// When present, frames are converted to NV12 in a compute pass and the
+    /// readback slots hold NV12 rather than padded RGBA. See
+    /// [`crate::nv12_gpu`]; the video loop turns this on and then writes what
+    /// it reads straight into ffmpeg.
+    nv12: std::cell::RefCell<Option<crate::nv12_gpu::Nv12Path>>,
 }
 
 /// Number of in-flight readback buffers; the video loop reads a frame only
@@ -261,6 +266,46 @@ impl Renderer {
             });
         }
         *self.readback_submissions.borrow_mut() = [None, None, None];
+        // The bind groups name a colour view that no longer exists, and the
+        // storage buffers are the old frame's size.
+        let mut nv12 = self.nv12.borrow_mut();
+        if nv12.is_some() {
+            if crate::nv12_gpu::gpu_supported(width, height) {
+                let view = self.color_tex.create_view(&Default::default());
+                let n = nv12.as_mut().expect("checked just above");
+                n.resize(&self.device, width, height, &view);
+                n.upload_dims(&self.queue, width, height);
+            } else {
+                // A size the compute path cannot serve: fall back to RGBA
+                // readback rather than render something wrong.
+                *nv12 = None;
+            }
+        }
+    }
+
+    /// Switches NV12 readback on or off, and reports whether it is on. Off
+    /// is always available; on requires a frame size the compute shader can
+    /// address (see [`crate::nv12_gpu::gpu_supported`]).
+    pub fn enable_nv12_readback(&self, on: bool) -> bool {
+        let mut nv12 = self.nv12.borrow_mut();
+        if !on {
+            *nv12 = None;
+            return false;
+        }
+        if nv12.is_none() {
+            let view = self.color_tex.create_view(&Default::default());
+            *nv12 = crate::nv12_gpu::Nv12Path::new(&self.device, self.width, self.height, &view);
+            if let Some(n) = nv12.as_ref() {
+                n.upload_dims(&self.queue, self.width, self.height);
+            }
+        }
+        nv12.is_some()
+    }
+
+    /// Whether the bytes [`Self::with_slot_pixels`] hands out are NV12
+    /// (encoder-ready) rather than RGBA.
+    pub fn readback_is_nv12(&self) -> bool {
+        self.nv12.borrow().is_some()
     }
 
     /// Whether the OUTPUT frame is portrait (Shorts/TikTok). Layout and
@@ -734,6 +779,7 @@ impl Renderer {
             readback_bufs,
             readback_submissions: std::cell::RefCell::new([None, None, None]),
             depad_scratch: std::cell::RefCell::new(Vec::new()),
+            nv12: std::cell::RefCell::new(None),
         })
     }
 
@@ -1835,6 +1881,18 @@ impl Renderer {
         // wait. A side without readback (the left half of a split frame)
         // just submits its work.
         if let Some(slot) = readback_slot {
+            if let Some(nv12) = self.nv12.borrow().as_ref() {
+                nv12.encode(
+                    &mut encoder,
+                    slot,
+                    &self.readback_bufs[slot % READBACK_SLOTS],
+                    self.width,
+                    self.height,
+                );
+                let idx = self.queue.submit(Some(encoder.finish()));
+                self.readback_submissions.borrow_mut()[slot % READBACK_SLOTS] = Some(idx);
+                return Ok(());
+            }
             let padded = (self.width * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
                 * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
             encoder.copy_texture_to_buffer(
@@ -1888,7 +1946,13 @@ impl Renderer {
         let mapped = slice
             .get_mapped_range()
             .map_err(|e| Error::Device(e.to_string()))?;
-        let result = if padded == unpadded {
+        // Copied out so no borrow of the cell is held across the callback.
+        let nv12_len = self.nv12.borrow().as_ref().map(|n| n.len as usize);
+        let result = if let Some(len) = nv12_len {
+            // Already the encoder's format, tightly packed: no row padding to
+            // undo and nothing left for the CPU to convert.
+            f(&mapped[..len])
+        } else if padded == unpadded {
             f(&mapped[..(unpadded * self.height) as usize])
         } else {
             let mut pixels = self.depad_scratch.borrow_mut();

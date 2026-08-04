@@ -13,6 +13,7 @@ pub mod hud;
 pub mod mesh;
 pub mod mods;
 pub mod nv12;
+pub mod nv12_gpu;
 pub mod present;
 pub mod race;
 pub mod renderer;
