@@ -283,8 +283,13 @@ pub fn render_video(
             if !f.is_empty() {
                 cmd.args(["-vf", &f]);
             }
-            cmd.args(["-c:v", "h264_nvenc", "-pix_fmt", "yuv420p"]);
-            cmd.args(["-preset", "p5", "-rc", "vbr", "-cq", &crf, "-b:v", "0"]);
+            // nvenc takes nv12 directly. Asking for yuv420p while we hand it
+            // nv12 makes ffmpeg insert a full-frame swscale pass per frame to
+            // shuffle the two chroma planes apart, for nothing.
+            let pix = if feed_nv12 { "nv12" } else { "yuv420p" };
+            cmd.args(["-c:v", "h264_nvenc", "-pix_fmt", pix]);
+            cmd.args(["-preset", nvenc_preset(&opts.preset), "-rc", "vbr"]);
+            cmd.args(["-cq", &crf, "-b:v", "0"]);
         }
         "qsv" => {
             let f = vf("");
@@ -292,6 +297,7 @@ pub fn render_video(
                 cmd.args(["-vf", &f]);
             }
             cmd.args(["-c:v", "h264_qsv", "-pix_fmt", "nv12"]);
+            cmd.args(["-preset", qsv_preset(&opts.preset)]);
             cmd.args(["-global_quality", &crf]);
         }
         _ => {
@@ -631,6 +637,38 @@ pub fn encoder_works(ffmpeg: &str, encoder: &str) -> bool {
 
 /// Like [`encoder_works`], but on failure returns ffmpeg's stderr (its last
 /// meaningful line) so the UI can say WHY an encoder is unavailable — e.g.
+/// Translates the x264 speed preset the user picked into nvenc's p1..p7
+/// scale. Without this the hardware encoder ignored the speed control
+/// completely and always ran p5, one of the slowest quality presets — which
+/// is what pins the encoder at 100% on a 4K120 render while the GPU's 3D
+/// engine idles at 17%.
+fn nvenc_preset(preset: &str) -> &'static str {
+    match preset {
+        "ultrafast" | "superfast" => "p1",
+        "veryfast" => "p2",
+        "faster" => "p3",
+        "fast" | "medium" => "p4",
+        "slow" => "p5",
+        "slower" => "p6",
+        "veryslow" | "placebo" => "p7",
+        _ => "p4",
+    }
+}
+
+/// Same for QuickSync, which shares x264's preset names but does not accept
+/// the two fastest or the slowest one. Passing an unknown name makes ffmpeg
+/// abort, so the ends are clamped rather than forwarded.
+fn qsv_preset(preset: &str) -> &'static str {
+    match preset {
+        "ultrafast" | "superfast" | "veryfast" => "veryfast",
+        "faster" => "faster",
+        "fast" => "fast",
+        "slow" => "slow",
+        "slower" | "veryslow" | "placebo" => "slower",
+        _ => "medium",
+    }
+}
+
 /// nvenc rejecting an outdated NVIDIA driver.
 pub fn encoder_error(ffmpeg: &str, encoder: &str) -> Option<String> {
     let mut args: Vec<&str> = vec!["-hide_banner", "-loglevel", "error"];

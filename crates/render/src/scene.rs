@@ -100,14 +100,26 @@ impl Default for SceneParams {
     fn default() -> Self {
         SceneParams {
             fov_y_deg: 70.0,
-            // The gameplay camera's fixed distance from the hit plane.
-            // song.tscn parks the camera at z=3.5, but the default camera
-            // mode overwrites it every frame: NoteManager.gd `do_half_lock`
-            // — the else-branch at :672, i.e. everything that is not VR or
-            // free-cam — sets the origin to z=3.75. Notes resolve at z=0
-            // (Game/Spawn sits at (-1,1,0) and a note's z is -current_dist),
-            // so 3.75 is the eye-to-plane distance.
-            eye_z: 3.75,
+            // The gameplay camera's fixed distance from the hit plane,
+            // MEASURED against the game rather than read out of it.
+            //
+            // The source says 3.75: song.tscn parks the Camera at 3.5 and
+            // NoteManager.gd `do_half_lock` — the else-branch at :672, i.e.
+            // everything that is not VR or free-cam — overwrites it every
+            // frame. A screenshot of the real game says otherwise, and the
+            // screenshot wins: with the same skin config at 2560x1440, its
+            // border square measures 876 px. The border plane is 3.04 units
+            // (song.tscn PlaneMesh id=30, no scale on the node) and the
+            // border texture covers 99.6% of it, so at 3.75 the plane could
+            // only project to 834 px — the visible border cannot be larger
+            // than the plane it is painted on. Solving the same measurement
+            // against our own render, which cancels the texture and the fov,
+            // gives 3.53. 3.5 is the game's own scene value and sits 0.9%
+            // from that, which is 8 px at 1440p.
+            //
+            // 3.25, what this was before, is ruled out just as clearly: it
+            // would put the plane at 962 px, 9% above what was measured.
+            eye_z: 3.5,
             note_radius: BASE_NOTE_SCALE,
             // Rhythia.gd:563/567 — the game's own note travel settings.
             spawn_depth: 40.0,
