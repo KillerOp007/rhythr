@@ -1071,6 +1071,21 @@ function syncCanvas() {
 }
 
 function drawFrame() {
+  if (engine === "native") {
+    // The picture is painted BEHIND the webview by the live thread and the
+    // canvas is overlay-only; its position and size belong to the tick.
+    // Falling through blitted `currentBitmap` — the one still fetched at
+    // t=0 before the native engine took over — over the running picture,
+    // and syncCanvas() then moved and resized the canvas to fit that old
+    // frame. Clicking the playfield while paused showed the start of the
+    // map on top of the current one, shifted.
+    const cv = $("an-canvas");
+    const ctx = cv.getContext("2d");
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    drawOverlay();
+    return;
+  }
   if (play.on && !$("an-video").hidden) {
     // Video mode: the picture comes from the video element, the canvas
     // carries the overlay only.
@@ -2718,6 +2733,11 @@ async function bootNative() {
     return false;
   }
   engine = "native";
+  // Whatever still was fetched before this point belongs to a dead path
+  // now. Keeping it around is how a t=0 frame survived to be blitted over
+  // the live picture later.
+  currentBitmap?.close?.();
+  currentBitmap = null;
   liveState.active = true;
   liveState.key = sourceKey();
   document.body.classList.add("an-native");
