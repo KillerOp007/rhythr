@@ -32,6 +32,33 @@ substantially faster, and a round of quality-of-life work on top.
   still from the renderer — the new path is marginally closer to that still
   than the old one was.
 
+- **The colour conversion moved onto the GPU**, which is what was left once
+  the pipe stopped being the limit. Timing each stage separately at
+  3840x2160/120 showed the GPU building a frame in 0.64 ms and the CPU then
+  spending 10.84 ms converting it — the card idled 97% of the time, and
+  swapping encoders, down to x264 ultrafast, changed nothing because the
+  encoder was never the bottleneck. A compute pass now converts before the
+  readback, so a frame leaves VRAM already in the encoder's format and the
+  bus carries 1.5 bytes per pixel instead of 4.
+
+  | | before | after |
+  |---|---|---|
+  | 4K, 120 fps | 23.7 s | **18.5 s** |
+  | 1080p, 60 fps | 4.0 s | **3.0 s** |
+
+  The picture does not change: the shader is a transcription of the CPU
+  converter down to the integer coefficients and the rounding, a test
+  compares both outputs byte for byte, and a 960-frame 4K render through each
+  path decodes to the same checksum. Frame sizes the shader cannot address
+  fall back to the CPU converter, and `RHYTHR_NO_GPU_NV12=1` forces that
+  fallback.
+
+- **The Output tab's speed preset reaches the hardware encoders.** It only
+  ever configured x264; NVENC ran a fixed `p5` near the slow end of its own
+  scale and QuickSync got no preset at all, so on hardware encoding the
+  control did nothing. NVENC is also no longer asked for a pixel format it
+  has to convert to first.
+
 - **A video background costs a third of what it did** (20.1 s → 11.7 s on the
   same clip). It was decoded in the middle of the render loop, blocking on a
   pipe for a whole frame before the GPU got any work; it now runs on its own
@@ -56,6 +83,14 @@ substantially faster, and a round of quality-of-life work on top.
   just as late. Measured across 37 leaderboard replays covering every mod
   combination: at 55 × speed every recorded flag finds a note and the latest
   one lands just under the window at each speed, never above.
+
+- **The playfield is the size the game draws it.** The camera sat too close,
+  making the field about 6% larger than the game's. The game's own source
+  says the camera is parked at 3.75 units, but a screenshot says otherwise
+  and the screenshot wins: the border plane is 3.04 units and its texture
+  covers 99.6% of it, so at that distance the border could only ever project
+  to 834 px at 1440p — and the game's measures 876. At 3.5 rhythr now
+  measures 882, within 0.7% of the game.
 
 - **The default look now comes from the game.** `SkinConfig::default()` was
   documented as the game's defaults but reproduced one player's exported
