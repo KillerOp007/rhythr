@@ -384,7 +384,13 @@ pub fn render_video(
     } else {
         Vec::new()
     };
+    let timing = std::env::var_os("RHYTHR_TIME_STAGES").is_some();
+    // Split out of the handoff separately, so the readback wait can be told
+    // apart from our own colour conversion and from ffmpeg's backpressure.
+    let t_conv = std::cell::Cell::new(0.0f64);
+    let t_pipe = std::cell::Cell::new(0.0f64);
     let mut write_frame = |pixels: &[u8], i: u64, child: &mut std::process::Child| {
+        let mark = std::time::Instant::now();
         let payload: &[u8] = if feed_nv12
             && crate::nv12::rgba_to_nv12(pixels, width as usize, height as usize, &mut nv12_buf)
         {
@@ -392,7 +398,15 @@ pub fn render_video(
         } else {
             pixels
         };
-        if let Err(e) = stdin.write_all(payload) {
+        if timing {
+            t_conv.set(t_conv.get() + mark.elapsed().as_secs_f64());
+        }
+        let mark = std::time::Instant::now();
+        let wrote = stdin.write_all(payload);
+        if timing {
+            t_pipe.set(t_pipe.get() + mark.elapsed().as_secs_f64());
+        }
+        if let Err(e) = wrote {
             // A broken pipe here means ffmpeg died; its own last words say
             // why far better than the errno does.
             let status = child.wait();
@@ -448,7 +462,6 @@ pub fn render_video(
     // frame, which is nothing next to a frame: the answer was that building
     // and submitting a frame takes 0.6 ms while handing it to ffmpeg takes
     // 8.5 ms, i.e. the pipe is the render's speed limit, not the GPU.
-    let timing = std::env::var_os("RHYTHR_TIME_STAGES").is_some();
     let (mut t_submit, mut t_hand) = (0.0f64, 0.0f64);
     for i in 0..play_frames {
         let song_ms = opts.start_ms + i as f64 * song_dt_ms;
@@ -486,9 +499,14 @@ pub fn render_video(
     }
     if timing {
         let per = |v: f64| v * 1000.0 / play_frames.max(1) as f64;
+        let (conv, pipe) = (t_conv.get(), t_pipe.get());
         eprintln!(
-            "\nSTAGES per frame: build+submit {:.2} ms | readback+write {:.2} ms",
+            "\nSTAGES per frame: build+submit {:.2} ms | readback {:.2} ms | \
+             nv12 {:.2} ms | pipe->ffmpeg {:.2} ms  (handoff total {:.2} ms)",
             per(t_submit),
+            per(t_hand - conv - pipe),
+            per(conv),
+            per(pipe),
             per(t_hand)
         );
     }
