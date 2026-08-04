@@ -680,8 +680,6 @@ pub fn encoder_works(ffmpeg: &str, encoder: &str) -> bool {
     encoder_error(ffmpeg, encoder).is_none()
 }
 
-/// Like [`encoder_works`], but on failure returns ffmpeg's stderr (its last
-/// meaningful line) so the UI can say WHY an encoder is unavailable — e.g.
 /// Translates the x264 speed preset the user picked into nvenc's p1..p7
 /// scale. Without this the hardware encoder ignored the speed control
 /// completely and always ran p5, one of the slowest quality presets — which
@@ -714,6 +712,8 @@ fn qsv_preset(preset: &str) -> &'static str {
     }
 }
 
+/// Like [`encoder_works`], but on failure returns ffmpeg's stderr (its last
+/// meaningful line) so the UI can say WHY an encoder is unavailable — e.g.
 /// nvenc rejecting an outdated NVIDIA driver.
 pub fn encoder_error(ffmpeg: &str, encoder: &str) -> Option<String> {
     let mut args: Vec<&str> = vec!["-hide_banner", "-loglevel", "error"];
