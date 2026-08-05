@@ -652,6 +652,7 @@ fn run() -> anyhow::Result<bool> {
                     "nvenc" => "h264_nvenc (NVIDIA hardware)",
                     "qsv" => "h264_qsv (Intel hardware)",
                     "vaapi" => "h264_vaapi (VAAPI hardware)",
+                    "amf" => "h264_amf (AMD hardware)",
                     _ => "libx264 (software)",
                 }
             );
@@ -696,8 +697,21 @@ fn run() -> anyhow::Result<bool> {
                 quality: match crf {
                     // A raw CRF from an older script still has to mean what
                     // it always meant, so it is converted rather than read as
-                    // a point on the new, inverted scale.
-                    Some(c) => rhythia_render::quality::from_legacy_crf(c),
+                    // a point on the new, inverted scale. The new scale does
+                    // not reach past CRF 14 or 34, so anything outside that
+                    // is coerced — and says so, rather than quietly encoding
+                    // something other than what was asked for.
+                    Some(c) => {
+                        let q = rhythia_render::quality::from_legacy_crf(c);
+                        let landed = rhythia_render::quality::x264_crf(q);
+                        if landed != c {
+                            eprintln!(
+                                "note: --crf {c} is outside the range this build can express; \
+                                 encoding at CRF {landed} (--quality {q})"
+                            );
+                        }
+                        q
+                    }
                     None => quality.clamp(
                         rhythia_render::quality::MIN,
                         rhythia_render::quality::MAX,

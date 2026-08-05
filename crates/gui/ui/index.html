@@ -300,7 +300,7 @@
             <input type="text" id="set-ffmpeg" placeholder="bundled / PATH" />
           </label>
           <label class="field">
-            <span><input type="checkbox" id="set-tcpfeed" /> Send frames over a local socket</span>
+            <span class="check"><input type="checkbox" id="set-tcpfeed" /> Send frames over a local socket</span>
             <span class="sub">Experimental. Hands frames to ffmpeg through a loopback connection instead of a pipe. Faster at moving bytes, but usually only a few percent once the encoder is doing real work — worth timing a render both ways before leaving it on.</span>
           </label>
           <button class="btn small wide" id="btn-diagnostics"

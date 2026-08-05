@@ -2211,7 +2211,6 @@ async function initEncoders() {
   try {
     const probe = await invoke("probe_encoders");
     qualitySteps = probe.quality_steps || [];
-    paintQuality();
     const list = probe.available;
     const sel = $("set-encoder");
     const labels = {
@@ -2233,6 +2232,9 @@ async function initEncoders() {
       sel.value = "auto";
       pushOutput({ encoder: "auto" });
     }
+    // Only now: the hint names the value THIS encoder will be given, so
+    // drawing it before the dropdown had been set described the wrong one.
+    paintQuality();
     // With no list at all (ffmpeg not runnable) the saved choice stands:
     // overwriting it here would lose the user's encoder because of a broken
     // path they are about to fix.

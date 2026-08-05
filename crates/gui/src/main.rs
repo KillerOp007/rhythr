@@ -1005,7 +1005,7 @@ fn write_diagnostics(state: tauri::State<'_, App>, path: String) -> Result<Strin
         "  runs: {}",
         rhythia_render::video::ffmpeg_runs(&ffmpeg)
     );
-    for e in ["nvenc", "qsv", "vaapi"] {
+    for e in rhythia_render::video::hardware_encoders() {
         match rhythia_render::video::encoder_error(&ffmpeg, e) {
             None => {
                 let _ = writeln!(s, "  {e}: available");
@@ -2480,8 +2480,10 @@ fn prepare_segment(
                 end_ms: end,
                 ffmpeg,
                 audio: None,
-                // The preview is not the deliverable; deliberately below the
-                // render default so scrubbing stays responsive.
+                // Deliberately pinned rather than following the render
+                // setting: these segments are scrubbed through, not kept, and
+                // a preview that changes quality when the output setting does
+                // would make the Analyze window unpredictable to work in.
                 quality: rhythia_render::quality::from_legacy_crf(20),
                 tcp_feed: false,
                 preset: "ultrafast".into(),

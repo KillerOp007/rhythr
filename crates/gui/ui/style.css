@@ -277,6 +277,10 @@ code { font-family: ui-monospace, Consolas, monospace; color: var(--accent); fon
 .field { display: flex; flex-direction: column; gap: 5px; }
 .field > span { font-size: var(--fs-sm); color: var(--muted); display: flex; justify-content: space-between; }
 .field .sub { font-size: var(--fs-xs); color: var(--muted); font-style: normal; }
+/* A checkbox belongs next to its words; the row default spreads its two ends
+   apart, which for a tickbox reads as two unrelated controls. */
+.field > span.check { justify-content: flex-start; align-items: center; gap: 8px; }
+.field > span.check input { width: auto; flex: none; margin: 0; }
 .field .row { display: flex; gap: 6px; }
 .field .row input { flex: 1; min-width: 0; }
 

@@ -215,7 +215,7 @@ pub fn render_video(
         // Enumerated, not assumed: on a hybrid laptop the first render node
         // is often the display-only chip.
         if let Some(dev) = vaapi_device(&opts.ffmpeg) {
-            cmd.args(["-vaapi_device", dev]);
+            cmd.args(["-vaapi_device", &dev]);
         }
     }
     // Input 0: raw frames on stdin. NV12 where the frame size allows it —
@@ -370,18 +370,24 @@ pub fn render_video(
     let mut child = cmd
         .spawn()
         .map_err(|e| Error::Ffmpeg(format!("could not start ffmpeg ({}): {e}", opts.ffmpeg)))?;
-    let log = FfmpegLog::drain(child.stderr.take());
-    let mut stdin = FrameSink::open(listener, child.stdin.take(), &log)?;
-
     // From here on, EVERY exit except the final success must kill/reap the
     // ffmpeg child and remove the partial output — cancel, a GPU error from
     // `?`, a failed write, a bad ffmpeg exit status, even a panic. The guard's
     // Drop does exactly that unless it is defused at the end.
+    //
+    // The guard is built BEFORE the frame sink is opened, and that ordering
+    // is load-bearing: opening the sink can fail (a socket handshake can time
+    // out where a pipe cannot), and with the guard built afterwards that `?`
+    // walked out past a running ffmpeg with nothing left to kill or reap it.
+    let stderr = child.stderr.take();
+    let stdin_pipe = child.stdin.take();
     let mut guard = EncodeGuard {
         child,
         out,
         done: false,
     };
+    let log = FfmpegLog::drain(stderr);
+    let mut stdin = FrameSink::open(listener, stdin_pipe, &log)?;
     // Ask the GPU to convert instead. It reports back whether it took the
     // job: the compute path needs a width it can address, and everything it
     // turns down falls through to the CPU conversion unchanged.
@@ -898,32 +904,45 @@ fn amf_quality(preset: &str) -> &'static str {
 /// laptop the first node is often the display-only chip while the encoder
 /// lives on the second — rhythr then reported "no VAAPI" on a machine that
 /// has one. Enumerated and probed once per process.
-pub fn vaapi_device(ffmpeg: &str) -> Option<&'static str> {
-    static CACHE: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
-    CACHE
-        .get_or_init(|| {
-            let mut nodes: Vec<String> = std::fs::read_dir("/dev/dri")
-                .into_iter()
-                .flatten()
-                .flatten()
-                .map(|e| e.path())
-                .filter(|p| {
-                    p.file_name()
-                        .and_then(|n| n.to_str())
-                        .is_some_and(|n| n.starts_with("renderD"))
-                })
-                .filter_map(|p| p.to_str().map(str::to_owned))
-                .collect();
-            nodes.sort();
-            nodes.into_iter().find(|dev| vaapi_probe(ffmpeg, dev, false))
+pub fn vaapi_device(ffmpeg: &str) -> Option<String> {
+    // Keyed by ffmpeg path, because the answer belongs to the binary and not
+    // to the process: the app resolves its ffmpeg at runtime and the user can
+    // repoint it in Settings. A single cached answer meant the verdict for
+    // whichever binary happened to be probed first — including a "no VAAPI
+    // here" that then stuck to a perfectly capable replacement until restart.
+    static CACHE: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<String, Option<String>>>,
+    > = std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(Default::default);
+    if let Some(hit) = cache.lock().ok().and_then(|c| c.get(ffmpeg).cloned()) {
+        return hit;
+    }
+    let mut nodes: Vec<String> = std::fs::read_dir("/dev/dri")
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("renderD"))
         })
-        .as_deref()
+        .filter_map(|p| p.to_str().map(str::to_owned))
+        .collect();
+    nodes.sort();
+    let found = nodes
+        .into_iter()
+        .find(|dev| vaapi_probe(ffmpeg, dev, false).is_ok());
+    if let Ok(mut c) = cache.lock() {
+        c.insert(ffmpeg.to_string(), found.clone());
+    }
+    found
 }
 
 /// Runs a tiny real encode on one render node. `icq` asks for the rate
 /// control mode we would rather use, so the answer is about the mode and not
 /// just about the device.
-fn vaapi_probe(ffmpeg: &str, device: &str, icq: bool) -> bool {
+fn vaapi_probe(ffmpeg: &str, device: &str, icq: bool) -> Result<(), String> {
     let mut cmd = Command::new(ffmpeg);
     hide_console_window(&mut cmd);
     cmd.args(["-hide_banner", "-loglevel", "error"]);
@@ -934,11 +953,26 @@ fn vaapi_probe(ffmpeg: &str, device: &str, icq: bool) -> bool {
         cmd.args(["-rc_mode", "ICQ", "-global_quality", "23"]);
     }
     cmd.args(["-f", "null", "-"]);
-    cmd.stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+    // The reason is kept rather than discarded. Throwing it away and telling
+    // everyone "no render device in /dev/dri" named the wrong cause for every
+    // other way this fails — an ffmpeg built without VAAPI, a broken libva
+    // driver, or simply not being in the `render` group.
+    match cmd.stdout(Stdio::null()).stderr(Stdio::piped()).output() {
+        Ok(out) if out.status.success() => Ok(()),
+        Ok(out) => Err(last_meaningful_line(&out.stderr)),
+        Err(e) => Err(format!("could not run ffmpeg: {e}")),
+    }
+}
+
+/// ffmpeg's own explanation, which is nearly always its last non-empty line.
+fn last_meaningful_line(stderr: &[u8]) -> String {
+    String::from_utf8_lossy(stderr)
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("encoder test failed")
+        .to_string()
 }
 
 /// Whether this VAAPI driver accepts intelligent-constant-quality. Several do
@@ -948,11 +982,20 @@ fn vaapi_icq_supported(ffmpeg: &str, needed: bool) -> bool {
     if !needed {
         return false;
     }
-    static CACHE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *CACHE.get_or_init(|| match vaapi_device(ffmpeg) {
-        Some(dev) => vaapi_probe(ffmpeg, dev, true),
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, bool>>> =
+        std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(Default::default);
+    if let Some(hit) = cache.lock().ok().and_then(|c| c.get(ffmpeg).copied()) {
+        return hit;
+    }
+    let ok = match vaapi_device(ffmpeg) {
+        Some(dev) => vaapi_probe(ffmpeg, &dev, true).is_ok(),
         None => false,
-    })
+    };
+    if let Ok(mut c) = cache.lock() {
+        c.insert(ffmpeg.to_string(), ok);
+    }
+    ok
 }
 
 /// Translates the x264 speed preset the user picked into nvenc's p1..p7
@@ -997,9 +1040,16 @@ pub fn encoder_error(ffmpeg: &str, encoder: &str) -> Option<String> {
     match encoder {
         "vaapi" => match vaapi_device(ffmpeg) {
             Some(dev) => {
-                cmd.args(["-vaapi_device", dev]);
+                cmd.args(["-vaapi_device", &dev]);
             }
-            None => return Some("no working VAAPI render device in /dev/dri".into()),
+            // Say what ffmpeg said. "No render device" is only one of the
+            // reasons this fails and was being printed for all of them.
+            None => {
+                return Some(match vaapi_probe(ffmpeg, "/dev/dri/renderD128", false) {
+                    Ok(()) => "no working VAAPI render device in /dev/dri".into(),
+                    Err(why) => why,
+                })
+            }
         },
         "nvenc" | "qsv" | "amf" => {}
         _ => return None, // software x264 always works
@@ -1032,19 +1082,9 @@ pub fn encoder_error(ffmpeg: &str, encoder: &str) -> Option<String> {
         .output();
     match output {
         Ok(out) if out.status.success() => None,
-        Ok(out) => {
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            // The last non-empty line is usually the actual reason
-            // ("driver does not support the required nvenc API version…").
-            let reason = stderr
-                .lines()
-                .rev()
-                .map(str::trim)
-                .find(|l| !l.is_empty())
-                .unwrap_or("encoder test failed")
-                .to_string();
-            Some(reason)
-        }
+        // The last non-empty line is usually the actual reason ("driver does
+        // not support the required nvenc API version…").
+        Ok(out) => Some(last_meaningful_line(&out.stderr)),
         Err(e) => Some(format!("could not run ffmpeg: {e}")),
     }
 }

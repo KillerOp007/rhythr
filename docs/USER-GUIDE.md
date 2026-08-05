@@ -95,13 +95,21 @@ endorsed by Rhythia or Capo Games.
   future render; the yellow dot marks elements that differ from the
   skin config. "Reset all to config" clears every override — it asks
   first, because it also discards every position and size you dragged.
-- **Output tab** — resolution, frame rate, quality (CRF: lower = better,
-  bigger file), results-screen length, output folder and file name. The
+- **Output tab** — resolution, frame rate, quality, results-screen length,
+  output folder and file name. **Quality runs 0 to 100 and higher is
+  better**; the line under the slider says what the setting is worth and
+  what each encoder is actually being told, so switching encoder no longer
+  quietly changes the result. 70 is the default and is already more than an
+  upload needs — YouTube re-encodes everything it is given, so the top of
+  the slider mostly buys file size. The
   file the next render will write is named under the render button, and
   if something is already there the app asks before overwriting it:
   **Replace**, or **Keep both**, which writes `name (2).mp4` alongside.
 - **Encoder** — "Auto" picks the fastest working encoder (NVENC on
-  NVIDIA, Quick Sync on Intel, VAAPI, otherwise x264 software). If a
+  NVIDIA, Quick Sync on Intel, AMF for AMD on Windows, VAAPI for AMD and
+  Intel on Linux, otherwise x264 software). Each one is checked by actually
+  encoding a moment of video with it, because a list of encoders says only
+  what ffmpeg was built with, not what this machine's driver will do. If a
   hardware encoder is unavailable, the reason appears right under the
   selector — an outdated GPU driver is the most common cause. Renders
   finish quicker than they used to, a video background most of all.
