@@ -676,6 +676,7 @@ function renderOutputTab() {
   presetSel.value = s.preset;
   $("set-quality").value = String(s.quality);
   paintQuality();
+  $("set-tcpfeed").checked = !!s.tcp_feed;
   $("set-encoder").value = s.encoder;
   $("set-results").value = String(Math.round(s.results_secs));
   $("set-mblur").value = String(s.motion_blur);
@@ -2066,6 +2067,8 @@ function initControls() {
     pushOutput({ fps });
   });
   $("set-preset").addEventListener("change", () => pushOutput({ preset: $("set-preset").value }));
+  $("set-tcpfeed").addEventListener("change", () =>
+    pushOutput({ tcp_feed: $("set-tcpfeed").checked }));
   $("set-quality").addEventListener("input", paintQuality);
   $("set-quality").addEventListener("change", () => pushOutput({ quality: Number($("set-quality").value) }));
   $("set-encoder").addEventListener("change", () => {

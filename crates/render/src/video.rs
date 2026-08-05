@@ -50,6 +50,10 @@ pub struct VideoOptions {
     /// path — the Analyze window uses this for `+faststart` and a short
     /// GOP so its segments start and seek instantly.
     pub extra_output_args: Vec<String>,
+    /// Hand frames to ffmpeg over a loopback socket instead of its stdin.
+    /// Off by default — see [`FrameSink`] for what it is worth and why that
+    /// is not obviously a win.
+    pub tcp_feed: bool,
     /// Custom VIDEO background: decoded by the same ffmpeg, muted and
     /// looped from its start point, one frame per output frame. (Image
     /// backgrounds ride the config's background layers instead.) The
@@ -95,6 +99,7 @@ impl Default for VideoOptions {
             hitsounds: None,
             ghost: None,
             extra_output_args: Vec::new(),
+            tcp_feed: false,
             background_video: None,
         }
     }
@@ -226,7 +231,23 @@ pub fn render_video(
     ]);
     cmd.args(["-s", &format!("{width}x{height}")]);
     cmd.args(["-r", &opts.fps.to_string()]);
-    cmd.args(["-i", "pipe:0"]);
+    // A loopback listener, when asked for. Bound to 127.0.0.1 explicitly
+    // rather than to every interface: a loopback-only listener is what keeps
+    // Windows Firewall from putting a dialog in front of a render.
+    let listener = if opts.tcp_feed {
+        std::net::TcpListener::bind(("127.0.0.1", 0)).ok()
+    } else {
+        None
+    };
+    match &listener {
+        Some(l) => {
+            let port = l.local_addr().map(|a| a.port()).unwrap_or(0);
+            cmd.args(["-i", &format!("tcp://127.0.0.1:{port}")]);
+        }
+        None => {
+            cmd.args(["-i", "pipe:0"]);
+        }
+    }
     // Input 1: the audio, seeked to the clip start.
     if let Some(audio) = &opts.audio {
         cmd.args(["-ss", &format!("{:.3}", opts.start_ms / 1000.0)]);
@@ -333,7 +354,11 @@ pub fn render_video(
     }
     cmd.arg(out);
 
-    cmd.stdin(Stdio::piped());
+    cmd.stdin(if listener.is_some() {
+        Stdio::null()
+    } else {
+        Stdio::piped()
+    });
     cmd.stdout(Stdio::null());
     // Captured, not inherited: a GUI has no terminal, so an inherited
     // stderr threw away the only explanation ffmpeg ever gives and every
@@ -346,10 +371,7 @@ pub fn render_video(
         .spawn()
         .map_err(|e| Error::Ffmpeg(format!("could not start ffmpeg ({}): {e}", opts.ffmpeg)))?;
     let log = FfmpegLog::drain(child.stderr.take());
-    let mut stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| Error::Ffmpeg("ffmpeg stdin unavailable".into()))?;
+    let mut stdin = FrameSink::open(listener, child.stdin.take(), &log)?;
 
     // From here on, EVERY exit except the final success must kill/reap the
     // ffmpeg child and remove the partial output — cancel, a GPU error from
@@ -675,6 +697,87 @@ pub fn hardware_encoders() -> &'static [&'static str] {
         &["nvenc", "qsv", "amf"]
     } else {
         &["nvenc", "qsv", "vaapi", "amf"]
+    }
+}
+
+/// Where ffmpeg reads frames from: its stdin, or a loopback socket.
+///
+/// The socket is measurably faster at moving bytes — 5.41 ms against 7.38 ms
+/// for a 4K NV12 frame into an ffmpeg that only reads and discards. But that
+/// is not the number that decides it: with a real encoder attached the same
+/// comparison is 16.87 ms against 17.66 ms, about 5%, because by then the
+/// encoder is the wall and the transport is a slice of it. On a machine with
+/// a fast hardware encoder that slice is bigger, which is the case for
+/// offering it at all.
+///
+/// It is off by default and stays off until it has been measured on hardware
+/// this was not written on. A pipe cannot fail to connect; a listener can,
+/// and buying 5% at the price of a new way for a finished render to die is
+/// not a trade worth making blind.
+enum FrameSink {
+    Pipe(std::process::ChildStdin),
+    Tcp(std::net::TcpStream),
+}
+
+impl FrameSink {
+    /// Waits for ffmpeg to dial in, when a listener was opened. ffmpeg is
+    /// already running by this point, so the only outcomes are a connection
+    /// or a diagnosable failure — there is no going back to a pipe here,
+    /// because the child was told where to read from before it started.
+    fn open(
+        listener: Option<std::net::TcpListener>,
+        stdin: Option<std::process::ChildStdin>,
+        log: &FfmpegLog,
+    ) -> Result<FrameSink, Error> {
+        let Some(listener) = listener else {
+            return stdin
+                .map(FrameSink::Pipe)
+                .ok_or_else(|| Error::Ffmpeg("ffmpeg stdin unavailable".into()));
+        };
+        listener
+            .set_nonblocking(true)
+            .map_err(|e| Error::Ffmpeg(format!("could not arm the frame socket: {e}")))?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        loop {
+            match listener.accept() {
+                Ok((sock, _)) => {
+                    sock.set_nonblocking(false).map_err(|e| {
+                        Error::Ffmpeg(format!("could not settle the frame socket: {e}"))
+                    })?;
+                    // Frames are large and strictly ordered; waiting to
+                    // coalesce them buys nothing and costs latency.
+                    let _ = sock.set_nodelay(true);
+                    return Ok(FrameSink::Tcp(sock));
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    if std::time::Instant::now() >= deadline {
+                        return Err(Error::Ffmpeg(format!(
+                            "ffmpeg never connected to the frame socket{}",
+                            log.tail()
+                        )));
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                Err(e) => {
+                    return Err(Error::Ffmpeg(format!("frame socket failed: {e}{}", log.tail())))
+                }
+            }
+        }
+    }
+}
+
+impl std::io::Write for FrameSink {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        match self {
+            FrameSink::Pipe(p) => p.write(buf),
+            FrameSink::Tcp(s) => s.write(buf),
+        }
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        match self {
+            FrameSink::Pipe(p) => p.flush(),
+            FrameSink::Tcp(s) => s.flush(),
+        }
     }
 }
 

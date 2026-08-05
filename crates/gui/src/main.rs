@@ -68,6 +68,11 @@ struct Settings {
     /// `quality` at load and never written back out.
     #[serde(skip_serializing)]
     crf: Option<u32>,
+    /// Hand frames to ffmpeg over a loopback socket instead of its stdin.
+    /// Off until it has been measured somewhere other than the machine it
+    /// was written on — it wins about 5% with a real encoder attached, and
+    /// costs a way for a render to fail that a pipe does not have.
+    tcp_feed: bool,
     encoder: String,
     preset: String,
     results_secs: f64,
@@ -129,6 +134,7 @@ impl Default for Settings {
             fps: 60,
             quality: rhythia_render::quality::DEFAULT,
             crf: None,
+            tcp_feed: false,
             encoder: "auto".into(),
             preset: "veryfast".into(),
             results_secs: 4.0,
@@ -2210,6 +2216,7 @@ struct OutputUpdate {
     height: Option<u32>,
     fps: Option<u32>,
     quality: Option<u32>,
+    tcp_feed: Option<bool>,
     encoder: Option<String>,
     preset: Option<String>,
     results_secs: Option<f64>,
@@ -2238,6 +2245,9 @@ fn set_output(state: tauri::State<'_, App>, update: OutputUpdate) -> Result<Stat
     }
     if let Some(v) = update.quality {
         s.quality = v.clamp(rhythia_render::quality::MIN, rhythia_render::quality::MAX);
+    }
+    if let Some(v) = update.tcp_feed {
+        s.tcp_feed = v;
     }
     if let Some(v) = update.encoder {
         s.encoder = v;
@@ -2473,6 +2483,7 @@ fn prepare_segment(
                 // The preview is not the deliverable; deliberately below the
                 // render default so scrubbing stays responsive.
                 quality: rhythia_render::quality::from_legacy_crf(20),
+                tcp_feed: false,
                 preset: "ultrafast".into(),
                 encoder,
                 results_secs: 0.0,
@@ -3607,6 +3618,7 @@ fn start_render(
             height: s.height,
             fps: s.fps,
             quality: s.quality,
+            tcp_feed: s.tcp_feed,
             encoder: s.encoder.clone(),
             preset: s.preset.clone(),
             results_secs: s.results_secs,
@@ -3693,6 +3705,7 @@ struct RenderJob {
     height: u32,
     fps: u32,
     quality: u32,
+    tcp_feed: bool,
     encoder: String,
     preset: String,
     results_secs: f64,
@@ -3765,6 +3778,7 @@ fn run_render_job(
         ffmpeg: job.ffmpeg.clone(),
         audio,
         quality: job.quality,
+        tcp_feed: job.tcp_feed,
         preset: job.preset.clone(),
         encoder,
         results_secs: job.results_secs,
