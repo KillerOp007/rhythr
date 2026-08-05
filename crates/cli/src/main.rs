@@ -632,13 +632,7 @@ fn run() -> anyhow::Result<bool> {
             // Pick the fastest working encoder: probe the hardware encoders
             // (NVIDIA, Intel, then VAAPI) unless the user forced a choice.
             let encoder = match encoder.as_str() {
-                // AMD's AMF is Windows-only in practice (AMD dropped it on
-                // Linux in favour of VA-API), so the two never compete.
-                "auto" => if cfg!(windows) {
-                    ["nvenc", "qsv", "amf"].as_slice()
-                } else {
-                    ["nvenc", "qsv", "vaapi", "amf"].as_slice()
-                }
+                "auto" => rhythia_render::video::hardware_encoders()
                     .iter()
                     .copied()
                     .find(|e| rhythia_render::video::encoder_works(&ffmpeg, e))

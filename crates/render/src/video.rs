@@ -663,6 +663,21 @@ pub fn encoder_works(ffmpeg: &str, encoder: &str) -> bool {
     encoder_error(ffmpeg, encoder).is_none()
 }
 
+/// The hardware encoders worth trying, best first, for this platform.
+///
+/// AMF is AMD's Windows encoder — AMD dropped it on Linux and points at
+/// VA-API instead — so the two never compete for the same machine and each
+/// list is ordered for the platform it runs on. Both the auto-selection and
+/// the UI's availability probe walk this, so they cannot disagree about what
+/// exists or in what order.
+pub fn hardware_encoders() -> &'static [&'static str] {
+    if cfg!(windows) {
+        &["nvenc", "qsv", "amf"]
+    } else {
+        &["nvenc", "qsv", "vaapi", "amf"]
+    }
+}
+
 /// Hands one frame to ffmpeg in pieces instead of in a single call.
 ///
 /// Measured at 4K NV12 into a real ffmpeg: one `write_all` of the whole

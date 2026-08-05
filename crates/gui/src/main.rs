@@ -3721,7 +3721,7 @@ fn run_render_job(
 
     // Probe hardware encoders unless one was forced.
     let encoder = match job.encoder.as_str() {
-        "auto" => probe_order()
+        "auto" => rhythia_render::video::hardware_encoders()
             .iter()
             .copied()
             .find(|e| rhythia_render::video::encoder_works(&job.ffmpeg, e))
@@ -3854,22 +3854,6 @@ struct EncoderProbe {
     quality_steps: Vec<QualityStep>,
 }
 
-/// Encoders worth probing, best-first, for this platform.
-///
-/// AMF is AMD's Windows encoder — AMD dropped it on Linux and points at
-/// VA-API instead — so the two never compete for the same machine, and each
-/// list is ordered for the platform it runs on rather than sharing one.
-const fn probe_order() -> &'static [&'static str] {
-    #[cfg(windows)]
-    {
-        &["nvenc", "qsv", "amf"]
-    }
-    #[cfg(not(windows))]
-    {
-        &["nvenc", "qsv", "vaapi", "amf"]
-    }
-}
-
 /// Results of the encoder probe for one ffmpeg, kept for the life of the
 /// process. Each probe is a real encode and costs about a tenth of a second;
 /// the UI asks again whenever the output panel is rebuilt.
@@ -3927,7 +3911,7 @@ async fn probe_encoders(state: tauri::State<'_, App>) -> Result<EncoderProbe, St
                 }
                 None => {
                     let mut hw = Vec::new();
-                    for e in probe_order() {
+                    for e in rhythia_render::video::hardware_encoders() {
                         match rhythia_render::video::encoder_error(&ffmpeg, e) {
                             None => hw.push((*e).to_string()),
                             Some(reason) => {
