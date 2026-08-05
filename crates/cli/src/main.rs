@@ -105,8 +105,14 @@ enum Command {
         width: u32,
         #[arg(long, default_value_t = 1080)]
         height: u32,
-        #[arg(long, default_value_t = 18)]
-        crf: u32,
+        /// Render quality 0-100, higher is better. Mapped onto whichever
+        /// encoder ends up being used; --crf overrides it with a raw CRF.
+        #[arg(long, default_value_t = rhythia_render::quality::DEFAULT)]
+        quality: u32,
+        /// Raw x264 CRF, for scripts written before --quality existed. Wins
+        /// over --quality when both are given.
+        #[arg(long)]
+        crf: Option<u32>,
         /// Second replay of the same map, rendered as a ghost overlay
         /// (cursor + trail in orange, with a versus panel).
         #[arg(long)]
@@ -491,6 +497,7 @@ fn run() -> anyhow::Result<bool> {
             fps,
             width,
             height,
+            quality,
             crf,
             ghost_replay,
             motion_blur,
@@ -625,8 +632,15 @@ fn run() -> anyhow::Result<bool> {
             // Pick the fastest working encoder: probe the hardware encoders
             // (NVIDIA, Intel, then VAAPI) unless the user forced a choice.
             let encoder = match encoder.as_str() {
-                "auto" => ["nvenc", "qsv", "vaapi"]
-                    .into_iter()
+                // AMD's AMF is Windows-only in practice (AMD dropped it on
+                // Linux in favour of VA-API), so the two never compete.
+                "auto" => if cfg!(windows) {
+                    ["nvenc", "qsv", "amf"].as_slice()
+                } else {
+                    ["nvenc", "qsv", "vaapi", "amf"].as_slice()
+                }
+                    .iter()
+                    .copied()
                     .find(|e| rhythia_render::video::encoder_works(&ffmpeg, e))
                     .unwrap_or("x264")
                     .to_string(),
@@ -678,7 +692,16 @@ fn run() -> anyhow::Result<bool> {
                 end_ms,
                 ffmpeg,
                 audio: audio_path,
-                crf,
+                quality: match crf {
+                    // A raw CRF from an older script still has to mean what
+                    // it always meant, so it is converted rather than read as
+                    // a point on the new, inverted scale.
+                    Some(c) => rhythia_render::quality::from_legacy_crf(c),
+                    None => quality.clamp(
+                        rhythia_render::quality::MIN,
+                        rhythia_render::quality::MAX,
+                    ),
+                },
                 preset,
                 encoder,
                 results_secs,

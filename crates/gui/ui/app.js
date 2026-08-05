@@ -9,6 +9,12 @@ const opener = window.__TAURI__.opener;
 
 const $ = (id) => document.getElementById(id);
 
+// The quality slider's stops, as resolved by the backend. Recomputing the
+// mapping here would be a second copy of crates/render/src/quality.rs to keep
+// in step, and the first time they drifted the number on screen would stop
+// describing the encode that actually runs.
+let qualitySteps = [];
+
 let status = null;          // last StatusDto from the backend
 let timelineData = null;    // health graph + miss ticks
 let currentMs = 0;          // scrubber position
@@ -668,8 +674,8 @@ function renderOutputTab() {
     presetSel.appendChild(opt);
   }
   presetSel.value = s.preset;
-  $("set-crf").value = String(s.crf);
-  $("crf-val").textContent = String(s.crf);
+  $("set-quality").value = String(s.quality);
+  paintQuality();
   $("set-encoder").value = s.encoder;
   $("set-results").value = String(Math.round(s.results_secs));
   $("set-mblur").value = String(s.motion_blur);
@@ -2060,9 +2066,12 @@ function initControls() {
     pushOutput({ fps });
   });
   $("set-preset").addEventListener("change", () => pushOutput({ preset: $("set-preset").value }));
-  $("set-crf").addEventListener("input", () => { $("crf-val").textContent = $("set-crf").value; });
-  $("set-crf").addEventListener("change", () => pushOutput({ crf: Number($("set-crf").value) }));
-  $("set-encoder").addEventListener("change", () => pushOutput({ encoder: $("set-encoder").value }));
+  $("set-quality").addEventListener("input", paintQuality);
+  $("set-quality").addEventListener("change", () => pushOutput({ quality: Number($("set-quality").value) }));
+  $("set-encoder").addEventListener("change", () => {
+    pushOutput({ encoder: $("set-encoder").value });
+    paintQuality();
+  });
   $("set-results").addEventListener("change", () => pushOutput({ results_secs: Number($("set-results").value) }));
   $("set-mblur").addEventListener("change", () => pushOutput({ motion_blur: Number($("set-mblur").value) }));
   $("set-musicvol").addEventListener("input", () => { $("musicvol-val").textContent = `${$("set-musicvol").value}%`; });
@@ -2175,9 +2184,31 @@ function updateRenderReady() {
   updateRenderButton();
 }
 
+// Higher is better on this slider — that inversion is the whole point of it,
+// so the hint has to keep saying what the number costs.
+function paintQuality() {
+  const el = $("set-quality");
+  if (!el) return;
+  const q = Number(el.value);
+  $("quality-val").textContent = String(q);
+  const step = qualitySteps.find((s) => s.q === q);
+  const hint = $("quality-hint");
+  if (!step || !hint) return;
+  const enc = $("set-encoder")?.value || "auto";
+  const native =
+    enc === "x264"
+      ? `CRF ${step.x264}`
+      : enc === "auto"
+        ? `CRF ${step.x264} / hardware ${step.hardware}`
+        : `quantiser ${step.hardware}`;
+  hint.textContent = `${step.hint} · ${native}`;
+}
+
 async function initEncoders() {
   try {
     const probe = await invoke("probe_encoders");
+    qualitySteps = probe.quality_steps || [];
+    paintQuality();
     const list = probe.available;
     const sel = $("set-encoder");
     const labels = {
@@ -2185,7 +2216,10 @@ async function initEncoders() {
       x264: "x264 (software)",
       nvenc: "NVENC (NVIDIA)",
       qsv: "Quick Sync (Intel)",
-      vaapi: "VAAPI (AMD/Intel)",
+      // VAAPI covers AMD and Intel on Linux; AMD on Windows is AMF, which is
+      // why naming AMD on the VAAPI entry alone used to be misleading.
+      vaapi: "VAAPI (AMD/Intel, Linux)",
+      amf: "AMF (AMD)",
     };
     sel.innerHTML = list.map((e) => `<option value="${e}">${labels[e] || e}</option>`).join("");
     const saved = status?.settings?.encoder || "auto";

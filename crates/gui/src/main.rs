@@ -60,7 +60,14 @@ struct Settings {
     width: u32,
     height: u32,
     fps: u32,
-    crf: u32,
+    /// Render quality, 0..=100, HIGHER IS BETTER — see
+    /// [`rhythia_render::quality`].
+    quality: u32,
+    /// Present only in settings written before that scale was inverted,
+    /// where the stored number was the raw x264 CRF. Converted into
+    /// `quality` at load and never written back out.
+    #[serde(skip_serializing)]
+    crf: Option<u32>,
     encoder: String,
     preset: String,
     results_secs: f64,
@@ -120,7 +127,8 @@ impl Default for Settings {
             width: 1920,
             height: 1080,
             fps: 60,
-            crf: 18,
+            quality: rhythia_render::quality::DEFAULT,
+            crf: None,
             encoder: "auto".into(),
             preset: "veryfast".into(),
             results_secs: 4.0,
@@ -267,13 +275,29 @@ fn maps_cache_dir() -> PathBuf {
 }
 
 impl Settings {
+    /// Takes over a quality setting written before the scale was inverted.
+    ///
+    /// Those files stored the raw x264 CRF, where LOWER meant better. Reading
+    /// one of those numbers as a 0..=100 quality would turn somebody's "best"
+    /// into "draft" the first time they opened the new version — 14 was the
+    /// finest the old slider went and is nearly the coarsest the new one
+    /// does. The old field is converted once and never written back.
+    fn adopt_legacy_quality(&mut self) {
+        if let Some(crf) = self.crf.take() {
+            self.quality = rhythia_render::quality::from_legacy_crf(crf);
+        }
+    }
+
     fn load() -> Settings {
         let path = config_dir().join("settings.json");
         let Ok(text) = std::fs::read_to_string(&path) else {
             return Settings::default();
         };
-        match serde_json::from_str(&text) {
-            Ok(s) => s,
+        match serde_json::from_str::<Settings>(&text) {
+            Ok(mut s) => {
+                s.adopt_legacy_quality();
+                s
+            }
             Err(e) => {
                 // Losing every preference in silence is worse than the
                 // parse failure itself: keep the file so it can be looked
@@ -1033,8 +1057,8 @@ fn write_diagnostics(state: tauri::State<'_, App>, path: String) -> Result<Strin
     let _ = writeln!(s, "\noutput");
     let _ = writeln!(
         s,
-        "  {}x{} @ {} fps · crf {} · encoder {} · preset {}",
-        cfg.width, cfg.height, cfg.fps, cfg.crf, cfg.encoder, cfg.preset
+        "  {}x{} @ {} fps · quality {} · encoder {} · preset {}",
+        cfg.width, cfg.height, cfg.fps, cfg.quality, cfg.encoder, cfg.preset
     );
     let _ = writeln!(
         s,
@@ -2185,7 +2209,7 @@ struct OutputUpdate {
     width: Option<u32>,
     height: Option<u32>,
     fps: Option<u32>,
-    crf: Option<u32>,
+    quality: Option<u32>,
     encoder: Option<String>,
     preset: Option<String>,
     results_secs: Option<f64>,
@@ -2212,8 +2236,8 @@ fn set_output(state: tauri::State<'_, App>, update: OutputUpdate) -> Result<Stat
     if let Some(v) = update.fps {
         s.fps = v.clamp(24, 240);
     }
-    if let Some(v) = update.crf {
-        s.crf = v.clamp(0, 51);
+    if let Some(v) = update.quality {
+        s.quality = v.clamp(rhythia_render::quality::MIN, rhythia_render::quality::MAX);
     }
     if let Some(v) = update.encoder {
         s.encoder = v;
@@ -2446,7 +2470,9 @@ fn prepare_segment(
                 end_ms: end,
                 ffmpeg,
                 audio: None,
-                crf: 20,
+                // The preview is not the deliverable; deliberately below the
+                // render default so scrubbing stays responsive.
+                quality: rhythia_render::quality::from_legacy_crf(20),
                 preset: "ultrafast".into(),
                 encoder,
                 results_secs: 0.0,
@@ -3580,7 +3606,7 @@ fn start_render(
             width: s.width,
             height: s.height,
             fps: s.fps,
-            crf: s.crf,
+            quality: s.quality,
             encoder: s.encoder.clone(),
             preset: s.preset.clone(),
             results_secs: s.results_secs,
@@ -3666,7 +3692,7 @@ struct RenderJob {
     width: u32,
     height: u32,
     fps: u32,
-    crf: u32,
+    quality: u32,
     encoder: String,
     preset: String,
     results_secs: f64,
@@ -3695,8 +3721,9 @@ fn run_render_job(
 
     // Probe hardware encoders unless one was forced.
     let encoder = match job.encoder.as_str() {
-        "auto" => ["nvenc", "qsv", "vaapi"]
-            .into_iter()
+        "auto" => probe_order()
+            .iter()
+            .copied()
             .find(|e| rhythia_render::video::encoder_works(&job.ffmpeg, e))
             .unwrap_or("x264")
             .to_string(),
@@ -3737,7 +3764,7 @@ fn run_render_job(
         end_ms,
         ffmpeg: job.ffmpeg.clone(),
         audio,
-        crf: job.crf,
+        quality: job.quality,
         preset: job.preset.clone(),
         encoder,
         results_secs: job.results_secs,
@@ -3799,6 +3826,18 @@ fn cancel_render(state: tauri::State<'_, App>) {
     state.inner().cancel.store(true, Ordering::SeqCst);
 }
 
+/// One stop on the quality slider, resolved by the backend so the mapping
+/// lives in exactly one place. Recomputing it in JavaScript would be a second
+/// copy of [`rhythia_render::quality`] to keep in step, and the first time
+/// they drifted the number on screen would stop describing the encode.
+#[derive(Serialize, Clone)]
+struct QualityStep {
+    q: u32,
+    x264: u32,
+    hardware: u32,
+    hint: &'static str,
+}
+
 #[derive(Serialize)]
 struct EncoderProbe {
     available: Vec<String>,
@@ -3810,6 +3849,57 @@ struct EncoderProbe {
     ffmpeg_missing: bool,
     /// The path or command that was tried, so the message can name it.
     ffmpeg: String,
+    /// Every stop on the quality slider with the value each encoder family
+    /// will actually be given.
+    quality_steps: Vec<QualityStep>,
+}
+
+/// Encoders worth probing, best-first, for this platform.
+///
+/// AMF is AMD's Windows encoder — AMD dropped it on Linux and points at
+/// VA-API instead — so the two never compete for the same machine, and each
+/// list is ordered for the platform it runs on rather than sharing one.
+const fn probe_order() -> &'static [&'static str] {
+    #[cfg(windows)]
+    {
+        &["nvenc", "qsv", "amf"]
+    }
+    #[cfg(not(windows))]
+    {
+        &["nvenc", "qsv", "vaapi", "amf"]
+    }
+}
+
+/// Results of the encoder probe for one ffmpeg, kept for the life of the
+/// process. Each probe is a real encode and costs about a tenth of a second;
+/// the UI asks again whenever the output panel is rebuilt.
+///
+/// Deliberately NOT cached to disk: a driver update or a swapped GPU changes
+/// the answer, and a stale file would send someone to an encoder that no
+/// longer works with no way to tell why.
+fn probe_cache() -> &'static std::sync::Mutex<
+    std::collections::HashMap<String, (Vec<String>, BTreeMap<String, String>)>,
+> {
+    static CACHE: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<String, (Vec<String>, BTreeMap<String, String>)>>,
+    > = std::sync::OnceLock::new();
+    CACHE.get_or_init(Default::default)
+}
+
+/// The slider's stops. Step 5 is not arbitrary: the mapping moves the
+/// encoder's own number by exactly one per step, so every position on the
+/// slider is a distinct encode and none of them are duplicates.
+fn quality_steps() -> Vec<QualityStep> {
+    use rhythia_render::quality;
+    (quality::MIN..=quality::MAX)
+        .step_by(5)
+        .map(|q| QualityStep {
+            q,
+            x264: quality::x264_crf(q),
+            hardware: quality::hardware_q(q),
+            hint: quality::describe(q),
+        })
+        .collect()
 }
 
 #[tauri::command]
@@ -3829,12 +3919,26 @@ async fn probe_encoders(state: tauri::State<'_, App>) -> Result<EncoderProbe, St
         };
         let mut unavailable = BTreeMap::new();
         if !missing {
-            for e in ["nvenc", "qsv", "vaapi"] {
-                match rhythia_render::video::encoder_error(&ffmpeg, e) {
-                    None => available.push(e.to_string()),
-                    Some(reason) => {
-                        unavailable.insert(e.to_string(), reason);
+            let cached = probe_cache().lock().ok().and_then(|c| c.get(&ffmpeg).cloned());
+            match cached {
+                Some((hw, why)) => {
+                    available.extend(hw);
+                    unavailable = why;
+                }
+                None => {
+                    let mut hw = Vec::new();
+                    for e in probe_order() {
+                        match rhythia_render::video::encoder_error(&ffmpeg, e) {
+                            None => hw.push((*e).to_string()),
+                            Some(reason) => {
+                                unavailable.insert((*e).to_string(), reason);
+                            }
+                        }
                     }
+                    if let Ok(mut c) = probe_cache().lock() {
+                        c.insert(ffmpeg.clone(), (hw.clone(), unavailable.clone()));
+                    }
+                    available.extend(hw);
                 }
             }
         }
@@ -3843,6 +3947,7 @@ async fn probe_encoders(state: tauri::State<'_, App>) -> Result<EncoderProbe, St
             unavailable,
             ffmpeg_missing: missing,
             ffmpeg,
+            quality_steps: quality_steps(),
         })
     })
     .await

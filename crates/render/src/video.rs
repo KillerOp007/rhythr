@@ -23,7 +23,10 @@ pub struct VideoOptions {
     /// Audio track to mux; None renders a silent video.
     pub audio: Option<PathBuf>,
     /// x264 CRF (lower = higher quality); the QP for VAAPI.
-    pub crf: u32,
+    /// User-facing quality, 0..=100, HIGHER IS BETTER. Mapped onto each
+    /// encoder's own scale by [`crate::quality`] — it is deliberately not
+    /// the raw CRF any more, see that module.
+    pub quality: u32,
     /// x264 speed preset (ultrafast..placebo). veryfast roughly doubles
     /// encoding throughput over medium at slightly larger files.
     pub preset: String,
@@ -83,7 +86,7 @@ impl Default for VideoOptions {
             end_ms: 0.0,
             ffmpeg: "ffmpeg".into(),
             audio: None,
-            crf: 18,
+            quality: crate::quality::DEFAULT,
             preset: "veryfast".into(),
             encoder: "x264".into(),
             results_secs: 4.0,
@@ -204,7 +207,11 @@ pub fn render_video(
     hide_console_window(&mut cmd);
     cmd.args(["-y", "-loglevel", "error", "-nostats"]);
     if opts.encoder == "vaapi" {
-        cmd.args(["-vaapi_device", "/dev/dri/renderD128"]);
+        // Enumerated, not assumed: on a hybrid laptop the first render node
+        // is often the display-only chip.
+        if let Some(dev) = vaapi_device(&opts.ffmpeg) {
+            cmd.args(["-vaapi_device", dev]);
+        }
     }
     // Input 0: raw frames on stdin. NV12 where the frame size allows it —
     // 1.5 bytes per pixel instead of 4, on a pipe that was measured to be
@@ -254,9 +261,6 @@ pub fn render_video(
         }
     }
 
-    // Video encode: a hardware encoder when selected, software x264
-    // otherwise. Quality knobs are mapped from the x264 CRF.
-    let crf = opts.crf.to_string();
     // Optional motion blur: tmix averages neighbouring frames — free at
     // encode time, no extra rendering. It must run before any hardware
     // upload in the filter chain.
@@ -264,51 +268,23 @@ pub fn render_video(
         0 => None,
         n => Some(format!("tmix=frames={}", n + 1)),
     };
-    let vf = |hw_tail: &str| -> String {
-        match (&tmix, hw_tail.is_empty()) {
-            (Some(t), true) => t.clone(),
-            (Some(t), false) => format!("{t},{hw_tail}"),
-            (None, _) => hw_tail.to_string(),
-        }
+    let enc = video_encoder_args(
+        &opts.encoder,
+        opts.quality,
+        &opts.preset,
+        feed_nv12,
+        vaapi_icq_supported(&opts.ffmpeg, opts.encoder == "vaapi"),
+    );
+    let chain = match (&tmix, enc.filter.is_empty()) {
+        (Some(t), true) => t.clone(),
+        (Some(t), false) => format!("{t},{}", enc.filter),
+        (None, _) => enc.filter.clone(),
     };
-    match opts.encoder.as_str() {
-        "vaapi" => {
-            // Already NV12 on the way in: no swscale pass to pay for.
-            let chain = if feed_nv12 { "hwupload" } else { "format=nv12,hwupload" };
-            cmd.args(["-vf", &vf(chain), "-c:v", "h264_vaapi"]);
-            cmd.args(["-qp", &crf]);
-        }
-        "nvenc" => {
-            let f = vf("");
-            if !f.is_empty() {
-                cmd.args(["-vf", &f]);
-            }
-            // nvenc takes nv12 directly. Asking for yuv420p while we hand it
-            // nv12 makes ffmpeg insert a full-frame swscale pass per frame to
-            // shuffle the two chroma planes apart, for nothing.
-            let pix = if feed_nv12 { "nv12" } else { "yuv420p" };
-            cmd.args(["-c:v", "h264_nvenc", "-pix_fmt", pix]);
-            cmd.args(["-preset", nvenc_preset(&opts.preset), "-rc", "vbr"]);
-            cmd.args(["-cq", &crf, "-b:v", "0"]);
-        }
-        "qsv" => {
-            let f = vf("");
-            if !f.is_empty() {
-                cmd.args(["-vf", &f]);
-            }
-            cmd.args(["-c:v", "h264_qsv", "-pix_fmt", "nv12"]);
-            cmd.args(["-preset", qsv_preset(&opts.preset)]);
-            cmd.args(["-global_quality", &crf]);
-        }
-        _ => {
-            let f = vf("");
-            if !f.is_empty() {
-                cmd.args(["-vf", &f]);
-            }
-            cmd.args(["-c:v", "libx264", "-pix_fmt", "yuv420p"]);
-            cmd.args(["-crf", &crf, "-preset", &opts.preset]);
-        }
+    if !chain.is_empty() {
+        cmd.args(["-vf", &chain]);
     }
+    cmd.args(&enc.args);
+
     // Audio encode: the music stops where the clip ends (a fail cuts it off);
     // silence pads the appended results screen, and the output is capped at
     // the exact video duration instead of -shortest. With hit sounds a
@@ -680,6 +656,159 @@ pub fn encoder_works(ffmpeg: &str, encoder: &str) -> bool {
     encoder_error(ffmpeg, encoder).is_none()
 }
 
+/// What a video encoder needs on the command line: a tail for the filter
+/// chain (hardware encoders want their frames uploaded to VRAM first) and the
+/// codec, quality and preset arguments themselves.
+struct EncoderArgs {
+    filter: String,
+    args: Vec<String>,
+}
+
+/// Builds them for one encoder.
+///
+/// [`encoder_error`] runs this SAME function, which is the point of it
+/// existing: an option that an ffmpeg build or a driver rejects then makes
+/// that encoder come out as unavailable and auto-selection moves on, instead
+/// of the mistake surfacing as a failed encode after someone has sat through
+/// a render. That matters most for AMF, which cannot be tested on the machine
+/// this was written on — a wrong flag there costs an AMD owner nothing worse
+/// than the software fallback they already had.
+fn video_encoder_args(
+    encoder: &str,
+    quality: u32,
+    preset: &str,
+    feed_nv12: bool,
+    vaapi_icq: bool,
+) -> EncoderArgs {
+    let hw = crate::quality::hardware_q(quality).to_string();
+    let mut filter = String::new();
+    let mut args: Vec<String> = Vec::new();
+    let mut add = |v: &[&str]| args.extend(v.iter().map(|s| (*s).to_string()));
+    match encoder {
+        "vaapi" => {
+            // Already NV12 on the way in: no swscale pass to pay for.
+            filter = if feed_nv12 { "hwupload" } else { "format=nv12,hwupload" }.into();
+            add(&["-c:v", "h264_vaapi", "-profile:v", "high"]);
+            if vaapi_icq {
+                // Intelligent constant quality: the driver varies the
+                // quantiser with the picture the way x264's CRF does. This
+                // used to send a flat -qp, which spends bits on still frames
+                // and starves busy ones.
+                add(&["-rc_mode", "ICQ", "-global_quality", &hw]);
+            } else {
+                add(&["-rc_mode", "CQP", "-qp", &hw]);
+            }
+        }
+        "nvenc" => {
+            // nvenc takes nv12 directly. Asking for yuv420p while we hand it
+            // nv12 makes ffmpeg insert a full-frame swscale pass per frame to
+            // shuffle the two chroma planes apart, for nothing.
+            let pix = if feed_nv12 { "nv12" } else { "yuv420p" };
+            add(&["-c:v", "h264_nvenc", "-pix_fmt", pix, "-profile:v", "high"]);
+            add(&["-preset", nvenc_preset(preset)]);
+            // Constant quality on nvenc is VBR with no average target: the
+            // -b:v 0 is not decoration, without it ffmpeg's default 2 Mbit/s
+            // average applies and 4K falls apart.
+            add(&["-rc", "vbr", "-cq", &hw, "-b:v", "0"]);
+        }
+        "qsv" => {
+            add(&["-c:v", "h264_qsv", "-pix_fmt", "nv12", "-profile:v", "high"]);
+            add(&["-preset", qsv_preset(preset)]);
+            // ICQ, which is what QuickSync picks when global_quality is set
+            // and no bitrate cap is. Never add -maxrate or -b:v here: either
+            // silently demotes this to plain VBR.
+            add(&["-global_quality", &hw]);
+        }
+        "amf" => {
+            // AMD on Windows. Without this an AMD owner falls all the way
+            // through to software x264, because nvenc is the wrong vendor,
+            // QuickSync needs an Intel chip, and VAAPI is Linux-only.
+            let pix = if feed_nv12 { "nv12" } else { "yuv420p" };
+            add(&["-c:v", "h264_amf", "-pix_fmt", pix, "-profile:v", "high"]);
+            add(&["-quality", amf_quality(preset)]);
+            add(&["-rc", "cqp", "-qp_i", &hw, "-qp_p", &hw, "-qp_b", &hw]);
+        }
+        _ => {
+            add(&["-c:v", "libx264", "-pix_fmt", "yuv420p", "-profile:v", "high"]);
+            let crf = crate::quality::x264_crf(quality).to_string();
+            add(&["-crf", &crf, "-preset", preset]);
+        }
+    }
+    EncoderArgs { filter, args }
+}
+
+/// AMF's three-step quality knob, from the x264 preset name.
+fn amf_quality(preset: &str) -> &'static str {
+    match preset {
+        "ultrafast" | "superfast" | "veryfast" => "speed",
+        "slow" | "slower" | "veryslow" | "placebo" => "quality",
+        _ => "balanced",
+    }
+}
+
+/// The DRM render node VAAPI should use.
+///
+/// renderD128 is usually right and used to be hardcoded, but on a hybrid
+/// laptop the first node is often the display-only chip while the encoder
+/// lives on the second — rhythr then reported "no VAAPI" on a machine that
+/// has one. Enumerated and probed once per process.
+pub fn vaapi_device(ffmpeg: &str) -> Option<&'static str> {
+    static CACHE: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    CACHE
+        .get_or_init(|| {
+            let mut nodes: Vec<String> = std::fs::read_dir("/dev/dri")
+                .into_iter()
+                .flatten()
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| {
+                    p.file_name()
+                        .and_then(|n| n.to_str())
+                        .is_some_and(|n| n.starts_with("renderD"))
+                })
+                .filter_map(|p| p.to_str().map(str::to_owned))
+                .collect();
+            nodes.sort();
+            nodes.into_iter().find(|dev| vaapi_probe(ffmpeg, dev, false))
+        })
+        .as_deref()
+}
+
+/// Runs a tiny real encode on one render node. `icq` asks for the rate
+/// control mode we would rather use, so the answer is about the mode and not
+/// just about the device.
+fn vaapi_probe(ffmpeg: &str, device: &str, icq: bool) -> bool {
+    let mut cmd = Command::new(ffmpeg);
+    hide_console_window(&mut cmd);
+    cmd.args(["-hide_banner", "-loglevel", "error"]);
+    cmd.args(["-vaapi_device", device]);
+    cmd.args(["-f", "lavfi", "-i", "color=black:size=256x256:rate=30:duration=0.1"]);
+    cmd.args(["-vf", "format=nv12,hwupload", "-c:v", "h264_vaapi"]);
+    if icq {
+        cmd.args(["-rc_mode", "ICQ", "-global_quality", "23"]);
+    }
+    cmd.args(["-f", "null", "-"]);
+    cmd.stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// Whether this VAAPI driver accepts intelligent-constant-quality. Several do
+/// not, and asking for a mode a driver lacks fails the whole encode, so the
+/// answer decides between ICQ and a flat quantiser. Probed once.
+fn vaapi_icq_supported(ffmpeg: &str, needed: bool) -> bool {
+    if !needed {
+        return false;
+    }
+    static CACHE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *CACHE.get_or_init(|| match vaapi_device(ffmpeg) {
+        Some(dev) => vaapi_probe(ffmpeg, dev, true),
+        None => false,
+    })
+}
+
 /// Translates the x264 speed preset the user picked into nvenc's p1..p7
 /// scale. Without this the hardware encoder ignored the speed control
 /// completely and always ran p5, one of the slowest quality presets — which
@@ -716,34 +845,42 @@ fn qsv_preset(preset: &str) -> &'static str {
 /// meaningful line) so the UI can say WHY an encoder is unavailable — e.g.
 /// nvenc rejecting an outdated NVIDIA driver.
 pub fn encoder_error(ffmpeg: &str, encoder: &str) -> Option<String> {
-    let mut args: Vec<&str> = vec!["-hide_banner", "-loglevel", "error"];
+    let mut cmd = std::process::Command::new(ffmpeg);
+    hide_console_window(&mut cmd);
+    cmd.args(["-hide_banner", "-loglevel", "error"]);
     match encoder {
-        "vaapi" => {
-            if !std::path::Path::new("/dev/dri/renderD128").exists() {
-                return Some("no VAAPI render device (/dev/dri/renderD128)".into());
+        "vaapi" => match vaapi_device(ffmpeg) {
+            Some(dev) => {
+                cmd.args(["-vaapi_device", dev]);
             }
-            args.extend(["-vaapi_device", "/dev/dri/renderD128"]);
-        }
-        "nvenc" | "qsv" => {}
+            None => return Some("no working VAAPI render device in /dev/dri".into()),
+        },
+        "nvenc" | "qsv" | "amf" => {}
         _ => return None, // software x264 always works
     }
-    args.extend([
+    cmd.args([
         "-f",
         "lavfi",
         "-i",
         "color=black:size=256x256:rate=30:duration=0.1",
     ]);
-    match encoder {
-        "vaapi" => args.extend(["-vf", "format=nv12,hwupload", "-c:v", "h264_vaapi"]),
-        "nvenc" => args.extend(["-c:v", "h264_nvenc"]),
-        "qsv" => args.extend(["-c:v", "h264_qsv"]),
-        _ => unreachable!(),
+    // The SAME arguments a real render would use, at the default quality and
+    // preset. Probing with a bare `-c:v` instead used to pass on options the
+    // encode then choked on, which turned a wrong flag into a failed render
+    // rather than an encoder that quietly does not appear in the list.
+    let enc = video_encoder_args(
+        encoder,
+        crate::quality::DEFAULT,
+        "medium",
+        false,
+        vaapi_icq_supported(ffmpeg, encoder == "vaapi"),
+    );
+    if !enc.filter.is_empty() {
+        cmd.args(["-vf", &enc.filter]);
     }
-    args.extend(["-f", "null", "-"]);
-    let mut cmd = std::process::Command::new(ffmpeg);
-    hide_console_window(&mut cmd);
+    cmd.args(&enc.args);
+    cmd.args(["-f", "null", "-"]);
     let output = cmd
-        .args(&args)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
         .output();
