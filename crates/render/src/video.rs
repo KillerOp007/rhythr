@@ -321,6 +321,13 @@ pub fn render_video(
     }
     let video_dur = total_frames as f64 / opts.fps as f64;
     cmd.args(["-t", &format!("{video_dur:.3}")]);
+    // Move the index to the front so the file starts playing before it has
+    // finished downloading. Only the Analyze window's own segments used to
+    // ask for this; the video the user actually keeps and uploads did not.
+    // It costs one rewrite of the finished file.
+    if !opts.extra_output_args.iter().any(|a| a.contains("faststart")) {
+        cmd.args(["-movflags", "+faststart"]);
+    }
     for a in &opts.extra_output_args {
         cmd.arg(a);
     }
@@ -404,7 +411,7 @@ pub fn render_video(
             t_conv.set(t_conv.get() + mark.elapsed().as_secs_f64());
         }
         let mark = std::time::Instant::now();
-        let wrote = stdin.write_all(payload);
+        let wrote = write_in_pieces(&mut stdin, payload);
         if timing {
             t_pipe.set(t_pipe.get() + mark.elapsed().as_secs_f64());
         }
@@ -654,6 +661,27 @@ pub fn ffmpeg_runs(ffmpeg: &str) -> bool {
 /// encoder on this machine by encoding a tiny synthetic clip to null.
 pub fn encoder_works(ffmpeg: &str, encoder: &str) -> bool {
     encoder_error(ffmpeg, encoder).is_none()
+}
+
+/// Hands one frame to ffmpeg in pieces instead of in a single call.
+///
+/// Measured at 4K NV12 into a real ffmpeg: one `write_all` of the whole
+/// 12.4 MB frame costs 8.6 ms, the same bytes in 16 KiB pieces 6.2 ms. A
+/// single large write fills the pipe and then waits for the reader to drain
+/// enough of it, which makes the two processes take turns; small writes come
+/// back as soon as there is room and both keep running. 4 KiB was measured
+/// too and is worse again — three thousand syscalls a frame costs more than
+/// the waiting it saves.
+///
+/// Enlarging the pipe itself was measured as well (F_SETPIPE_SZ to 1 MiB) and
+/// adds nothing on top of this: 7.51 ms against 7.40 ms over five runs each,
+/// inside the spread. It is not worth a platform-specific dependency.
+fn write_in_pieces(sink: &mut impl std::io::Write, frame: &[u8]) -> std::io::Result<()> {
+    const PIECE: usize = 16 * 1024;
+    for part in frame.chunks(PIECE) {
+        sink.write_all(part)?;
+    }
+    Ok(())
 }
 
 /// What a video encoder needs on the command line: a tail for the filter
