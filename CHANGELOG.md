@@ -32,6 +32,15 @@ substantially faster, and a round of quality-of-life work on top.
   still from the renderer — the new path is marginally closer to that still
   than the old one was.
 
+- **Frames go to ffmpeg in 16 KiB pieces** instead of one write per frame:
+  8.6 ms down to 6.2 ms for a 4K frame. One large write fills the pipe and
+  then waits for the reader to drain it, so the two processes take turns.
+  Enlarging the pipe itself was measured too and did not survive it — 7.40 ms
+  against 7.51 ms, inside the spread — so it is not here. There is also an
+  optional loopback-socket transport under Advanced, **off by default**: it
+  is faster at moving bytes but only about 5% once a real encoder is
+  attached, and a socket can fail to connect where a pipe cannot.
+
 - **The colour conversion moved onto the GPU**, which is what was left once
   the pipe stopped being the limit. Timing each stage separately at
   3840x2160/120 showed the GPU building a frame in 0.64 ms and the CPU then
@@ -71,6 +80,51 @@ substantially faster, and a round of quality-of-life work on top.
   while paused: it was rebuilding the screen geometry of every note in the
   map, 3400 of them on a dense chart, describing something that was not
   moving.
+
+### Changed
+
+- **Quality runs the other way round now: 0 to 100, higher is better.** The
+  number used to be an x264 CRF, where lower meant better — correct for CRF
+  and wrong for what a slider promises, since people drag it right for more
+  and got less. It also meant four different things at once: the same value
+  went to libx264 as `-crf`, nvenc as `-cq`, QuickSync as `-global_quality`
+  and VAAPI as `-qp`, which are a rate factor, a target hint and two flat
+  quantisers on incompatible scales — so changing encoder silently changed
+  the output while the number on screen stood still. One scale now maps onto
+  each of them, and the line under the slider says both what the setting is
+  worth and what the selected encoder is actually being told. The mapping is
+  approximate and says so: there is no published equivalence between these
+  scales, which is exactly why the resolved value is shown rather than
+  hidden.
+
+  The default is now 70, x264 CRF 20. At 4K60 the old bottom of the slider
+  produced several times what YouTube documents for the format and
+  re-encodes away regardless. On a ten-second 1080p60 clip: 4.8 MB at
+  quality 100, **2.9 MB at the new default**. Settings and scripts written
+  before this are converted, so a saved value still means the encode it
+  always meant — `--crf` still works on the command line and is converted
+  the same way.
+
+- **AMD gets hardware encoding on Windows.** Auto-selection went NVENC →
+  QuickSync → VAAPI → software, and VAAPI looks for `/dev/dri/renderD128`,
+  a path Windows does not have — so every AMD machine on Windows rendered on
+  the CPU. AMF is now in the list. The encoder dropdown also stops calling
+  VAAPI "AMD/Intel" without saying that only holds on Linux.
+
+- Hardware encoders are checked by running **the same arguments a render
+  will use**, instead of a bare codec name. An option a driver rejects now
+  makes that encoder unavailable and auto-selection moves past it, rather
+  than surfacing as a failed encode after someone has waited through a
+  render. It matters: `av1_vaapi` is listed on the machine this was written
+  on and fails with "No usable encoding profile found" the moment it is
+  asked to do anything.
+
+- VAAPI asks for intelligent-constant-quality where the driver has it and
+  falls back to a flat quantiser where it does not — also not hypothetical:
+  the driver here answers "does not support ICQ RC mode (supported modes:
+  CQP, CBR, VBR)". The DRM render node is enumerated rather than assumed,
+  which is what a hybrid laptop needs, since its first node is often the
+  display-only chip.
 
 ### Fixed
 

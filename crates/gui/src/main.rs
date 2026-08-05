@@ -4432,3 +4432,60 @@ mod update_channel_tests {
         assert!(c == "self" || c == "page", "unexpected channel {c}");
     }
 }
+
+#[cfg(test)]
+mod settings_migration_tests {
+    use super::*;
+
+    /// A settings.json written before the quality scale was inverted stored
+    /// the raw x264 CRF, where LOWER meant better. Read as a point on the new
+    /// scale it would turn somebody's finest setting into the coarsest one,
+    /// which is the single worst thing an upgrade could do here.
+    #[test]
+    fn a_file_from_before_the_inversion_still_means_the_same_encode() {
+        for (crf, expect_x264) in [(14u32, 14u32), (18, 18), (20, 20), (30, 30)] {
+            let json = format!(r#"{{"crf":{crf}}}"#);
+            let mut s: Settings = serde_json::from_str(&json).expect("parses");
+            s.adopt_legacy_quality();
+            assert_eq!(
+                rhythia_render::quality::x264_crf(s.quality),
+                expect_x264,
+                "a saved crf {crf} stopped meaning crf {expect_x264}"
+            );
+        }
+    }
+
+    /// And it must only happen once. The migrated file no longer carries the
+    /// old field, so a second launch has to leave the value alone.
+    #[test]
+    fn migrating_twice_does_not_move_the_value_again() {
+        let mut s: Settings = serde_json::from_str(r#"{"crf":14}"#).expect("parses");
+        s.adopt_legacy_quality();
+        let once = s.quality;
+        let written = serde_json::to_string(&s).expect("serialises");
+        assert!(
+            !written.contains("\"crf\""),
+            "the legacy field was written back out: {written}"
+        );
+        let mut again: Settings = serde_json::from_str(&written).expect("re-parses");
+        again.adopt_legacy_quality();
+        assert_eq!(again.quality, once);
+    }
+
+    /// A file written by this version is not a legacy file and must be taken
+    /// at face value.
+    #[test]
+    fn a_current_file_is_left_alone() {
+        let mut s: Settings = serde_json::from_str(r#"{"quality":45}"#).expect("parses");
+        s.adopt_legacy_quality();
+        assert_eq!(s.quality, 45);
+    }
+
+    /// A file with neither field is a fresh install.
+    #[test]
+    fn an_empty_file_lands_on_the_default() {
+        let mut s: Settings = serde_json::from_str("{}").expect("parses");
+        s.adopt_legacy_quality();
+        assert_eq!(s.quality, rhythia_render::quality::DEFAULT);
+    }
+}
