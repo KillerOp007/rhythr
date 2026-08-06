@@ -677,6 +677,7 @@ function renderOutputTab() {
   $("set-quality").value = String(s.quality);
   paintQuality();
   $("set-tcpfeed").checked = !!s.tcp_feed;
+  $("set-sockchunk").value = String(s.socket_chunk_kib);
   $("set-encoder").value = s.encoder;
   $("set-results").value = String(Math.round(s.results_secs));
   $("set-mblur").value = String(s.motion_blur);
@@ -1550,7 +1551,11 @@ function initRenderEvents() {
     // during it: "why was that one slower than the last" is a question you
     // only think to ask once it is over.
     $("render-text").classList.add("done");
-    $("render-text").textContent = `Done — ${e.payload.path}\n${e.payload.timing}`;
+    // Everything that could explain the speed, on screen: with no console on
+    // Windows, two finished renders side by side is the only way to see what
+    // differed between them.
+    $("render-text").textContent =
+      `Done — ${e.payload.path}\n${e.payload.timing}\n${e.payload.detail}`;
     $("btn-open-out").hidden = false;
     setWindowNotice("Render finished");
   });
@@ -2076,6 +2081,8 @@ function initControls() {
   $("set-preset").addEventListener("change", () => pushOutput({ preset: $("set-preset").value }));
   $("set-tcpfeed").addEventListener("change", () =>
     pushOutput({ tcp_feed: $("set-tcpfeed").checked }));
+  $("set-sockchunk").addEventListener("change", () =>
+    pushOutput({ socket_chunk_kib: Number($("set-sockchunk").value) }));
   $("set-quality").addEventListener("input", paintQuality);
   $("set-quality").addEventListener("change", () => pushOutput({ quality: Number($("set-quality").value) }));
   $("set-encoder").addEventListener("change", () => {

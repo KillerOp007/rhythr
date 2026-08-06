@@ -53,6 +53,10 @@ pub struct VideoOptions {
     /// Off by default — see [`FrameSink`] for what it is worth and why that
     /// is not obviously a win.
     pub tcp_feed: bool,
+    /// Bytes per write into that socket; 0 means the whole frame in one
+    /// call. See [`FrameSink::write_frame`] — the best value is not the same
+    /// on every platform, so this is a setting rather than a constant.
+    pub socket_chunk: usize,
     /// Custom VIDEO background: decoded by the same ffmpeg, muted and
     /// looped from its start point, one frame per output frame. (Image
     /// backgrounds ride the config's background layers instead.) The
@@ -99,6 +103,7 @@ impl Default for VideoOptions {
             ghost: None,
             extra_output_args: Vec::new(),
             tcp_feed: false,
+            socket_chunk: 256 * 1024,
             background_video: None,
         }
     }
@@ -115,7 +120,7 @@ impl Default for VideoOptions {
 /// cost nothing next to a frame and because the question "why was that render
 /// slower than the last one" is otherwise unanswerable from a GUI: the stage
 /// breakdown used to go to stderr, which a desktop app on Windows discards.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct RenderStats {
     pub frames: u64,
     /// Building the picture and handing it to the GPU.
@@ -128,8 +133,11 @@ pub struct RenderStats {
     /// keeping up — this is the encoder's back pressure as much as the
     /// transport's cost.
     pub feed_ms: f64,
-    /// Which transport carried the frames.
-    pub transport: &'static str,
+    /// Which transport carried the frames, and how they were written into
+    /// it. The write size is a setting and this is where its effect can be
+    /// read off — a desktop app has no console to print it to, which is
+    /// exactly how an environment variable failed at the job.
+    pub transport: String,
 }
 
 impl RenderStats {
@@ -421,7 +429,7 @@ pub fn render_video(
         done: false,
     };
     let log = FfmpegLog::drain(stderr);
-    let mut stdin = FrameSink::open(listener, stdin_pipe, &log)?;
+    let mut stdin = FrameSink::open(listener, stdin_pipe, opts.socket_chunk, &log)?;
     // Ask the GPU to convert instead. It reports back whether it took the
     // job: the compute path needs a width it can address, and everything it
     // turns down falls through to the CPU conversion unchanged.
@@ -591,7 +599,15 @@ pub fn render_video(
             readback_ms: per(t_hand - conv - pipe),
             convert_ms: per(conv),
             feed_ms: per(pipe),
-            transport: if listener_used { "socket" } else { "pipe" },
+            transport: if listener_used {
+                match opts.socket_chunk {
+                    0 => "socket, whole frame".to_string(),
+                    n if n % 1024 == 0 => format!("socket, {} KiB", n / 1024),
+                    n => format!("socket, {n} B"),
+                }
+            } else {
+                "pipe".to_string()
+            },
         }
     };
     for j in play_frames.saturating_sub(DEPTH.min(play_frames))..play_frames {
@@ -838,7 +854,8 @@ fn probe_tcp_feed(ffmpeg: &str) -> bool {
 /// quiet fallback.
 enum FrameSink {
     Pipe(std::process::ChildStdin),
-    Tcp(std::net::TcpStream),
+    /// The stream, and how much of a frame to hand it per write.
+    Tcp(std::net::TcpStream, usize),
 }
 
 impl FrameSink {
@@ -849,6 +866,7 @@ impl FrameSink {
     fn open(
         listener: Option<std::net::TcpListener>,
         stdin: Option<std::process::ChildStdin>,
+        chunk: usize,
         log: &FfmpegLog,
     ) -> Result<FrameSink, Error> {
         let Some(listener) = listener else {
@@ -869,7 +887,7 @@ impl FrameSink {
                     // Frames are large and strictly ordered; waiting to
                     // coalesce them buys nothing and costs latency.
                     let _ = sock.set_nodelay(true);
-                    return Ok(FrameSink::Tcp(sock));
+                    return Ok(FrameSink::Tcp(sock, chunk));
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                     if std::time::Instant::now() >= deadline {
@@ -919,7 +937,7 @@ impl FrameSink {
                 }
                 Ok(())
             }
-            FrameSink::Tcp(s) => match socket_chunk() {
+            FrameSink::Tcp(s, chunk) => match *chunk {
                 0 => s.write_all(frame),
                 n => {
                     for part in frame.chunks(n) {
@@ -932,38 +950,18 @@ impl FrameSink {
     }
 }
 
-/// Bytes per write into the socket; 0 means the whole frame in one call.
-///
-/// The best value is not the same on every platform and this is the honest
-/// way to find out. On Linux the whole frame wins outright (4.25 ms against
-/// 6.14 ms at 16 KiB), but the owner's Windows machine got 210 fps from
-/// 16 KiB pieces and about 200 from a single write — the loopback stacks are
-/// not the same, and a 12 MB send behaves differently on each. So the
-/// default is a middle value that was within 5% of the best here and does
-/// not hand the kernel one enormous blocking write, and RHYTHR_SOCKET_CHUNK
-/// exists so the question can be settled by measurement on the machine that
-/// actually cares.
-fn socket_chunk() -> usize {
-    static CHUNK: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    *CHUNK.get_or_init(|| {
-        std::env::var("RHYTHR_SOCKET_CHUNK")
-            .ok()
-            .and_then(|v| v.trim().parse::<usize>().ok())
-            .unwrap_or(256 * 1024)
-    })
-}
 
 impl std::io::Write for FrameSink {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         match self {
             FrameSink::Pipe(p) => p.write(buf),
-            FrameSink::Tcp(s) => s.write(buf),
+            FrameSink::Tcp(s, _) => s.write(buf),
         }
     }
     fn flush(&mut self) -> std::io::Result<()> {
         match self {
             FrameSink::Pipe(p) => p.flush(),
-            FrameSink::Tcp(s) => s.flush(),
+            FrameSink::Tcp(s, _) => s.flush(),
         }
     }
 }

@@ -303,6 +303,17 @@
             <span class="check"><input type="checkbox" id="set-tcpfeed" /> Fast frame transport</span>
             <span class="sub">Sends frames to the encoder over a local connection instead of a pipe. Worth up to a third of the render time on a fast graphics card, nothing on a slow one. Checked before it is used and quietly skipped if your ffmpeg cannot do it.</span>
           </label>
+          <label class="field">
+            <span>Frame write size</span>
+            <select id="set-sockchunk">
+              <option value="16">16 KiB</option>
+              <option value="64">64 KiB</option>
+              <option value="256" selected>256 KiB</option>
+              <option value="1024">1 MiB</option>
+              <option value="0">Whole frame</option>
+            </select>
+            <span class="sub">How much of a frame goes into that connection per write. The best value is not the same on every system — the finished-render line names the one that was used, so two renders settle it.</span>
+          </label>
           <button class="btn small wide" id="btn-diagnostics"
                   title="Write a text file describing this build, your ffmpeg and encoders, and what is loaded — everything a bug report needs">Save diagnostics…</button>
         </details>

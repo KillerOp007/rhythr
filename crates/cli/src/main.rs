@@ -118,6 +118,10 @@ enum Command {
         /// used; this is the way out if it ever misbehaves.
         #[arg(long)]
         no_tcp_feed: bool,
+        /// Bytes handed to that socket per write; 0 = the whole frame at
+        /// once. The best value differs by platform.
+        #[arg(long, default_value_t = 256 * 1024)]
+        socket_chunk: usize,
         /// Second replay of the same map, rendered as a ghost overlay
         /// (cursor + trail in orange, with a versus panel).
         #[arg(long)]
@@ -505,6 +509,7 @@ fn run() -> anyhow::Result<bool> {
             quality,
             crf,
             no_tcp_feed,
+            socket_chunk,
             ghost_replay,
             motion_blur,
             music_volume,
@@ -694,6 +699,7 @@ fn run() -> anyhow::Result<bool> {
                 ffmpeg,
                 audio: audio_path,
                 tcp_feed: !no_tcp_feed,
+                socket_chunk,
                 quality: match crf {
                     // A raw CRF from an older script still has to mean what
                     // it always meant, so it is converted rather than read as

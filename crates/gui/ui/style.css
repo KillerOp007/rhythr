@@ -192,7 +192,7 @@ code { font-family: ui-monospace, Consolas, monospace; color: var(--accent); fon
 /* Progress is one line that must not reflow while it ticks; the finished
    message is two, because the timing under it is the point of reading it. */
 #render-text.done { white-space: pre-line; overflow: visible; text-overflow: clip; }
-#render-text.done { line-height: 1.35; }
+#render-text.done { line-height: 1.35; font-size: var(--fs-sm); }
 /* The file a render will write, so it is knowable before it runs. */
 #render-target {
   font-size: var(--fs-xs); opacity: 0.75; margin-top: 2px;

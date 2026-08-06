@@ -73,6 +73,11 @@ struct Settings {
     /// 210 fps at 4K240 — and since the render crate probes the path before
     /// depending on it and falls back to the pipe on its own.
     tcp_feed: bool,
+    /// Kibibytes handed to that socket per write; 0 means the whole frame at
+    /// once. Exposed because the best value differs by platform, and because
+    /// an environment variable was no use here: a desktop app on Windows has
+    /// no console, so there was no way to see whether it had taken.
+    socket_chunk_kib: u32,
     encoder: String,
     preset: String,
     results_secs: f64,
@@ -135,6 +140,7 @@ impl Default for Settings {
             quality: rhythia_render::quality::DEFAULT,
             crf: None,
             tcp_feed: true,
+            socket_chunk_kib: 256,
             encoder: "auto".into(),
             preset: "veryfast".into(),
             results_secs: 4.0,
@@ -360,6 +366,11 @@ struct Inner {
     replay: Option<(PathBuf, Replay)>,
     map: Option<(PathBuf, Map)>,
     map_source: String,
+    /// Whether the loaded replay came back from the last session rather than
+    /// being opened by hand. Purely diagnostic: renders after a restart have
+    /// been reported as slower unless the replay is reloaded, and this is
+    /// what makes the two cases distinguishable in the finished-render line.
+    replay_restored: bool,
     /// Probed duration of the current VIDEO background (drives the
     /// start-time slider); None for images/no background/unprobed.
     bg_duration: Option<f64>,
@@ -472,6 +483,10 @@ struct Shared {
     frame_jobs: std::sync::atomic::AtomicUsize,
     /// Join handle of the active render thread (used on app exit).
     render_thread: Mutex<Option<std::thread::JoinHandle<()>>>,
+    /// How many renders this process has run. The first one pays for GPU
+    /// pipeline setup and cold file caches, which is a candidate for
+    /// "slower right after a restart".
+    renders_done: std::sync::atomic::AtomicU64,
 }
 
 impl Shared {
@@ -1384,6 +1399,7 @@ fn load_replay(state: tauri::State<'_, App>, path: String, app_handle: tauri::Ap
     // A clip range belongs to the run it was set on — a different replay
     // must not inherit it (a shorter run would collapse it to nothing).
     inner.clip = None;
+    inner.replay_restored = false;
     inner.settings.last_replay = Some(path.clone());
     let recent = &mut inner.settings.recent_replays;
     recent.retain(|p| p != &path);
@@ -2217,6 +2233,7 @@ struct OutputUpdate {
     fps: Option<u32>,
     quality: Option<u32>,
     tcp_feed: Option<bool>,
+    socket_chunk_kib: Option<u32>,
     encoder: Option<String>,
     preset: Option<String>,
     results_secs: Option<f64>,
@@ -2248,6 +2265,9 @@ fn set_output(state: tauri::State<'_, App>, update: OutputUpdate) -> Result<Stat
     }
     if let Some(v) = update.tcp_feed {
         s.tcp_feed = v;
+    }
+    if let Some(v) = update.socket_chunk_kib {
+        s.socket_chunk_kib = v.min(4096);
     }
     if let Some(v) = update.encoder {
         s.encoder = v;
@@ -2489,6 +2509,7 @@ fn prepare_segment(
                 // socket has to be probed before it can be trusted, which is
                 // a cost with nothing to earn it back at this size.
                 tcp_feed: false,
+                socket_chunk: 0,
                 preset: "ultrafast".into(),
                 encoder,
                 results_secs: 0.0,
@@ -3624,6 +3645,7 @@ fn start_render(
             fps: s.fps,
             quality: s.quality,
             tcp_feed: s.tcp_feed,
+            socket_chunk_kib: s.socket_chunk_kib,
             encoder: s.encoder.clone(),
             preset: s.preset.clone(),
             results_secs: s.results_secs,
@@ -3679,12 +3701,13 @@ fn start_render(
         }));
         thread_app.rendering.store(false, Ordering::SeqCst);
         match outcome {
-            Ok(Ok((path, stats))) => {
+            Ok(Ok((path, stats, detail))) => {
                 let _ = app_handle.emit(
                     "render-done",
                     RenderDone {
                         path: path.to_string_lossy().into_owned(),
                         timing: stats.summary(),
+                        detail,
                     },
                 );
             }
@@ -3717,6 +3740,7 @@ struct RenderJob {
     fps: u32,
     quality: u32,
     tcp_feed: bool,
+    socket_chunk_kib: u32,
     encoder: String,
     preset: String,
     results_secs: f64,
@@ -3733,19 +3757,69 @@ struct RenderJob {
     out: PathBuf,
 }
 
-/// What the window is told when a render finishes. The timing rides along so
-/// "why was that one slower" can be answered by reading the screen.
+/// What the window is told when a render finishes.
+///
+/// This is deliberately verbose. A desktop app has no console, so everything
+/// a slow render might be blamed on has to be readable off the screen or it
+/// might as well not be recorded: two renders side by side, and whatever
+/// differs between the lines is the answer.
 #[derive(Serialize, Clone)]
 struct RenderDone {
     path: String,
     timing: String,
+    detail: String,
+}
+
+/// Everything about a render that could plausibly explain its speed.
+fn render_detail(app: &App, job: &RenderJob, encoder: &str, nth: u64) -> String {
+    let (restored, map_source, mismatch) = {
+        let inner = app.lock();
+        (
+            inner.replay_restored,
+            inner.map_source.clone(),
+            inner.map_hash_mismatch,
+        )
+    };
+    let q = job.quality;
+    let bg = match (&job.background_video, job.cfg.background_images.is_empty()) {
+        (Some(_), _) => "video",
+        (None, false) => "image",
+        (None, true) => "none",
+    };
+    format!(
+        "{}x{} @{} fps · quality {} (x264 {} / hw {}) · {} · {}
+         {} · frame write {} · ghost {} · blur {} · background {} · hitsounds {}
+         replay {} · map {}{} · render #{} since start",
+        job.width,
+        job.height,
+        job.fps,
+        q,
+        rhythia_render::quality::x264_crf(q),
+        rhythia_render::quality::hardware_q(q),
+        encoder,
+        job.preset,
+        if job.tcp_feed { "socket requested" } else { "pipe requested" },
+        if job.socket_chunk_kib == 0 {
+            "whole frame".to_string()
+        } else {
+            format!("{} KiB", job.socket_chunk_kib)
+        },
+        if job.ghost.is_some() { "yes" } else { "no" },
+        job.motion_blur,
+        bg,
+        if job.hitsounds.is_some() { "on" } else { "off" },
+        if restored { "restored at startup" } else { "opened by hand" },
+        map_source,
+        if mismatch { " (HASH MISMATCH)" } else { "" },
+        nth,
+    )
 }
 
 fn run_render_job(
     app: &App,
     handle: &tauri::AppHandle,
     job: RenderJob,
-) -> Result<(PathBuf, rhythia_render::video::RenderStats), rhythia_render::Error> {
+) -> Result<(PathBuf, rhythia_render::video::RenderStats, String), rhythia_render::Error> {
     let _ = handle.emit("render-stage", "starting GPU renderer");
     let renderer =
         rhythia_render::Renderer::new(job.width, job.height, job.cfg.hud_font.as_deref())?;
@@ -3762,6 +3836,11 @@ fn run_render_job(
         other => other.to_string(),
     };
     let _ = handle.emit("render-stage", format!("encoder: {encoder}"));
+
+    // Built here, before the job is taken apart into VideoOptions, and kept
+    // for the finished-render message.
+    let nth = app.renders_done.fetch_add(1, Ordering::SeqCst) + 1;
+    let detail = render_detail(app, &job, &encoder, nth);
 
     // Embedded map audio goes through a temp file for ffmpeg.
     let mut _audio_tmp: Option<tempfile::NamedTempFile> = None;
@@ -3798,6 +3877,7 @@ fn run_render_job(
         audio,
         quality: job.quality,
         tcp_feed: job.tcp_feed,
+        socket_chunk: job.socket_chunk_kib as usize * 1024,
         preset: job.preset.clone(),
         encoder,
         results_secs: job.results_secs,
@@ -3851,7 +3931,7 @@ fn run_render_job(
         inner.settings.last_render_fps = final_fps;
         inner.settings.save();
     }
-    Ok((job.out, stats))
+    Ok((job.out, stats, detail))
 }
 
 #[tauri::command]
@@ -4051,6 +4131,7 @@ fn main() {
         segment: Mutex::new(SegmentState::default()),
         segment_gen: std::sync::atomic::AtomicU64::new(0),
         render_thread: Mutex::new(None),
+        renders_done: std::sync::atomic::AtomicU64::new(0),
     });
 
     // Restore the last config; load a replay passed as CLI arg (file
@@ -4089,6 +4170,7 @@ fn main() {
                 inner.map_hash_mismatch = cached_map_hash(replay.map_id)
                     .is_some_and(|h| !replay.beatmap_hash.is_empty() && h != replay.beatmap_hash);
                 inner.replay = Some((PathBuf::from(path), replay));
+                inner.replay_restored = true;
                 normalize_time_bases(&mut inner);
             }
         }
