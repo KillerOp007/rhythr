@@ -234,7 +234,7 @@ pub fn render_video(
     // A loopback listener, when asked for. Bound to 127.0.0.1 explicitly
     // rather than to every interface: a loopback-only listener is what keeps
     // Windows Firewall from putting a dialog in front of a render.
-    let listener = if opts.tcp_feed {
+    let listener = if opts.tcp_feed && tcp_feed_works(&opts.ffmpeg) {
         std::net::TcpListener::bind(("127.0.0.1", 0)).ok()
     } else {
         None
@@ -439,7 +439,7 @@ pub fn render_video(
             t_conv.set(t_conv.get() + mark.elapsed().as_secs_f64());
         }
         let mark = std::time::Instant::now();
-        let wrote = write_in_pieces(&mut stdin, payload);
+        let wrote = stdin.write_frame(payload);
         if timing {
             t_pipe.set(t_pipe.get() + mark.elapsed().as_secs_f64());
         }
@@ -706,20 +706,90 @@ pub fn hardware_encoders() -> &'static [&'static str] {
     }
 }
 
+/// Whether frames can be handed to THIS ffmpeg over a loopback socket.
+///
+/// Probed once per binary, and the reason for probing rather than simply
+/// trying is that the answer arrives too late otherwise: a pipe cannot fail
+/// to connect, a socket can, and by then the render has already started. So
+/// the whole path — bind, spawn, connect, feed, exit cleanly — is walked
+/// with a 64x64 frame first, and anything that does not survive that quietly
+/// gets the pipe instead.
+fn tcp_feed_works(ffmpeg: &str) -> bool {
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, bool>>> =
+        std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(Default::default);
+    if let Some(hit) = cache.lock().ok().and_then(|c| c.get(ffmpeg).copied()) {
+        return hit;
+    }
+    let ok = probe_tcp_feed(ffmpeg);
+    if let Ok(mut c) = cache.lock() {
+        c.insert(ffmpeg.to_string(), ok);
+    }
+    ok
+}
+
+fn probe_tcp_feed(ffmpeg: &str) -> bool {
+    let Ok(listener) = std::net::TcpListener::bind(("127.0.0.1", 0)) else {
+        return false;
+    };
+    let Ok(port) = listener.local_addr().map(|a| a.port()) else {
+        return false;
+    };
+    let mut cmd = Command::new(ffmpeg);
+    hide_console_window(&mut cmd);
+    cmd.args(["-hide_banner", "-loglevel", "error"]);
+    cmd.args(["-f", "rawvideo", "-pix_fmt", "nv12", "-s", "64x64", "-r", "30"]);
+    cmd.args(["-i", &format!("tcp://127.0.0.1:{port}")]);
+    cmd.args(["-f", "null", "-"]);
+    let Ok(mut child) = cmd.stdout(Stdio::null()).stderr(Stdio::null()).spawn() else {
+        return false;
+    };
+    // Everything past the spawn has a child to clean up on the way out.
+    let handshake = (|| {
+        listener.set_nonblocking(true).ok()?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let sock = loop {
+            match listener.accept() {
+                Ok((s, _)) => break s,
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    if std::time::Instant::now() >= deadline {
+                        return None;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                Err(_) => return None,
+            }
+        };
+        sock.set_nonblocking(false).ok()?;
+        let mut sock = sock;
+        let frame = vec![0u8; crate::nv12::nv12_len(64, 64)];
+        for _ in 0..2 {
+            std::io::Write::write_all(&mut sock, &frame).ok()?;
+        }
+        drop(sock);
+        Some(())
+    })();
+    if handshake.is_none() {
+        let _ = child.kill();
+        let _ = child.wait();
+        return false;
+    }
+    child.wait().map(|s| s.success()).unwrap_or(false)
+}
+
 /// Where ffmpeg reads frames from: its stdin, or a loopback socket.
 ///
-/// The socket is measurably faster at moving bytes — 5.41 ms against 7.38 ms
-/// for a 4K NV12 frame into an ffmpeg that only reads and discards. But that
-/// is not the number that decides it: with a real encoder attached the same
-/// comparison is 16.87 ms against 17.66 ms, about 5%, because by then the
-/// encoder is the wall and the transport is a slice of it. On a machine with
-/// a fast hardware encoder that slice is bigger, which is the case for
-/// offering it at all.
+/// What the socket is worth depends entirely on how fast the encoder is,
+/// which is why it took two machines to settle. Here, where libx264 is the
+/// wall, it is nothing: a full render came out the same either way. On the
+/// owner's NVENC machine, where the encoder is not the wall, the same switch
+/// is 160 fps to 210 fps at 3840x2160/240 — most of a third, because by then
+/// the transport was most of what was left.
 ///
-/// It is off by default and stays off until it has been measured on hardware
-/// this was not written on. A pipe cannot fail to connect; a listener can,
-/// and buying 5% at the price of a new way for a finished render to die is
-/// not a trade worth making blind.
+/// So it is on by default, but only after [`tcp_feed_works`] has walked the
+/// whole path on the ffmpeg in question. A pipe cannot fail to connect and a
+/// socket can; the probe is what turns that from a failed render into a
+/// quiet fallback.
 enum FrameSink {
     Pipe(std::process::ChildStdin),
     Tcp(std::net::TcpStream),
@@ -772,6 +842,42 @@ impl FrameSink {
     }
 }
 
+impl FrameSink {
+    /// Hands one whole frame over, in whatever shape this transport wants.
+    ///
+    /// The two want opposite things, which is not obvious and took a
+    /// measurement to find. On 4K NV12 frames into a real ffmpeg:
+    ///
+    /// ```text
+    ///            whole    256 KiB   64 KiB   16 KiB    4 KiB
+    ///   pipe      8.6 ms      —      7.5 ms   6.2 ms   7.9 ms
+    ///   socket    4.25 ms   4.46 ms  4.83 ms  6.14 ms     —
+    /// ```
+    ///
+    /// A single large write into a pipe fills it and then waits for the
+    /// reader to drain enough of it, so the two processes take turns; small
+    /// writes come back as soon as there is room. A socket has no such
+    /// ceiling and every extra write is pure syscall, so it wants the frame
+    /// in one go. Chunking both — which this did at first — left a third of
+    /// the socket's advantage on the floor.
+    ///
+    /// Enlarging the socket's send buffer was measured too and does nothing:
+    /// 5.02 ms by default against 4.99 at 1 MiB and 5.27 at 4 MiB.
+    fn write_frame(&mut self, frame: &[u8]) -> std::io::Result<()> {
+        use std::io::Write as _;
+        match self {
+            FrameSink::Pipe(p) => {
+                const PIECE: usize = 16 * 1024;
+                for part in frame.chunks(PIECE) {
+                    p.write_all(part)?;
+                }
+                Ok(())
+            }
+            FrameSink::Tcp(s) => s.write_all(frame),
+        }
+    }
+}
+
 impl std::io::Write for FrameSink {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         match self {
@@ -785,27 +891,6 @@ impl std::io::Write for FrameSink {
             FrameSink::Tcp(s) => s.flush(),
         }
     }
-}
-
-/// Hands one frame to ffmpeg in pieces instead of in a single call.
-///
-/// Measured at 4K NV12 into a real ffmpeg: one `write_all` of the whole
-/// 12.4 MB frame costs 8.6 ms, the same bytes in 16 KiB pieces 6.2 ms. A
-/// single large write fills the pipe and then waits for the reader to drain
-/// enough of it, which makes the two processes take turns; small writes come
-/// back as soon as there is room and both keep running. 4 KiB was measured
-/// too and is worse again — three thousand syscalls a frame costs more than
-/// the waiting it saves.
-///
-/// Enlarging the pipe itself was measured as well (F_SETPIPE_SZ to 1 MiB) and
-/// adds nothing on top of this: 7.51 ms against 7.40 ms over five runs each,
-/// inside the spread. It is not worth a platform-specific dependency.
-fn write_in_pieces(sink: &mut impl std::io::Write, frame: &[u8]) -> std::io::Result<()> {
-    const PIECE: usize = 16 * 1024;
-    for part in frame.chunks(PIECE) {
-        sink.write_all(part)?;
-    }
-    Ok(())
 }
 
 /// What a video encoder needs on the command line: a tail for the filter

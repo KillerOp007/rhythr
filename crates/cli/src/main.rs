@@ -113,11 +113,11 @@ enum Command {
         /// over --quality when both are given.
         #[arg(long)]
         crf: Option<u32>,
-        /// Feed frames to ffmpeg over a loopback socket instead of its
-        /// stdin. Faster at moving bytes, but only a few percent once a real
-        /// encoder is attached — measure before relying on it.
+        /// Feed frames to ffmpeg over its stdin instead of a loopback
+        /// socket. The socket is the default and is probed before it is
+        /// used; this is the way out if it ever misbehaves.
         #[arg(long)]
-        tcp_feed: bool,
+        no_tcp_feed: bool,
         /// Second replay of the same map, rendered as a ghost overlay
         /// (cursor + trail in orange, with a versus panel).
         #[arg(long)]
@@ -504,7 +504,7 @@ fn run() -> anyhow::Result<bool> {
             height,
             quality,
             crf,
-            tcp_feed,
+            no_tcp_feed,
             ghost_replay,
             motion_blur,
             music_volume,
@@ -693,7 +693,7 @@ fn run() -> anyhow::Result<bool> {
                 end_ms,
                 ffmpeg,
                 audio: audio_path,
-                tcp_feed,
+                tcp_feed: !no_tcp_feed,
                 quality: match crf {
                     // A raw CRF from an older script still has to mean what
                     // it always meant, so it is converted rather than read as

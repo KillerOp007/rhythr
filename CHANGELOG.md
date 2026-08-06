@@ -37,9 +37,19 @@ substantially faster, and a round of quality-of-life work on top.
   then waits for the reader to drain it, so the two processes take turns.
   Enlarging the pipe itself was measured too and did not survive it — 7.40 ms
   against 7.51 ms, inside the spread — so it is not here. There is also an
-  optional loopback-socket transport under Advanced, **off by default**: it
-  is faster at moving bytes but only about 5% once a real encoder is
-  attached, and a socket can fail to connect where a pipe cannot.
+  loopback-socket transport, now the default, which is worth **160 fps to
+  210 fps at 3840x2160/240** on a machine whose encoder is not the
+  bottleneck. It is nothing at all where the encoder is — which is why it
+  took a second machine to settle — and a socket can fail to connect where a
+  pipe cannot, so the whole path is walked once with a small frame before any
+  render depends on it, and falls back to the pipe on its own if it does not
+  hold up. The switch is still in Advanced for turning it off.
+
+  A pipe and a socket also want opposite things from a write, which was not
+  obvious: a pipe is fastest fed in 16 KiB pieces and a socket is fastest
+  given the whole frame at once (4.25 ms against 6.14 ms at 4K). Chunking
+  both, as the first version did, left a third of the socket's advantage
+  unclaimed.
 
 - **The colour conversion moved onto the GPU**, which is what was left once
   the pipe stopped being the limit. Timing each stage separately at

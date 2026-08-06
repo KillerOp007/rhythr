@@ -69,9 +69,9 @@ struct Settings {
     #[serde(skip_serializing)]
     crf: Option<u32>,
     /// Hand frames to ffmpeg over a loopback socket instead of its stdin.
-    /// Off until it has been measured somewhere other than the machine it
-    /// was written on — it wins about 5% with a real encoder attached, and
-    /// costs a way for a render to fail that a pipe does not have.
+    /// On by default since it was measured on a fast encoder — 160 fps to
+    /// 210 fps at 4K240 — and since the render crate probes the path before
+    /// depending on it and falls back to the pipe on its own.
     tcp_feed: bool,
     encoder: String,
     preset: String,
@@ -134,7 +134,7 @@ impl Default for Settings {
             fps: 60,
             quality: rhythia_render::quality::DEFAULT,
             crf: None,
-            tcp_feed: false,
+            tcp_feed: true,
             encoder: "auto".into(),
             preset: "veryfast".into(),
             results_secs: 4.0,
@@ -2485,6 +2485,9 @@ fn prepare_segment(
                 // a preview that changes quality when the output setting does
                 // would make the Analyze window unpredictable to work in.
                 quality: rhythia_render::quality::from_legacy_crf(20),
+                // Left on the pipe: these segments are seconds long, and the
+                // socket has to be probed before it can be trusted, which is
+                // a cost with nothing to earn it back at this size.
                 tcp_feed: false,
                 preset: "ultrafast".into(),
                 encoder,
