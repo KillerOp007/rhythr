@@ -4,7 +4,6 @@
 //! by the replay's speed factor and the song is rate-shifted (faster and
 //! higher-pitched), so a 1.45x run watches like a 1.45x run.
 
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -110,6 +109,40 @@ impl Default for VideoOptions {
 /// cancels the render: ffmpeg is stopped, the partial output file removed
 /// and [`Error::Cancelled`] returned.
 #[allow(clippy::too_many_arguments)]
+/// Where a finished render's time went, per frame.
+///
+/// Collected always rather than behind a flag, because two `Instant`s a frame
+/// cost nothing next to a frame and because the question "why was that render
+/// slower than the last one" is otherwise unanswerable from a GUI: the stage
+/// breakdown used to go to stderr, which a desktop app on Windows discards.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RenderStats {
+    pub frames: u64,
+    /// Building the picture and handing it to the GPU.
+    pub build_ms: f64,
+    /// Waiting for a finished frame to come back out of VRAM.
+    pub readback_ms: f64,
+    /// Colour conversion on the CPU. Zero when the GPU did it.
+    pub convert_ms: f64,
+    /// Pushing the frame into ffmpeg, including any time ffmpeg spent not
+    /// keeping up — this is the encoder's back pressure as much as the
+    /// transport's cost.
+    pub feed_ms: f64,
+    /// Which transport carried the frames.
+    pub transport: &'static str,
+}
+
+impl RenderStats {
+    /// One line for a human: the stages, largest first in practice.
+    pub fn summary(&self) -> String {
+        format!(
+            "per frame: build {:.2} ms · readback {:.2} ms · convert {:.2} ms · \
+             feed {:.2} ms ({})",
+            self.build_ms, self.readback_ms, self.convert_ms, self.feed_ms, self.transport
+        )
+    }
+}
+
 pub fn render_video(
     renderer: &Renderer,
     params: &SceneParams,
@@ -119,7 +152,7 @@ pub fn render_video(
     out: &Path,
     opts: &VideoOptions,
     mut progress: impl FnMut(u64, u64) -> bool,
-) -> Result<(), Error> {
+) -> Result<RenderStats, Error> {
     let (width, height) = renderer.dimensions();
     // Upload the skin's textures once; reused for every frame.
     let skin = renderer.prepare_skin(config);
@@ -379,6 +412,7 @@ pub fn render_video(
     // is load-bearing: opening the sink can fail (a socket handshake can time
     // out where a pipe cannot), and with the guard built afterwards that `?`
     // walked out past a running ffmpeg with nothing left to kill or reap it.
+    let listener_used = listener.is_some();
     let stderr = child.stderr.take();
     let stdin_pipe = child.stdin.take();
     let mut guard = EncodeGuard {
@@ -416,7 +450,9 @@ pub fn render_video(
     } else {
         Vec::new()
     };
-    let timing = std::env::var_os("RHYTHR_TIME_STAGES").is_some();
+    // Always on: the cost is two Instant reads a frame, and the answer is
+    // worth far more than that the first time a render is unexpectedly slow.
+    let timing = true;
     // Split out of the handoff separately, so the readback wait can be told
     // apart from our own colour conversion and from ffmpeg's backpressure.
     let t_conv = std::cell::Cell::new(0.0f64);
@@ -535,19 +571,29 @@ pub fn render_video(
             t_hand += mark.elapsed().as_secs_f64();
         }
     }
-    if timing {
+    let stats = {
         let per = |v: f64| v * 1000.0 / play_frames.max(1) as f64;
         let (conv, pipe) = (t_conv.get(), t_pipe.get());
-        eprintln!(
-            "\nSTAGES per frame: build+submit {:.2} ms | readback {:.2} ms | \
-             nv12 {:.2} ms | pipe->ffmpeg {:.2} ms  (handoff total {:.2} ms)",
-            per(t_submit),
-            per(t_hand - conv - pipe),
-            per(conv),
-            per(pipe),
-            per(t_hand)
-        );
-    }
+        if std::env::var_os("RHYTHR_TIME_STAGES").is_some() {
+            eprintln!(
+                "\nSTAGES per frame: build+submit {:.2} ms | readback {:.2} ms | \
+                 nv12 {:.2} ms | pipe->ffmpeg {:.2} ms  (handoff total {:.2} ms)",
+                per(t_submit),
+                per(t_hand - conv - pipe),
+                per(conv),
+                per(pipe),
+                per(t_hand)
+            );
+        }
+        RenderStats {
+            frames: play_frames,
+            build_ms: per(t_submit),
+            readback_ms: per(t_hand - conv - pipe),
+            convert_ms: per(conv),
+            feed_ms: per(pipe),
+            transport: if listener_used { "socket" } else { "pipe" },
+        }
+    };
     for j in play_frames.saturating_sub(DEPTH.min(play_frames))..play_frames {
         renderer.with_slot_pixels(slot(j), |px| write_frame(px, j, gpu_nv12, &mut guard.child))??;
         if !progress(j + 1, total_frames) {
@@ -580,7 +626,7 @@ pub fn render_video(
         )));
     }
     guard.done = true;
-    Ok(())
+    Ok(stats)
 }
 
 /// The tail of ffmpeg's stderr, collected on a reader thread so the pipe

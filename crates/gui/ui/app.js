@@ -1537,6 +1537,7 @@ function initRenderEvents() {
     const { done, total, fps, eta_secs } = e.payload;
     const pct = total ? (100 * done) / total : 0;
     $("render-progress-fill").style.width = `${pct.toFixed(1)}%`;
+    $("render-text").classList.remove("done");
     $("render-text").textContent =
       `${pct.toFixed(0)}% — frame ${done.toLocaleString()} / ${total.toLocaleString()}` +
       ` · ${fps.toFixed(0)} fps · ETA ${fmtTime(eta_secs * 1000)}`;
@@ -1544,19 +1545,25 @@ function initRenderEvents() {
   listen("render-done", (e) => {
     setRenderingUi(false);
     updateRenderButton();
-    lastOutPath = e.payload;
-    $("render-text").textContent = `Done — ${e.payload}`;
+    lastOutPath = e.payload.path;
+    // The timing stays on screen after the render rather than scrolling past
+    // during it: "why was that one slower than the last" is a question you
+    // only think to ask once it is over.
+    $("render-text").classList.add("done");
+    $("render-text").textContent = `Done — ${e.payload.path}\n${e.payload.timing}`;
     $("btn-open-out").hidden = false;
     setWindowNotice("Render finished");
   });
   listen("render-cancelled", () => {
     setRenderingUi(false);
     updateRenderButton();
+    $("render-text").classList.remove("done");
     $("render-text").textContent = "Cancelled.";
   });
   listen("render-error", (e) => {
     setRenderingUi(false);
     updateRenderButton();
+    $("render-text").classList.remove("done");
     $("render-text").textContent = `Error: ${e.payload}`;
     setWindowNotice("Render failed");
   });

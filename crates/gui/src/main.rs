@@ -2537,7 +2537,7 @@ fn prepare_segment(
                 return;
             }
             match res {
-                Ok(()) => {
+                Ok(_) => {
                     {
                         let mut seg = app.segment.lock().unwrap_or_else(|p| p.into_inner());
                         if let Some(old) = seg.ready.take() {
@@ -3679,8 +3679,14 @@ fn start_render(
         }));
         thread_app.rendering.store(false, Ordering::SeqCst);
         match outcome {
-            Ok(Ok(path)) => {
-                let _ = app_handle.emit("render-done", path.to_string_lossy().into_owned());
+            Ok(Ok((path, stats))) => {
+                let _ = app_handle.emit(
+                    "render-done",
+                    RenderDone {
+                        path: path.to_string_lossy().into_owned(),
+                        timing: stats.summary(),
+                    },
+                );
             }
             Ok(Err(rhythia_render::Error::Cancelled)) => {
                 let _ = app_handle.emit("render-cancelled", ());
@@ -3727,11 +3733,19 @@ struct RenderJob {
     out: PathBuf,
 }
 
+/// What the window is told when a render finishes. The timing rides along so
+/// "why was that one slower" can be answered by reading the screen.
+#[derive(Serialize, Clone)]
+struct RenderDone {
+    path: String,
+    timing: String,
+}
+
 fn run_render_job(
     app: &App,
     handle: &tauri::AppHandle,
     job: RenderJob,
-) -> Result<PathBuf, rhythia_render::Error> {
+) -> Result<(PathBuf, rhythia_render::video::RenderStats), rhythia_render::Error> {
     let _ = handle.emit("render-stage", "starting GPU renderer");
     let renderer =
         rhythia_render::Renderer::new(job.width, job.height, job.cfg.hud_font.as_deref())?;
@@ -3797,7 +3811,7 @@ fn run_render_job(
     let started = std::time::Instant::now();
     let mut last_emit = std::time::Instant::now();
     let mut final_fps = 0.0f64;
-    rhythia_render::video::render_video(
+    let stats = rhythia_render::video::render_video(
         &renderer,
         &params,
         &job.cfg,
@@ -3837,7 +3851,7 @@ fn run_render_job(
         inner.settings.last_render_fps = final_fps;
         inner.settings.save();
     }
-    Ok(job.out)
+    Ok((job.out, stats))
 }
 
 #[tauri::command]

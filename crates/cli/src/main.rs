@@ -738,7 +738,7 @@ fn run() -> anyhow::Result<bool> {
                 out.display()
             );
             let start_t = std::time::Instant::now();
-            rhythia_render::video::render_video(
+            let stats = rhythia_render::video::render_video(
                 &renderer,
                 &params,
                 &cfg,
@@ -756,6 +756,7 @@ fn run() -> anyhow::Result<bool> {
             )
             .context("rendering video")?;
             eprintln!();
+            eprintln!("  {}", stats.summary());
             println!(
                 "done in {:.1}s -> {}",
                 start_t.elapsed().as_secs_f64(),
