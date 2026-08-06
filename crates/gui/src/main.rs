@@ -4067,6 +4067,13 @@ fn main() {
                     inner.map = Some((p, m));
                     inner.map_source = "cache".into();
                 }
+                // The same check the interactive load does. Reopening the
+                // app restored the replay but never asked whether the cached
+                // map still matches it, so a map that had been re-uploaded
+                // since was rendered against without the warning that
+                // loading the same replay by hand would have raised.
+                inner.map_hash_mismatch = cached_map_hash(replay.map_id)
+                    .is_some_and(|h| !replay.beatmap_hash.is_empty() && h != replay.beatmap_hash);
                 inner.replay = Some((PathBuf::from(path), replay));
                 normalize_time_bases(&mut inner);
             }
