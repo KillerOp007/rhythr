@@ -78,6 +78,9 @@ struct Settings {
     /// an environment variable was no use here: a desktop app on Windows has
     /// no console, so there was no way to see whether it had taken.
     socket_chunk_kib: u32,
+    /// Diagnostic: run the whole pipeline but encode nothing and write no
+    /// file, so the feed figure is the transport by itself.
+    dry_run: bool,
     encoder: String,
     preset: String,
     results_secs: f64,
@@ -141,6 +144,7 @@ impl Default for Settings {
             crf: None,
             tcp_feed: true,
             socket_chunk_kib: 256,
+            dry_run: false,
             encoder: "auto".into(),
             preset: "veryfast".into(),
             results_secs: 4.0,
@@ -2234,6 +2238,7 @@ struct OutputUpdate {
     quality: Option<u32>,
     tcp_feed: Option<bool>,
     socket_chunk_kib: Option<u32>,
+    dry_run: Option<bool>,
     encoder: Option<String>,
     preset: Option<String>,
     results_secs: Option<f64>,
@@ -2268,6 +2273,9 @@ fn set_output(state: tauri::State<'_, App>, update: OutputUpdate) -> Result<Stat
     }
     if let Some(v) = update.socket_chunk_kib {
         s.socket_chunk_kib = v.min(4096);
+    }
+    if let Some(v) = update.dry_run {
+        s.dry_run = v;
     }
     if let Some(v) = update.encoder {
         s.encoder = v;
@@ -2510,6 +2518,7 @@ fn prepare_segment(
                 // a cost with nothing to earn it back at this size.
                 tcp_feed: false,
                 socket_chunk: 0,
+                discard_output: false,
                 preset: "ultrafast".into(),
                 encoder,
                 results_secs: 0.0,
@@ -3646,6 +3655,7 @@ fn start_render(
             quality: s.quality,
             tcp_feed: s.tcp_feed,
             socket_chunk_kib: s.socket_chunk_kib,
+            dry_run: s.dry_run,
             encoder: s.encoder.clone(),
             preset: s.preset.clone(),
             results_secs: s.results_secs,
@@ -3741,6 +3751,7 @@ struct RenderJob {
     quality: u32,
     tcp_feed: bool,
     socket_chunk_kib: u32,
+    dry_run: bool,
     encoder: String,
     preset: String,
     results_secs: f64,
@@ -3787,7 +3798,7 @@ fn render_detail(app: &App, job: &RenderJob, encoder: &str, nth: u64) -> String 
         (None, true) => "none",
     };
     format!(
-        "{}x{} @{} fps · quality {} (x264 {} / hw {}) · {} · {}
+        "{}{}x{} @{} fps · quality {} (x264 {} / hw {}) · {} · {}
          {} · frame write {} · ghost {} · blur {} · background {} · hitsounds {}
          replay {} · map {}{} · render #{} since start",
         job.width,
@@ -3799,6 +3810,7 @@ fn render_detail(app: &App, job: &RenderJob, encoder: &str, nth: u64) -> String 
         encoder,
         job.preset,
         if job.tcp_feed { "socket requested" } else { "pipe requested" },
+        if job.dry_run { "DIAGNOSTIC — nothing encoded, no file written\n" } else { "" },
         if job.socket_chunk_kib == 0 {
             "whole frame".to_string()
         } else {
@@ -3878,6 +3890,7 @@ fn run_render_job(
         quality: job.quality,
         tcp_feed: job.tcp_feed,
         socket_chunk: job.socket_chunk_kib as usize * 1024,
+        discard_output: job.dry_run,
         preset: job.preset.clone(),
         encoder,
         results_secs: job.results_secs,

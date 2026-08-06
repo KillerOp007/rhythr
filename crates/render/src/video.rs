@@ -57,6 +57,16 @@ pub struct VideoOptions {
     /// call. See [`FrameSink::write_frame`] — the best value is not the same
     /// on every platform, so this is a setting rather than a constant.
     pub socket_chunk: usize,
+    /// Diagnostic: feed ffmpeg every frame exactly as a real render does,
+    /// but tell it to copy them straight to nowhere instead of encoding.
+    ///
+    /// This is the only way to see how the `feed` time splits. That number
+    /// is the write into the transport AND everything ffmpeg was too busy to
+    /// accept, and on a machine with a fast GPU it is essentially the whole
+    /// frame — so knowing whether it is the transport or the encoder decides
+    /// whether tuning the transport can achieve anything at all. Writes no
+    /// file.
+    pub discard_output: bool,
     /// Custom VIDEO background: decoded by the same ffmpeg, muted and
     /// looped from its start point, one frame per output frame. (Image
     /// backgrounds ride the config's background layers instead.) The
@@ -104,6 +114,7 @@ impl Default for VideoOptions {
             extra_output_args: Vec::new(),
             tcp_feed: false,
             socket_chunk: 256 * 1024,
+            discard_output: false,
             background_video: None,
         }
     }
@@ -133,6 +144,9 @@ pub struct RenderStats {
     /// keeping up — this is the encoder's back pressure as much as the
     /// transport's cost.
     pub feed_ms: f64,
+    /// Set when this was a diagnostic run that encoded nothing, so the feed
+    /// figure is the transport alone.
+    pub discarded: bool,
     /// Which transport carried the frames, and how they were written into
     /// it. The write size is a setting and this is where its effect can be
     /// read off — a desktop app has no console to print it to, which is
@@ -146,7 +160,15 @@ impl RenderStats {
         format!(
             "per frame: build {:.2} ms · readback {:.2} ms · convert {:.2} ms · \
              feed {:.2} ms ({})",
-            self.build_ms, self.readback_ms, self.convert_ms, self.feed_ms, self.transport
+            self.build_ms,
+            self.readback_ms,
+            self.convert_ms,
+            self.feed_ms,
+            if self.discarded {
+                format!("{}, NO ENCODING — transport only", self.transport)
+            } else {
+                self.transport.clone()
+            }
         )
     }
 }
@@ -330,29 +352,38 @@ pub fn render_video(
         0 => None,
         n => Some(format!("tmix=frames={}", n + 1)),
     };
-    let enc = video_encoder_args(
-        &opts.encoder,
-        opts.quality,
-        &opts.preset,
-        feed_nv12,
-        vaapi_icq_supported(&opts.ffmpeg, opts.encoder == "vaapi"),
-    );
-    let chain = match (&tmix, enc.filter.is_empty()) {
-        (Some(t), true) => t.clone(),
-        (Some(t), false) => format!("{t},{}", enc.filter),
-        (None, _) => enc.filter.clone(),
-    };
-    if !chain.is_empty() {
-        cmd.args(["-vf", &chain]);
+    if opts.discard_output {
+        // Diagnostic: every frame still crosses the transport exactly as it
+        // would in a real render, but nothing encodes it. No filter chain,
+        // no encoder, no audio — what is left in the `feed` figure is the
+        // transport by itself, and the difference against a real render of
+        // the same clip is what the encoder costs.
+        cmd.args(["-c:v", "copy", "-an"]);
+    } else {
+        let enc = video_encoder_args(
+            &opts.encoder,
+            opts.quality,
+            &opts.preset,
+            feed_nv12,
+            vaapi_icq_supported(&opts.ffmpeg, opts.encoder == "vaapi"),
+        );
+        let chain = match (&tmix, enc.filter.is_empty()) {
+            (Some(t), true) => t.clone(),
+            (Some(t), false) => format!("{t},{}", enc.filter),
+            (None, _) => enc.filter.clone(),
+        };
+        if !chain.is_empty() {
+            cmd.args(["-vf", &chain]);
+        }
+        cmd.args(&enc.args);
     }
-    cmd.args(&enc.args);
 
     // Audio encode: the music stops where the clip ends (a fail cuts it off);
     // silence pads the appended results screen, and the output is capped at
     // the exact video duration instead of -shortest. With hit sounds a
     // filter graph mixes the effects track on top of the (volume-scaled)
     // song; amix must not renormalise or the song would dip per overlap.
-    if opts.audio.is_some() {
+    if opts.audio.is_some() && !opts.discard_output {
         let play_secs = span_real_ms / 1000.0;
         let mv = opts.music_volume.clamp(0.0, 1.5);
         // Speed mod: rate-shift the song like the game does (faster AND
@@ -393,7 +424,11 @@ pub fn render_video(
     for a in &opts.extra_output_args {
         cmd.arg(a);
     }
-    cmd.arg(out);
+    if opts.discard_output {
+        cmd.args(["-f", "null", "-"]);
+    } else {
+        cmd.arg(out);
+    }
 
     cmd.stdin(if listener.is_some() {
         Stdio::null()
@@ -599,6 +634,7 @@ pub fn render_video(
             readback_ms: per(t_hand - conv - pipe),
             convert_ms: per(conv),
             feed_ms: per(pipe),
+            discarded: opts.discard_output,
             transport: if listener_used {
                 match opts.socket_chunk {
                     0 => "socket, whole frame".to_string(),

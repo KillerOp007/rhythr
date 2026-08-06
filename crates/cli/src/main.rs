@@ -122,6 +122,10 @@ enum Command {
         /// once. The best value differs by platform.
         #[arg(long, default_value_t = 256 * 1024)]
         socket_chunk: usize,
+        /// Diagnostic: run everything but encode nothing and write no file,
+        /// so the reported feed time is the transport by itself.
+        #[arg(long)]
+        dry_run: bool,
         /// Second replay of the same map, rendered as a ghost overlay
         /// (cursor + trail in orange, with a versus panel).
         #[arg(long)]
@@ -510,6 +514,7 @@ fn run() -> anyhow::Result<bool> {
             crf,
             no_tcp_feed,
             socket_chunk,
+            dry_run,
             ghost_replay,
             motion_blur,
             music_volume,
@@ -700,6 +705,7 @@ fn run() -> anyhow::Result<bool> {
                 audio: audio_path,
                 tcp_feed: !no_tcp_feed,
                 socket_chunk,
+                discard_output: dry_run,
                 quality: match crf {
                     // A raw CRF from an older script still has to mean what
                     // it always meant, so it is converted rather than read as
