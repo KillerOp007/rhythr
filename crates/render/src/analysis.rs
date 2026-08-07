@@ -851,18 +851,30 @@ pub fn analyze(map: &Map, replay: &Replay) -> Analysis {
         let header_hits = u32::try_from(replay.hits).unwrap_or(0);
         let dropped_only =
             report.orphan_flags == 0 && report.flagged_frames < header_hits;
+        // Loading somebody else's chart is not tampering, and telling people
+        // their file "may be corrupted or edited" for it is both wrong and
+        // alarming. The desktop app learned to say so in 0.6; this window and
+        // the CLI kept the old wording, which is the case people actually hit.
+        // The hash is not available here, so this is the shape-based half of
+        // the same test.
+        let wrong_map =
+            !dropped_only && integrity::looks_like_the_wrong_map(replay.hits, &report, false);
         signals.push(Signal {
             id: "integrity".into(),
-            severity: if practice || dropped_only { "notice" } else { "warn" }.into(),
+            severity: if practice || dropped_only || wrong_map { "notice" } else { "warn" }.into(),
             title: if dropped_only {
                 format!(
                     "Incomplete recording: {} hit flag(s) missing",
                     header_hits - report.flagged_frames
                 )
+            } else if wrong_map {
+                "This may not be the map that was played".into()
             } else {
                 "File integrity check failed".into()
             },
-            detail: if practice {
+            detail: if wrong_map {
+                "Most of the recorded hits find no note on this chart. That is what                  loading a different version of the map looks like — check that the                  map matches the replay before reading anything else here."
+            } else if practice {
                 "Header stats and frame data disagree. This is a practice-mode run                  (started mid-song) — header semantics for partial runs are not fully                  pinned yet, so treat this as informational."
             } else if dropped_only {
                 "The header counts more hits than the file has flag frames — the                  game's recorder dropped frames (common under load). Derived stats                  undercount accordingly; the score itself is not in question."

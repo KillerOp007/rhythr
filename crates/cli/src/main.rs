@@ -451,7 +451,7 @@ fn run() -> anyhow::Result<bool> {
             // tampered just for their time base.
             rhythia_sim::timebase::normalize(&mut r, &m);
             let report = integrity::verify_replay(&r, &m);
-            print_report(&report);
+            print_report(&report, r.hits);
             Ok(report.consistent())
         }
         Command::Check { testdata } => manifest::check_folder(&testdata),
@@ -481,7 +481,18 @@ fn run() -> anyhow::Result<bool> {
             // Surface tampering before spending time rendering.
             let report = integrity::verify_replay(&r, &m);
             if !report.consistent() {
-                eprintln!("warning: replay data is inconsistent — possibly manipulated");
+                // Loading the wrong chart is a mistake, not tampering, and it
+                // is by far the likelier of the two. Saying "possibly
+                // manipulated" for it accused people of something they had
+                // not done.
+                if integrity::looks_like_the_wrong_map(r.hits, &report, false) {
+                    eprintln!(
+                        "warning: most recorded hits find no note on this map — this is \
+                         probably not the map that was played"
+                    );
+                } else {
+                    eprintln!("warning: replay data is inconsistent (possibly manipulated)");
+                }
             }
 
             let mut params = rhythia_render::scene::SceneParams::from(&cfg);
@@ -601,7 +612,18 @@ fn run() -> anyhow::Result<bool> {
 
             let report = integrity::verify_replay(&r, &m);
             if !report.consistent() {
-                eprintln!("warning: replay data is inconsistent — possibly manipulated");
+                // Loading the wrong chart is a mistake, not tampering, and it
+                // is by far the likelier of the two. Saying "possibly
+                // manipulated" for it accused people of something they had
+                // not done.
+                if integrity::looks_like_the_wrong_map(r.hits, &report, false) {
+                    eprintln!(
+                        "warning: most recorded hits find no note on this map — this is \
+                         probably not the map that was played"
+                    );
+                } else {
+                    eprintln!("warning: replay data is inconsistent (possibly manipulated)");
+                }
             }
 
             let start_ms = match &start {
@@ -850,7 +872,7 @@ fn print_info_json(r: &Replay) {
     println!("{}", serde_json::to_string_pretty(&value).unwrap());
 }
 
-fn print_report(report: &integrity::IntegrityReport) {
+fn print_report(report: &integrity::IntegrityReport, replay_hits: i32) {
     for check in &report.checks {
         let mark = if check.ok { "ok " } else { "FAIL" };
         let sev = match check.severity {
@@ -864,7 +886,9 @@ fn print_report(report: &integrity::IntegrityReport) {
     }
     if report.consistent() {
         println!("=> replay data is consistent");
+    } else if integrity::looks_like_the_wrong_map(replay_hits, &report, false) {
+        println!("=> PROBABLY THE WRONG MAP: most recorded hits find no note here");
     } else {
-        println!("=> REPLAY DATA INCONSISTENT — possibly manipulated");
+        println!("=> REPLAY DATA INCONSISTENT (possibly manipulated)");
     }
 }

@@ -1132,7 +1132,8 @@ fn verify_dto(replay: &Replay, map: &Map, hash_mismatch: bool) -> VerifyDto {
     VerifyDto {
         consistent,
         problems,
-        wrong_map: !consistent && wrong_map(replay, &report, hash_mismatch),
+        wrong_map: !consistent
+            && integrity::looks_like_the_wrong_map(replay.hits, &report, hash_mismatch),
     }
 }
 
@@ -1140,28 +1141,6 @@ fn verify_dto(replay: &Replay, map: &Map, hash_mismatch: bool) -> VerifyDto {
 /// replay. A replay's hit flags only line up with the chart they were played
 /// on, so against a foreign map most of them match nothing at all — a state
 /// no edit produces, since editing a replay keeps its own totals coherent.
-fn wrong_map(replay: &Replay, report: &integrity::IntegrityReport, hash_mismatch: bool) -> bool {
-    if hash_mismatch {
-        return true;
-    }
-    let flags = report.flagged_frames;
-    let header_hits = replay.hits.max(0) as u32;
-    // A wrong map cannot change the FILE: the number of flagged frames still
-    // matches the header it was written with. A header inflated past its own
-    // frames is the opposite — evidence about the replay, not the chart — so
-    // it must keep reading as inconsistent instead of being explained away.
-    if flags != header_hits {
-        return false;
-    }
-    // With an honest header, a third of the recorded hits finding no note at
-    // all, or barely half of them landing, is what a foreign chart looks
-    // like. It is also what injected hit flags would look like, which is why
-    // the wording this feeds is "may not match" rather than a verdict — only
-    // the map hash can tell those apart, and that is the branch above.
-    let orphan_heavy = flags > 20 && u64::from(report.orphan_flags) * 3 > u64::from(flags);
-    let lost_most = header_hits > 20 && report.derived_hits * 2 < header_hits;
-    orphan_heavy || lost_most
-}
 
 /// Overlays and meter chrome flip to dark strokes on bright skin
 /// backgrounds — one rule, used by the HUD and the analyze overlay.

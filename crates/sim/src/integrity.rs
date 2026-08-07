@@ -47,6 +47,40 @@ pub struct IntegrityReport {
     pub checks: Vec<Check>,
 }
 
+/// Whether an inconsistent verdict is better explained by the wrong CHART
+/// than by a tampered replay.
+///
+/// This lived in the desktop app, so the Analyze window and the CLI kept
+/// telling people their file "may be corrupted or edited" when all they had
+/// done was load somebody else's map. It needs nothing but the replay and the
+/// report, so it belongs here where all three can reach it.
+pub fn looks_like_the_wrong_map(
+    replay_hits: i32,
+    report: &IntegrityReport,
+    hash_mismatch: bool,
+) -> bool {
+    if hash_mismatch {
+        return true;
+    }
+    let flags = report.flagged_frames;
+    let header_hits = replay_hits.max(0) as u32;
+    // A wrong map cannot change the FILE: the number of flagged frames still
+    // matches the header it was written with. A header inflated past its own
+    // frames is the opposite — evidence about the replay, not the chart — so
+    // it must keep reading as inconsistent instead of being explained away.
+    if flags != header_hits {
+        return false;
+    }
+    // With an honest header, a third of the recorded hits finding no note at
+    // all, or barely half of them landing, is what a foreign chart looks
+    // like. It is also what injected hit flags would look like, which is why
+    // the wording this feeds is "may not match" rather than a verdict — only
+    // the map hash can tell those apart, and that is the branch above.
+    let orphan_heavy = flags > 20 && u64::from(report.orphan_flags) * 3 > u64::from(flags);
+    let lost_most = header_hits > 20 && report.derived_hits * 2 < header_hits;
+    orphan_heavy || lost_most
+}
+
 impl IntegrityReport {
     /// True when every Error-level check passed. Warnings never make a
     /// replay "inconsistent" on their own.
