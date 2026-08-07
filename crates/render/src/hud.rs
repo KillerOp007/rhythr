@@ -347,9 +347,10 @@ pub struct GhostInput {
     /// The map as this ghost's player saw it — its own geometry mods
     /// (mirror/hardrock) applied, independent of the main side's.
     pub map: Map,
-    /// Grid half-extent of this side's playfield (1.0, or wider under
-    /// hardrock); the border follows it.
-    pub grid_scale: f32,
+    /// This side's own resolved mods. The whole set travels rather than
+    /// just the grid extent, because when only the extent did, this player's
+    /// visibility mods were silently dropped from their half of the race.
+    pub mods: crate::mods::ResolvedMods,
     /// Whole-map race series (results delta graph), built once per render
     /// after both sides' hit states exist.
     pub race: Option<crate::race::RaceSeries>,

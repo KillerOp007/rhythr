@@ -177,7 +177,7 @@ pub fn spawn(
         let replay = init.replay;
         let (main_map, main_mods) = rhythia_render::mods::map_for_replay(&init.map, &replay);
         let mut params = SceneParams::from(&cfg);
-        params.grid_scale = main_mods.grid_scale;
+        params.apply_mods(&main_mods);
         params.apply_speed(replay.speed);
         let hud = rhythia_render::hud::HudState::new(&main_map, &replay);
         let mut ghost = init.ghost.map(|g| {
@@ -187,7 +187,7 @@ pub fn spawn(
                 replay: g,
                 color: crate::GHOST_COLOR,
                 map: gmap,
-                grid_scale: gmods.grid_scale,
+                mods: gmods,
                 race: None,
             }
         });
@@ -245,7 +245,7 @@ pub fn spawn(
                         // Note opacity lives in SceneParams, built once at
                         // startup — rebuild it or the toggle never lands.
                         let mut p = SceneParams::from(&cfg);
-                        p.grid_scale = main_mods.grid_scale;
+                        p.apply_mods(&main_mods);
                         p.apply_speed(replay.speed);
                         params = p;
                         dirty = true;
@@ -372,7 +372,7 @@ pub fn spawn(
                     .field_projections(
                         &params,
                         &replay,
-                        ghost.as_ref().map(|g| (&g.replay, g.grid_scale)),
+                        ghost.as_ref().map(|g| (&g.replay, g.mods.grid_scale)),
                         t,
                     )
                     .into_iter()
@@ -382,7 +382,7 @@ pub fn spawn(
                             match (i, ghost.as_ref()) {
                                 (1, Some(g)) => {
                                     let mut p = params;
-                                    p.grid_scale = g.grid_scale;
+                                    p.apply_mods(&g.mods);
                                     (p, &g.map, &g.replay, &g.state)
                                 }
                                 _ => (params, &main_map, &replay, &hud),

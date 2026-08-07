@@ -1363,7 +1363,7 @@ impl Renderer {
                 // The ghost plays on its own field: its map already carries
                 // its mods, and its border widens with its grid.
                 let mut ghost_params = *params;
-                ghost_params.grid_scale = g.grid_scale;
+                ghost_params.apply_mods(&g.mods);
                 self.submit_side(
                     &ghost_params,
                     &ghost_cfg,

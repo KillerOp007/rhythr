@@ -9,7 +9,7 @@ fn main() {
     let (m1, mo1) = rhythia_render::mods::map_for_replay(&map, &r1);
     let (m2, mo2) = rhythia_render::mods::map_for_replay(&map, &r2);
     let mut params = rhythia_render::scene::SceneParams::from(&cfg);
-    params.grid_scale = mo1.grid_scale;
+    params.apply_mods(&mo1);
     params.apply_speed(r1.speed);
     let r = rhythia_render::Renderer::new(1920, 1080, cfg.hud_font.as_deref()).unwrap();
     let skin = r.prepare_skin(&cfg);
@@ -19,7 +19,7 @@ fn main() {
         replay: r2,
         color: [1.0, 0.61, 0.26],
         map: m2,
-        grid_scale: mo2.grid_scale,
+        mods: mo2,
         race: None,
     };
     let px = r

@@ -2459,7 +2459,7 @@ fn prepare_segment(
         )
     };
     let (main_map, main_mods) = rhythia_render::mods::map_for_replay(&map, &replay);
-    params.grid_scale = main_mods.grid_scale;
+    params.apply_mods(&main_mods);
     params.apply_speed(replay.speed);
 
     let h = (height.clamp(360, 2160) / 2) * 2;
@@ -3048,12 +3048,12 @@ fn ensure_preview_ctx(app: &App, _time_ms: f64) -> Result<(), String> {
                     replay: g.clone(),
                     color: GHOST_COLOR,
                     map: gmap,
-                    grid_scale: gmods.grid_scale,
+                    mods: gmods,
                     race: None,
                 }
             });
             let (main_map, main_mods) = rhythia_render::mods::map_for_replay(m, r);
-            params.grid_scale = main_mods.grid_scale;
+            params.apply_mods(&main_mods);
             params.apply_speed(r.speed);
             let hud = rhythia_render::hud::HudState::new(&main_map, r);
             if let Some(g) = ghost.as_mut() {
@@ -3171,7 +3171,7 @@ fn frame_sides_locked(inner: &Inner, time_ms: f64) -> Result<PreviewFrameDto, St
             .field_projections(
                 &ctx.params,
                 r,
-                ctx.ghost.as_ref().map(|g| (&g.replay, g.grid_scale)),
+                ctx.ghost.as_ref().map(|g| (&g.replay, g.mods.grid_scale)),
                 time_ms,
             )
             .into_iter()
@@ -3182,7 +3182,7 @@ fn frame_sides_locked(inner: &Inner, time_ms: f64) -> Result<PreviewFrameDto, St
                 let (params, map, replay) = match (i, ctx.ghost.as_ref()) {
                     (1, Some(g)) => {
                         let mut p = ctx.params;
-                        p.grid_scale = g.grid_scale;
+                        p.apply_mods(&g.mods);
                         (p, &g.map, &g.replay)
                     }
                     _ => (ctx.params, &ctx.map, r),
@@ -3508,7 +3508,7 @@ async fn export_frame(
             rhythia_render::Renderer::new(w, h, cfg.hud_font.as_deref()).map_err(|e| gpu_err(&e))?;
         let skin = renderer.prepare_skin(&cfg);
         let (m, mods) = rhythia_render::mods::map_for_replay(m, r);
-        params.grid_scale = mods.grid_scale;
+        params.apply_mods(&mods);
         params.apply_speed(r.speed);
         let hud = rhythia_render::hud::HudState::new(&m, r);
         let pixels = renderer

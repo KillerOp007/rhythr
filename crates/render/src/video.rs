@@ -220,14 +220,14 @@ pub fn render_video(
             replay: g.replay.clone(),
             color: g.color,
             map: gmap,
-            grid_scale: gmods.grid_scale,
+            mods: gmods,
             race: None,
         }
     });
     let (map, main_mods) = crate::mods::map_for_replay(map, replay);
     let map = &map;
     let mut params = *params;
-    params.grid_scale = main_mods.grid_scale;
+    params.apply_mods(&main_mods);
     params.apply_speed(replay.speed);
     let params = &params;
     // Resolve every note's hit/miss once; the HUD reads running stats from it.
@@ -424,10 +424,25 @@ pub fn render_video(
     for a in &opts.extra_output_args {
         cmd.arg(a);
     }
+    // A sibling of the real output rather than the output itself, so a
+    // render that dies cannot take the previous file at that path with it.
+    // Same directory, so the final step is a rename and not a copy across
+    // filesystems.
+    // The marker goes BEFORE the extension, not after it: ffmpeg picks the
+    // container from the extension, and "video.mp4.rhythr-part" made it give
+    // up with "Error initializing the muxer".
+    let part = {
+        let name = out.file_name().unwrap_or_default().to_string_lossy().into_owned();
+        let renamed = match name.rsplit_once('.') {
+            Some((stem, ext)) if !stem.is_empty() => format!("{stem}.rhythr-part.{ext}"),
+            _ => format!("{name}.rhythr-part"),
+        };
+        out.with_file_name(renamed)
+    };
     if opts.discard_output {
         cmd.args(["-f", "null", "-"]);
     } else {
-        cmd.arg(out);
+        cmd.arg(&part);
     }
 
     cmd.stdin(if listener.is_some() {
@@ -460,6 +475,7 @@ pub fn render_video(
     let stdin_pipe = child.stdin.take();
     let mut guard = EncodeGuard {
         child,
+        part: part.clone(),
         out,
         done: false,
     };
@@ -677,6 +693,16 @@ pub fn render_video(
             log.tail()
         )));
     }
+    // Only now does the finished video take the name it was asked for. Up to
+    // this line nothing has touched whatever was already there.
+    if !opts.discard_output {
+        std::fs::rename(&part, out).map_err(|e| {
+            Error::Ffmpeg(format!(
+                "could not move the finished render into place ({}): {e}",
+                out.display()
+            ))
+        })?;
+    }
     guard.done = true;
     Ok(stats)
 }
@@ -744,6 +770,15 @@ impl FfmpegLog {
 /// dropping it kills/reaps the process and deletes the partial output file.
 struct EncodeGuard<'a> {
     child: std::process::Child,
+    /// Where ffmpeg is actually writing: a sibling of the real output, never
+    /// the real output itself. This used to BE the real output, and the drop
+    /// below deleted it on every unhappy exit — so a render that failed, was
+    /// cancelled, or was still running when the app closed took the previous
+    /// video at that path with it, and ffmpeg's own `-y` had already
+    /// truncated it anyway. Answering "Replace" in the overwrite prompt was
+    /// enough to lose the file being replaced.
+    part: PathBuf,
+    /// Where it belongs once ffmpeg has exited cleanly.
     out: &'a Path,
     done: bool,
 }
@@ -753,7 +788,9 @@ impl Drop for EncodeGuard<'_> {
         if !self.done {
             let _ = self.child.kill();
             let _ = self.child.wait();
-            let _ = std::fs::remove_file(self.out);
+            // Only ever its own partial file. Whatever was at `out` before
+            // this render started is none of its business.
+            let _ = std::fs::remove_file(&self.part);
         }
     }
 }

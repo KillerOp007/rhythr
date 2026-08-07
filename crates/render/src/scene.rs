@@ -164,6 +164,22 @@ impl From<&crate::config::SkinConfig> for SceneParams {
     }
 }
 
+impl SceneParams {
+    /// Folds a replay's resolved mods into these parameters.
+    ///
+    /// Every caller used to copy `grid_scale` by hand and nothing else, at
+    /// thirteen sites, so the visibility mods were resolved out of the replay
+    /// (mods.rs) and understood by the fade model (below) and never travelled
+    /// between the two: a run played half blind rendered as a comfortable
+    /// read of itself, and the changelog said otherwise. Adding a mod must
+    /// not require remembering thirteen places, so it happens here.
+    pub fn apply_mods(&mut self, mods: &crate::mods::ResolvedMods) {
+        self.grid_scale = mods.grid_scale;
+        self.ghost = mods.ghost;
+        self.nearsighted = mods.nearsighted;
+    }
+}
+
 /// Maps a grid coordinate (as stored in the map, may be off-grid/quantum)
 /// to its world position on the hit plane.
 pub fn grid_to_world(gx: f32, gy: f32) -> (f32, f32) {
@@ -362,6 +378,46 @@ pub const FADE_CURVE: f32 = 1.3;
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    /// The bug this guards: the visibility mods were resolved out of the
+    /// replay and understood by the fade model, and the two ends were never
+    /// connected — thirteen call sites each copied `grid_scale` by hand and
+    /// nothing else, so a run played half blind rendered as a comfortable
+    /// read of itself. Adding a field to ResolvedMods without carrying it
+    /// here must fail loudly rather than quietly ship.
+    #[test]
+    fn every_resolved_mod_reaches_the_scene() {
+        let mods = crate::mods::ResolvedMods {
+            grid_scale: 1.4,
+            ghost: true,
+            nearsighted: true,
+            ..crate::mods::ResolvedMods::none()
+        };
+        let mut p = SceneParams::default();
+        p.apply_mods(&mods);
+        assert_eq!(p.grid_scale, 1.4);
+        assert!(p.ghost, "ghost did not reach the scene");
+        assert!(p.nearsighted, "nearsighted did not reach the scene");
+    }
+
+    /// And the flag has to change what is drawn, not merely be stored: ghost
+    /// fades notes out before the plane, so somewhere on the approach it must
+    /// be dimmer than the same note without it.
+    #[test]
+    fn ghost_actually_dims_the_approach() {
+        let plain = SceneParams::default();
+        let mut ghosted = SceneParams::default();
+        ghosted.apply_mods(&crate::mods::ResolvedMods {
+            ghost: true,
+            ..crate::mods::ResolvedMods::none()
+        });
+        let dimmer = (1..40)
+            .map(|i| i as f32 * 0.25)
+            .any(|d| ghosted.note_opacity(d) < plain.note_opacity(d) - 0.01);
+        assert!(dimmer, "ghost changed no opacity anywhere on the approach");
+    }
+
     use super::*;
 
     #[test]

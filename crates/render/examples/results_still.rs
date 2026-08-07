@@ -10,7 +10,7 @@ fn main() {
     let h: u32 = a.get(4).and_then(|v| v.parse().ok()).unwrap_or(1080);
     let cfg = rhythia_render::SkinConfig::default();
     let mut params = rhythia_render::scene::SceneParams::from(&cfg);
-    params.grid_scale = mods.grid_scale;
+    params.apply_mods(&mods);
     params.apply_speed(replay.speed);
     let r = rhythia_render::Renderer::new(w, h, cfg.hud_font.as_deref()).unwrap();
     let hud = rhythia_render::hud::HudState::new(&map, &replay);

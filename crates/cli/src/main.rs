@@ -483,7 +483,7 @@ fn run() -> anyhow::Result<bool> {
             let skin = renderer.prepare_skin(&cfg);
             // Show the field the player actually saw (mirror/hardrock).
             let (m, mods) = rhythia_render::mods::map_for_replay(&m, &r);
-            params.grid_scale = mods.grid_scale;
+            params.apply_mods(&mods);
             params.apply_speed(r.speed);
             let hud_state = rhythia_render::hud::HudState::new(&m, &r);
             let pixels = renderer
