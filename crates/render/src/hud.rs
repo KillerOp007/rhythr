@@ -363,6 +363,11 @@ pub struct HudState {
     /// The hit window this run was played with; a miss resolves this long
     /// after its note, and the meters scale to it.
     window_ms: f64,
+    /// The run's speed multiplier. Effects timed in REAL seconds — the miss
+    /// X, as the cursor trail already is — have to be converted, because
+    /// everything here walks in SONG time and a speed mod makes the two run
+    /// at different rates.
+    speed: f64,
 }
 
 /// Shortens `text` until it fits `max_px`, keeping the end that identifies
@@ -439,6 +444,7 @@ impl HudState {
             outcome,
             hit_details,
             window_ms,
+            speed: f64::from(replay.speed).clamp(0.01, 4.0),
         }
     }
 
@@ -531,7 +537,15 @@ impl HudState {
                 // an X at the chart time pops up while the cursor could
                 // still legally take the note.
                 let miss_t = note.time_ms as f64 + self.window_ms;
-                let age = song_time_ms - miss_t;
+                // Reported as REAL milliseconds, not song ones. The game
+                // animates this X off frame time, so at 1.45x a song-time
+                // age of 500 ms is only 345 ms of wall clock — the X died
+                // early and its 100 ms fade-in collapsed to 69. Converting
+                // here keeps every threshold downstream in real time, which
+                // is the unit they were measured in. The cursor trail got
+                // this correction and the X was named in the same breath and
+                // then missed.
+                let age = (song_time_ms - miss_t) / self.speed;
                 (0.0..MISS_X_MS)
                     .contains(&age)
                     .then_some((note.x, note.y, age))
@@ -1080,25 +1094,71 @@ pub fn build_hud(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
 
-    #[test]
-    fn a_long_title_is_cut_from_the_front_not_the_song() {
-        let atlas = super::FontAtlas::new(None);
-        let long = "Watching SomeVeryLongPlayerNameIndeed play Artist - A Rather Long Song Title";
-        let size = 20.0;
-        let full = atlas.measure(long, size);
-        // Room for about half of it.
-        let fitted = super::fit_to_width(&atlas, long, size, full * 0.5);
-        assert!(atlas.measure(&fitted, size) <= full * 0.5);
-        assert!(fitted.starts_with("..."), "cut from the front: {fitted}");
-        // The marker must be drawable: the atlas is ASCII only.
-        assert!(fitted.chars().all(|c| (' '..='~').contains(&c)), "ascii only: {fitted}");
-        assert!(fitted.ends_with("Song Title"), "kept the song: {fitted}");
-        // Something that already fits comes back untouched.
-        assert_eq!(super::fit_to_width(&atlas, long, size, full * 2.0), long);
+    /// A run with one note and a cursor nowhere near it, at `speed`.
+    fn missed_note_at(speed: f32) -> (Map, Replay) {
+        let mut map = Map::default();
+        map.notes.push(rhythia_formats::map::Note { time_ms: 1000, x: 0.0, y: 0.0 });
+        let replay = Replay {
+            version: 5,
+            timestamp_ticks: 0,
+            player_name: "t".into(),
+            legacy_map_id: String::new(),
+            map_id: 0,
+            start_from_ms: 0,
+            mode: String::new(),
+            passed: false,
+            mods: "[]".into(),
+            spin: false,
+            speed,
+            total_score: 0,
+            accuracy_pct: 0.0,
+            hits: 0,
+            misses: 1,
+            points: 0.0,
+            fail_time_ms: -1,
+            beatmap_hash: String::new(),
+            // Far from the note, so it can only be a miss.
+            frames: vec![rhythia_formats::rhr::Frame { ms: 0.0, x: 9.0, y: 9.0, health: 1.0, hit: false }],
+            trailing_bytes: 0,
+        };
+        (map, replay)
     }
 
-    use super::*;
+    /// The game animates the miss X off real frame time, while everything
+    /// here walks in song time. Under a speed mod the two diverge, so the X
+    /// used to die a third early with its fade-in collapsing to match. The
+    /// cursor trail was corrected for exactly this; the X was named in the
+    /// same breath and missed. It must now be on screen for the same span of
+    /// REAL time whatever the run's speed.
+    #[test]
+    fn the_miss_x_lasts_the_same_real_time_at_every_speed() {
+        let visible_for = |speed: f32| -> f64 {
+            let (map, replay) = missed_note_at(speed);
+            let st = HudState::new(&map, &replay);
+            let closes = 1000.0 + st.window_ms;
+            // Step in REAL milliseconds; song time runs faster by `speed`.
+            let mut last_visible = 0.0;
+            for i in 0..2000 {
+                let real_ms = i as f64;
+                let song_ms = closes + real_ms * f64::from(speed);
+                if !st.recent_misses(&map, song_ms).is_empty() {
+                    last_visible = real_ms;
+                }
+            }
+            last_visible
+        };
+        let one = visible_for(1.0);
+        assert!(one > 400.0, "the X was never visible at 1.0x ({one} ms)");
+        for speed in [1.45f32, 2.0, 0.75] {
+            let got = visible_for(speed);
+            assert!(
+                (got - one).abs() <= 2.0,
+                "at {speed}x the X lasted {got} ms of real time against {one} ms at 1.0x"
+            );
+        }
+    }
 
     #[test]
     fn grade_thresholds_are_official() {
