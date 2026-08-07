@@ -9,6 +9,38 @@ The default render is measured against the game instead of approximating it,
 the hit window follows the run's speed the way the game does, renders got
 substantially faster, and a round of quality-of-life work on top.
 
+### What changes in your renders
+
+Read this bit even if you skip the rest. The three things below will make
+your videos different from the ones you made on 0.5.0, on purpose.
+
+**If you render without loading a skin config, everything about the default
+look changed.** It was assembled from footage and guesswork; it is now read
+out of the game's own source. The camera sits further back, notes approach
+from further away and stay visible about twice as long, they are rounded
+rather than square, the palette is the game's own Cotton Candy instead of an
+invented one, the border is thin and sharp instead of a thick rounded box,
+the camera drifts toward your cursor rather than away from it, and the cursor
+trail is off because the game ships it off. A render you made before will not
+line up with one you make now.
+
+Nothing changes if you load your own config: your settings win, as they
+always did, and that is the way to get exactly what you had.
+
+**Miss markers appear where the game puts them.** The hit window was a flat
+80 ms and is now 55 ms scaled by the run's speed, which is what the game
+does. On a 1.00x run rhythr used to accept hits up to 25 ms after the game
+had already scored a miss, so a handful of notes near the edge can flip
+between hit and miss compared to an older render. The new behaviour is the
+one that matches your score.
+
+**And the quality number runs the other way round.** 0 to 100, higher is
+better, where it used to be a CRF where lower was better. Your saved setting
+is converted on upgrade, so your first render after updating produces the
+file it would have produced before — but the slider will be sitting somewhere
+new, and the default for a fresh install is deliberately lower than the old
+one, because the old one wrote several times what an upload needs.
+
 ### Faster
 
 - **Renders are 30-40% faster**, and more on the formats that were worst off.

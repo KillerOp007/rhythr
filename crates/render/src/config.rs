@@ -372,7 +372,18 @@ impl Default for SkinConfig {
             note_scale: 1.0,      // :574 note_size
             note_opacity: 1.0,    // :580
             fade_length: 0.5,     // :581
-            parallax: 6.5,        // :594
+            // :594. Two real player configs (the owner's, and the second one
+            // in notes/testdata-extra) both say 5, which kept this open as a
+            // suspected wrong default. It is not one: 5 is what those two
+            // players SET, and a player with a config gets their own value
+            // read back — this line only decides a render with no config at
+            // all. The game's own initialiser is the only statement about the
+            // default that exists, the settings menu documents no other (its
+            // Parallax tooltip is the one control without a "[def. X]"), and
+            // the scene's SpinBox carries a placeholder 1.0 that the script
+            // overwrites at runtime. Do not "correct" this to 5 without a
+            // fresh install to read it from.
+            parallax: 6.5,
             half_ghost: false,
             // Rhythia.gd:2354 selects "ssp_rounded" on a fresh install —
             // the rounded mesh, not the square one.
