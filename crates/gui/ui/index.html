@@ -314,10 +314,6 @@
             </select>
             <span class="sub">How much of a frame goes into that connection per write. The best value is not the same on every system — the finished-render line names the one that was used, so two renders settle it.</span>
           </label>
-          <label class="field">
-            <span class="check"><input type="checkbox" id="set-dryrun" /> Diagnostic: time the pipeline only</span>
-            <span class="sub">Renders and sends every frame as usual but encodes nothing and writes no file, so the reported feed time is the transport by itself. The difference against a normal render of the same clip is what the encoder costs. Remember to switch this back off.</span>
-          </label>
           <button class="btn small wide" id="btn-diagnostics"
                   title="Write a text file describing this build, your ffmpeg and encoders, and what is loaded — everything a bug report needs">Save diagnostics…</button>
         </details>

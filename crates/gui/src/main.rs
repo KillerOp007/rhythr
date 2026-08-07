@@ -1314,16 +1314,32 @@ fn evict_map_cache(keep_id: i32) {
 
 /// The server-side hash recorded when a map was downloaded into the cache.
 fn cached_map_hash(map_id: i32) -> Option<String> {
+    cached_meta_field(map_id, "mapHash")
+}
+
+fn cached_meta_field(map_id: i32, field: &str) -> Option<String> {
     let meta = maps_cache_dir().join(format!("{map_id}.meta.json"));
     let text = std::fs::read_to_string(meta).ok()?;
     let v: serde_json::Value = serde_json::from_str(&text).ok()?;
-    v["mapHash"].as_str().map(str::to_owned)
+    v[field].as_str().map(str::to_owned)
 }
 
-/// Looks for a cached download of the replay's map; validates the cached
-/// hash against the replay header (an updated map must not silently render
-/// the wrong notes).
-fn try_cached_map(replay: &Replay) -> Option<(PathBuf, Map)> {
+/// Looks for a cached download of the replay's map, and says whether that
+/// cached copy still hashes to what the replay was recorded against (an
+/// updated map must not silently render the wrong notes).
+///
+/// Returning `None` means "no usable cache, fetch it". That used to include
+/// every hash mismatch, which turned a map re-uploaded since the replay into
+/// an unbounded download loop: the fetch stores the SERVER's current hash, the
+/// check compares it against the REPLAY's, and those can never agree again, so
+/// every launch downloaded a map that was already on disk. Rhythia's terms
+/// allow one request per uncached map, and that was neither.
+///
+/// So the meta file also records which replay hash a download was made for.
+/// Once we have fetched for this replay and the copy still does not match, the
+/// answer is not going to change: hand back the cached map with `mismatch`
+/// set, and let the user be told rather than the server be asked again.
+fn try_cached_map(replay: &Replay) -> Option<(PathBuf, Map, bool)> {
     if replay.map_id <= 0 {
         return None;
     }
@@ -1331,16 +1347,36 @@ fn try_cached_map(replay: &Replay) -> Option<(PathBuf, Map)> {
     if !sspm.exists() {
         return None;
     }
-    let cached_hash = cached_map_hash(replay.map_id).unwrap_or_default();
-    let mismatch = !replay.beatmap_hash.is_empty()
-        && !cached_hash.is_empty()
-        && cached_hash != replay.beatmap_hash;
-    if mismatch {
-        // Stale cache — the caller should re-download.
-        return None;
-    }
+    let mismatch = cache_decision(
+        &replay.beatmap_hash,
+        &cached_map_hash(replay.map_id).unwrap_or_default(),
+        cached_meta_field(replay.map_id, "fetchedFor").as_deref(),
+    )?;
     let map = Map::from_path(&sspm).ok()?;
-    Some((sspm, map))
+    Some((sspm, map, mismatch))
+}
+
+/// What to do with a cached map: `None` means fetch it, `Some(mismatch)`
+/// means use it and whether to warn.
+///
+/// Split out because getting it wrong is silent and expensive. The bug it
+/// replaces returned "fetch" for every mismatch, and a fetch stores the
+/// SERVER's hash while the check compares the REPLAY's, so a map re-uploaded
+/// since the replay was recorded could never satisfy it and was downloaded
+/// again on every single launch.
+fn cache_decision(replay_hash: &str, cached_hash: &str, fetched_for: Option<&str>) -> Option<bool> {
+    let mismatch =
+        !replay_hash.is_empty() && !cached_hash.is_empty() && cached_hash != replay_hash;
+    if !mismatch {
+        return Some(false);
+    }
+    // One fetch per replay: if we already went and got it for this exact
+    // replay and it still does not match, asking again cannot change that.
+    if fetched_for == Some(replay_hash) {
+        Some(true)
+    } else {
+        None
+    }
 }
 
 /// Invalidate the cached preview pipeline (config/replay/map changed).
@@ -1402,9 +1438,10 @@ fn load_replay(state: tauri::State<'_, App>, path: String, app_handle: tauri::Ap
         inner.map = None;
         inner.map_source.clear();
         inner.map_hash_mismatch = false;
-        if let Some((p, m)) = try_cached_map(&replay) {
+        if let Some((p, m, mismatch)) = try_cached_map(&replay) {
             inner.map = Some((p, m));
             inner.map_source = "cache".into();
+            inner.map_hash_mismatch = mismatch;
         }
     } else if inner.map_source != "local" {
         // Same map, different replay: the stored mismatch flag belongs to
@@ -1509,7 +1546,15 @@ async fn download_map(
         std::fs::create_dir_all(&dir).map_err(err_str)?;
         let sspm_path = dir.join(format!("{map_id}.sspm"));
         std::fs::write(&sspm_path, &bytes).map_err(err_str)?;
-        let meta = serde_json::json!({"mapHash": map_hash, "title": title, "mapId": map_id});
+        // `fetchedFor` is what stops a re-uploaded map being downloaded again
+        // on every launch: it records the replay this fetch was made for, so
+        // a mismatch that survives the fetch is known to be permanent.
+        let meta = serde_json::json!({
+            "mapHash": map_hash,
+            "title": title,
+            "mapId": map_id,
+            "fetchedFor": replay_hash,
+        });
         let _ = std::fs::write(
             dir.join(format!("{map_id}.meta.json")),
             serde_json::to_string_pretty(&meta).unwrap_or_default(),
@@ -4192,17 +4237,14 @@ fn main() {
         let candidate = arg_replay.or_else(|| inner.settings.last_replay.clone());
         if let Some(path) = candidate.filter(|p| Path::new(p).exists()) {
             if let Ok(replay) = Replay::from_path(&path) {
-                if let Some((p, m)) = try_cached_map(&replay) {
+                // The mismatch verdict comes back with the map now, so
+                // restoring a session says the same thing about a re-uploaded
+                // map that loading the replay by hand would.
+                if let Some((p, m, mismatch)) = try_cached_map(&replay) {
                     inner.map = Some((p, m));
                     inner.map_source = "cache".into();
+                    inner.map_hash_mismatch = mismatch;
                 }
-                // The same check the interactive load does. Reopening the
-                // app restored the replay but never asked whether the cached
-                // map still matches it, so a map that had been re-uploaded
-                // since was rendered against without the warning that
-                // loading the same replay by hand would have raised.
-                inner.map_hash_mismatch = cached_map_hash(replay.map_id)
-                    .is_some_and(|h| !replay.beatmap_hash.is_empty() && h != replay.beatmap_hash);
                 inner.replay = Some((PathBuf::from(path), replay));
                 inner.replay_restored = true;
                 normalize_time_bases(&mut inner);
@@ -4575,6 +4617,29 @@ mod update_channel_tests {
 
 #[cfg(test)]
 mod settings_migration_tests {
+    /// Rhythia's terms allow one request per UNCACHED map. A map re-uploaded
+    /// since a replay was recorded used to be fetched on every launch,
+    /// forever, because the fetch stores the server's hash and the check
+    /// compares the replay's — they can never agree again.
+    #[test]
+    fn a_re_uploaded_map_is_fetched_once_and_then_left_alone() {
+        // Nothing cached yet, or hashes agree: use it, no warning.
+        assert_eq!(cache_decision("aaa", "aaa", None), Some(false));
+        // Unknown on either side is not a mismatch.
+        assert_eq!(cache_decision("", "aaa", None), Some(false));
+        assert_eq!(cache_decision("aaa", "", None), Some(false));
+
+        // Mismatch, never fetched for this replay: worth exactly one fetch.
+        assert_eq!(cache_decision("aaa", "bbb", None), None);
+        // Mismatch, fetched for a DIFFERENT replay: still worth one for ours.
+        assert_eq!(cache_decision("aaa", "bbb", Some("ccc")), None);
+
+        // Mismatch, and we already fetched for this exact replay: the answer
+        // will not change, so use what we have and warn. This is the case
+        // that used to loop.
+        assert_eq!(cache_decision("aaa", "bbb", Some("aaa")), Some(true));
+    }
+
     /// The Analyze window's view toggles are a lens for studying a run, not a
     /// property of it. They used to reach the render job, the exported frame
     /// and the score card through the same config builder the preview used —

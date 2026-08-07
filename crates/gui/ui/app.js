@@ -678,7 +678,6 @@ function renderOutputTab() {
   paintQuality();
   $("set-tcpfeed").checked = !!s.tcp_feed;
   $("set-sockchunk").value = String(s.socket_chunk_kib);
-  $("set-dryrun").checked = !!s.dry_run;
   $("set-encoder").value = s.encoder;
   $("set-results").value = String(Math.round(s.results_secs));
   $("set-mblur").value = String(s.motion_blur);
@@ -2084,8 +2083,6 @@ function initControls() {
     pushOutput({ tcp_feed: $("set-tcpfeed").checked }));
   $("set-sockchunk").addEventListener("change", () =>
     pushOutput({ socket_chunk_kib: Number($("set-sockchunk").value) }));
-  $("set-dryrun").addEventListener("change", () =>
-    pushOutput({ dry_run: $("set-dryrun").checked }));
   $("set-quality").addEventListener("input", paintQuality);
   $("set-quality").addEventListener("change", () => pushOutput({ quality: Number($("set-quality").value) }));
   $("set-encoder").addEventListener("change", () => {
