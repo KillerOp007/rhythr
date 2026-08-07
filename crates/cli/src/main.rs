@@ -15,7 +15,9 @@ use serde::Deserialize;
 
 #[derive(Parser)]
 #[command(
-    name = "rhythia-render",
+    // The binary is rhythr-cli; the old name here was the render crate's and
+    // put a name in --version and --help that exists nowhere else.
+    name = "rhythr-cli",
     version,
     about = "Rhythia replay renderer (read-only)"
 )]

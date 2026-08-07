@@ -29,7 +29,10 @@
     ],
     "resources": [
       "README.txt",
-      "FONT-LICENSE.txt"
+      "FONT-LICENSE.txt",
+      "LICENSE.txt",
+      "THIRD-PARTY-NOTICES.txt",
+      "THIRD-PARTY-CRATES.txt"
     ],
     "icon": [
       "icons/32x32.png",
@@ -64,18 +67,24 @@
           "ffmpeg"
         ],
         "files": {
-          "/usr/share/mime/packages/rhythr.xml": "../../packaging/linux/rhythr-mime.xml"
+          "/usr/share/mime/packages/rhythr.xml": "../../packaging/linux/rhythr-mime.xml",
+          "/usr/share/doc/rhythr/copyright": "../../LICENSE",
+          "/usr/share/doc/rhythr/THIRD-PARTY-NOTICES.md": "../../THIRD-PARTY-NOTICES.md"
         },
         "desktopTemplate": "../../packaging/linux/rhythr.desktop"
       },
       "rpm": {
         "files": {
-          "/usr/share/mime/packages/rhythr.xml": "../../packaging/linux/rhythr-mime.xml"
+          "/usr/share/mime/packages/rhythr.xml": "../../packaging/linux/rhythr-mime.xml",
+          "/usr/share/doc/rhythr/copyright": "../../LICENSE",
+          "/usr/share/doc/rhythr/THIRD-PARTY-NOTICES.md": "../../THIRD-PARTY-NOTICES.md"
         },
         "desktopTemplate": "../../packaging/linux/rhythr.desktop"
       }
     },
-    "createUpdaterArtifacts": true
+    "createUpdaterArtifacts": true,
+    "license": "MIT",
+    "licenseFile": "LICENSE.txt"
   },
   "plugins": {
     "updater": {

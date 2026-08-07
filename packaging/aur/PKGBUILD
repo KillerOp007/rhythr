@@ -1,8 +1,14 @@
 # Maintainer: KillerOp007 <79337152+KillerOp007@users.noreply.github.com>
 #
 # Repackages the release .deb (same binary as every other platform).
-# Before pushing to the AUR: bump pkgver, then refresh sha256sums with
-# `updpkgsums` (or makepkg -g) against the published release assets.
+#
+# This is deliberately the LAST step of a release and lags the tree on
+# purpose: the checksums below are of published release assets, so bumping
+# pkgver before those assets exist produces a new version carrying old hashes,
+# which is worse than an obviously stale file. scripts/preflight.sh fails
+# while this lags, which is the reminder. See docs/RELEASING.md step 10.
+#
+#   updpkgsums && makepkg --printsrcinfo > .SRCINFO
 
 pkgname=rhythr-bin
 pkgver=0.5.0
