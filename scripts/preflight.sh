@@ -72,6 +72,33 @@ sys.exit(1 if problems else 0)
 PY
 [ $? -eq 0 ] || FAIL=1
 
+# The platform configs REPLACE bundle.resources rather than adding to it, so a
+# file listed only in tauri.conf.json silently misses that platform. That is
+# exactly how the Windows installer went out without the license while the
+# AppImage had it.
+for pc in crates/gui/tauri.windows.conf.json crates/gui/tauri.macos.conf.json crates/gui/tauri.linux.conf.json; do
+  [ -f "$pc" ] || continue
+  MISSING=$(python3 -c '
+import json, sys
+res = json.load(open(sys.argv[1])).get("bundle", {}).get("resources")
+if res is not None:
+    want = ("LICENSE.txt", "THIRD-PARTY-NOTICES.txt", "THIRD-PARTY-CRATES.txt")
+    print(" ".join(f for f in want if f not in res))
+' "$pc")
+  if [ -n "$MISSING" ]; then
+    bad "$(basename "$pc") overrides bundle.resources and drops: $MISSING"
+  else
+    ok "$(basename "$pc") keeps the licensing"
+  fi
+done
+
+# Tauri only reads tauri.<platform>.conf.json for linux, windows and macos. A
+# file named after a BUNDLE FORMAT is silently ignored, which is how the
+# AppImage lost the ffmpeg that resolve_ffmpeg documents as its fallback.
+for stray in crates/gui/tauri.appimage.conf.json crates/gui/tauri.deb.conf.json crates/gui/tauri.rpm.conf.json crates/gui/tauri.nsis.conf.json; do
+  [ -f "$stray" ] && warn "$(basename "$stray") is named after a bundle format, not a platform, so Tauri never reads it"
+done
+
 for pair in "LICENSE:crates/gui/LICENSE.txt" "THIRD-PARTY-NOTICES.md:crates/gui/THIRD-PARTY-NOTICES.txt"; do
   src="${pair%%:*}"; dst="${pair##*:}"
   if [ ! -f "$dst" ]; then

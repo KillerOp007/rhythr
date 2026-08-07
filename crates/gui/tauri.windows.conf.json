@@ -4,7 +4,10 @@
       "ffmpeg.exe",
       "ffmpeg-LICENSE.txt",
       "README.txt",
-      "FONT-LICENSE.txt"
+      "FONT-LICENSE.txt",
+      "LICENSE.txt",
+      "THIRD-PARTY-NOTICES.txt",
+      "THIRD-PARTY-CRATES.txt"
     ]
   }
 }
