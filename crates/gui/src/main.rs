@@ -776,7 +776,14 @@ fn apply_hud_settings(cfg: &mut SkinConfig, base: &SkinConfig, s: &Settings) {
         .map(|_| s.background_dim.min(100) as f32 / 100.0);
 }
 
-/// The config as it renders: file config + game assets + HUD overrides.
+/// The config as the PREVIEW and the Analyze window see it: file config +
+/// game assets + HUD overrides, plus that window's own view toggles.
+///
+/// Use [`render_config`] for anything the user keeps. The two toggles below
+/// exist so a person can study hitboxes without the notes on top of them —
+/// they are a lens on the picture, not a property of the run, and letting
+/// them reach a render meant unticking "Notes" in one window produced a
+/// finished video with no notes in it, silently, minutes later.
 fn effective_config(inner: &Inner) -> SkinConfig {
     let mut cfg = inner.base_config.clone();
     apply_hud_settings(&mut cfg, &inner.base_config, &inner.settings);
@@ -787,6 +794,20 @@ fn effective_config(inner: &Inner) -> SkinConfig {
     if inner.analyze_hide_notes {
         cfg.note_opacity = 0.0;
     }
+    finish_config(cfg, inner)
+}
+
+/// The config for anything the user keeps: a render, an exported frame, a
+/// score card. Identical to [`effective_config`] except that the Analyze
+/// window's view toggles do not reach it.
+fn render_config(inner: &Inner) -> SkinConfig {
+    let mut cfg = inner.base_config.clone();
+    apply_hud_settings(&mut cfg, &inner.base_config, &inner.settings);
+    finish_config(cfg, inner)
+}
+
+/// Everything both of them share, after the point where they differ.
+fn finish_config(mut cfg: SkinConfig, inner: &Inner) -> SkinConfig {
     // Custom background: replaces the skin's background layers. Silently
     // skipped if the file vanished — set_background validated it once.
     if let Some(p) = &inner.settings.background {
@@ -3501,7 +3522,7 @@ async fn export_frame(
         let inner = app.lock();
         let (_, r) = inner.replay.as_ref().ok_or("no replay loaded")?;
         let (_, m) = inner.map.as_ref().ok_or("no map loaded")?;
-        let cfg = effective_config(&inner);
+        let cfg = render_config(&inner);
         let (w, h) = (inner.settings.width, inner.settings.height);
         let mut params = SceneParams::from(&cfg);
         let renderer =
@@ -3538,7 +3559,7 @@ async fn export_card(
         let inner = app.lock();
         let (_, r) = inner.replay.as_ref().ok_or("no replay loaded")?;
         let (_, m) = inner.map.as_ref().ok_or("no map loaded")?;
-        let cfg = effective_config(&inner);
+        let cfg = render_config(&inner);
         let renderer =
             rhythia_render::Renderer::new(w, h, cfg.hud_font.as_deref()).map_err(|e| gpu_err(&e))?;
         let hud = rhythia_render::hud::HudState::new(m, r);
@@ -3648,7 +3669,7 @@ fn start_render(
         let job = RenderJob {
             replay: replay.clone(),
             map: map.clone(),
-            cfg: effective_config(&inner),
+            cfg: render_config(&inner),
             width: s.width,
             height: s.height,
             fps: s.fps,
@@ -4554,6 +4575,27 @@ mod update_channel_tests {
 
 #[cfg(test)]
 mod settings_migration_tests {
+    /// The Analyze window's view toggles are a lens for studying a run, not a
+    /// property of it. They used to reach the render job, the exported frame
+    /// and the score card through the same config builder the preview used —
+    /// so unticking "Notes" in one window produced a finished video with no
+    /// notes in it, silently, minutes later. render_config must not carry
+    /// them; effective_config must.
+    #[test]
+    fn the_analyze_view_toggles_never_reach_something_the_user_keeps() {
+        let mut inner = Inner::default();
+        inner.analyze_hide_notes = true;
+        inner.analyze_hide_cursor = true;
+
+        let looking = effective_config(&inner);
+        assert_eq!(looking.note_opacity, 0.0, "the preview stopped honouring the toggle");
+        assert_eq!(looking.cursor_opacity, 0.0);
+
+        let keeping = render_config(&inner);
+        assert!(keeping.note_opacity > 0.0, "a render would come out with no notes");
+        assert!(keeping.cursor_opacity > 0.0, "a render would come out with no cursor");
+    }
+
     use super::*;
 
     /// A settings.json written before the quality scale was inverted stored
