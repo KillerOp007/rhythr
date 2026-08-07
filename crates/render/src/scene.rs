@@ -388,11 +388,15 @@ mod tests {
     /// here must fail loudly rather than quietly ship.
     #[test]
     fn every_resolved_mod_reaches_the_scene() {
+        // Written out in full ON PURPOSE, no `..none()`: struct-update syntax
+        // is not exhaustive, so a future field would default in here and this
+        // test would keep passing while the new mod never reached the scene —
+        // which is the exact bug it exists to catch.
         let mods = crate::mods::ResolvedMods {
             grid_scale: 1.4,
+            flip: (true, false),
             ghost: true,
             nearsighted: true,
-            ..crate::mods::ResolvedMods::none()
         };
         let mut p = SceneParams::default();
         p.apply_mods(&mods);
