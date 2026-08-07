@@ -543,8 +543,9 @@ pub fn render_video(
             // why far better than the errno does.
             let status = child.wait();
             return Err(Error::Ffmpeg(format!(
-                "writing frame {i} failed: {e} (ffmpeg exit: {status:?}){}",
-                log.tail()
+                "writing frame {i} failed: {e} ({}){}",
+                describe_exit(&status),
+                explain_silence(&log)
             )));
         }
         Ok(())
@@ -689,8 +690,9 @@ pub fn render_video(
     if !status.success() {
         // Guard drop removes the unusable partial file.
         return Err(Error::Ffmpeg(format!(
-            "ffmpeg exited with {status}{}",
-            log.tail()
+            "ffmpeg {}{}",
+            describe_exit(&Ok(status)),
+            explain_silence(&log)
         )));
     }
     // Only now does the finished video take the name it was asked for. Up to
@@ -705,6 +707,51 @@ pub fn render_video(
     }
     guard.done = true;
     Ok(stats)
+}
+
+/// How ffmpeg ended, in words.
+///
+/// This used to be `{status:?}` on a `Result<ExitStatus, _>`, which printed
+/// `Ok(ExitStatus(unix_wait_status(153)))` — and when a signal kills ffmpeg it
+/// writes nothing to stderr, so that integer was the entire diagnosis.
+fn describe_exit(status: &std::io::Result<std::process::ExitStatus>) -> String {
+    match status {
+        Ok(s) => {
+            #[cfg(unix)]
+            {
+                use std::os::unix::process::ExitStatusExt;
+                if let Some(sig) = s.signal() {
+                    let name = match sig {
+                        9 => " (killed)",
+                        15 => " (terminated)",
+                        25 => " (file size limit exceeded)",
+                        _ => "",
+                    };
+                    return format!("ffmpeg was stopped by signal {sig}{name}");
+                }
+            }
+            match s.code() {
+                Some(c) => format!("ffmpeg exited with status {c}"),
+                None => "ffmpeg exited abnormally".into(),
+            }
+        }
+        Err(e) => format!("ffmpeg could not be waited for: {e}"),
+    }
+}
+
+/// ffmpeg's last words, or a hint when it left none.
+///
+/// A signal death produces an empty stderr, so the message would otherwise end
+/// on a number and leave the two likeliest causes unsaid.
+fn explain_silence(log: &FfmpegLog) -> String {
+    let tail = log.tail();
+    if tail.trim().is_empty() {
+        " — ffmpeg said nothing on its way out, which usually means the disk \
+         filled up or something else is holding the output file"
+            .into()
+    } else {
+        tail
+    }
 }
 
 /// The tail of ffmpeg's stderr, collected on a reader thread so the pipe

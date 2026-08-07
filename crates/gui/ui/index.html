@@ -61,6 +61,7 @@
       <section class="card optional" id="card-game">
         <div class="card-head">
           <h2>Game</h2>
+          <span class="chip warn" id="game-head-chip" hidden>not connected</span>
           <span class="head-actions">
             <button class="btn small" id="btn-game-detect" title="Search your Steam libraries and read the built-in assets from the game">Detect</button>
             <button class="btn small ghost" id="btn-game-exe" title="Pick the Rhythia executable yourself">Locate…</button>
@@ -276,6 +277,7 @@
             <option value="6">6 seconds</option>
             <option value="10">10 seconds</option>
           </select>
+          <span class="sub" id="results-note" hidden></span>
         </label>
         <div class="field">
           <span>Output folder</span>

@@ -108,11 +108,25 @@ function renderMapCard() {
   const body = $("map-body");
   const m = status?.map;
   const r = status?.replay;
-  $("btn-map-dl").hidden = !(r && !m);
+  // Downloading needs an online id. Without one the button could only ever
+  // fail with "replay has no online map id", so it is not offered — and the
+  // replay's readable map name is shown instead, which is what someone needs
+  // to find the file themselves. It was parsed and carried all along and
+  // displayed nowhere.
+  const canDownload = !!(r && !m && r.map_id > 0);
+  $("btn-map-dl").hidden = !canDownload;
   if (!m) {
-    body.innerHTML = r
-      ? `<p class="hint">Map id <b>${r.map_id}</b> — download from rhythia.com or browse a local .sspm/.rhm</p>`
-      : `<p class="hint">Auto-resolved from the replay</p>`;
+    if (!r) {
+      body.innerHTML = `<p class="hint">Auto-resolved from the replay</p>`;
+    } else if (canDownload) {
+      body.innerHTML = `<p class="hint">Map id <b>${r.map_id}</b>. Download it from rhythia.com, or browse for a local .sspm/.rhm</p>`;
+    } else {
+      const named = r.legacy_map_id
+        ? `<b>${esc(r.legacy_map_id)}</b>`
+        : "this replay's map";
+      body.innerHTML =
+        `<p class="hint">This replay carries no online map id, so it cannot be downloaded. Browse for ${named} as a local .sspm/.rhm file.</p>`;
+    }
     return;
   }
   const src = { local: "local file", cache: "cached download", downloaded: "downloaded" }[m.source] || m.source;
@@ -172,11 +186,19 @@ function initOptionalCards() {
 
 /// A card that now holds something real opens itself once — a loaded ghost
 /// or background should never be hidden behind a fold the user forgot.
+///
+/// The Game card is the exception and runs the other way round. It used to
+/// open on SUCCESS, which is backwards: a connected game needs no attention,
+/// while a failed detect leaves the app rendering with approximated skins and
+/// no hit sounds. The message saying so was written into a folded card, and
+/// since only a success ever wrote the fold state, a machine where detection
+/// keeps failing re-folded it on every single launch. So: open it while the
+/// game is NOT connected.
 function syncOptionalCards() {
   const filled = {
     "card-ghost": !!status?.ghost,
     "card-background": !!status?.settings?.background,
-    "card-game": !!status?.settings?.game_assets,
+    "card-game": status ? !status.game_ok : false,
   };
   for (const [id, has] of Object.entries(filled)) {
     const card = $(id);
@@ -705,6 +727,10 @@ function setGameNote(note) {
 function renderGameCard(note) {
   const body = $("game-body");
   const ok = status?.game_ok;
+  // Survives the card being folded, which is where the warning used to go
+  // and stay.
+  const headChip = $("game-head-chip");
+  if (headChip) headChip.hidden = ok !== false;
   const path = status?.settings?.game_assets;
   note = note ?? gameNote;
   let html = "";
@@ -1563,15 +1589,45 @@ function initRenderEvents() {
     setRenderingUi(false);
     updateRenderButton();
     $("render-text").classList.remove("done");
+    $("render-text").title = "";
     $("render-text").textContent = "Cancelled.";
   });
   listen("render-error", (e) => {
     setRenderingUi(false);
     updateRenderButton();
-    $("render-text").classList.remove("done");
+    // Full text, wrapped, selectable, and in the tooltip as well: ffmpeg
+    // puts its reason at the END of the message, which is exactly what a
+    // single ellipsised line threw away.
+    $("render-text").classList.add("done");
     $("render-text").textContent = `Error: ${e.payload}`;
+    $("render-text").title = e.payload;
     setWindowNotice("Render failed");
   });
+}
+
+/// The results screen is only appended when the clip reaches the end of the
+/// run (video.rs: `end_ms >= run_end - 500`). Nothing said so, and two of the
+/// four clips the app itself suggests stop mid-run — so the app offered a
+/// chip that quietly turned off a setting the app defaults to on.
+function updateResultsAvailability() {
+  const sel = $("set-results");
+  const note = $("results-note");
+  if (!sel || !note) return;
+  const clip = status?.clip;
+  const r = status?.replay;
+  if (!clip || !r) {
+    sel.disabled = false;
+    note.hidden = true;
+    return;
+  }
+  const runEnd = r.failed ? r.fail_time_ms : r.length_ms;
+  const reachesEnd = clip[1] >= runEnd - 500;
+  sel.disabled = !reachesEnd;
+  note.hidden = reachesEnd;
+  if (!reachesEnd) {
+    note.textContent =
+      "Your clip stops before the end of the run, so there is no results screen to show. Extend the clip to the end to get one.";
+  }
 }
 
 function updateRenderButton() {
@@ -1596,15 +1652,21 @@ function updateRenderButton() {
       const est = frames / fps + (clip ? 0 : status.settings.results_secs || 0);
       readyText = `Ready to render ${what} (~${fmtTime(est * 1000)} at last speed)`;
     }
-    $("render-text").textContent = ready
-      ? readyText
-      : status?.replay
-        ? "Map missing — download or browse one"
-        : "Load a replay to render";
+    // ffmpeg is checked here too: `ready` is only replay+map, while the
+    // button is also disabled without ffmpeg, so this line used to promise a
+    // render next to a button that could not start one.
+    $("render-text").textContent = ffmpegMissing
+      ? "ffmpeg could not be run. Set its path under Advanced, or install it."
+      : ready
+        ? readyText
+        : status?.replay
+          ? "No map yet. Download it, or browse for the file."
+          : "Load a replay to render";
     // Which file this will produce was invisible until the render finished.
     // Resolved by the backend so it matches exactly what gets written.
     if (ready) showTargetFile();
     else setTargetFile("");
+    updateResultsAvailability();
   }
 }
 
@@ -1924,6 +1986,18 @@ function initControls() {
   // Layout presets.
   $("btn-preset-save").addEventListener("click", async () => {
     const name = $("preset-name").value.trim();
+    // Deleting a preset asks; saving over one did not, and destroys exactly
+    // as much.
+    const existing = name in (status?.settings?.presets || {});
+    if (existing) {
+      const ok = await dialog.ask(`Replace the preset "${name}" with the current layout?`, {
+        title: "Replace preset",
+        kind: "warning",
+        okLabel: "Replace",
+        cancelLabel: "Cancel",
+      });
+      if (!ok) return;
+    }
     try {
       await call(() => invoke("save_preset", { name }));
       $("preset-name").value = "";

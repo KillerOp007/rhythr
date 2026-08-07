@@ -191,7 +191,10 @@ code { font-family: ui-monospace, Consolas, monospace; color: var(--accent); fon
 #render-text { font-size: var(--fs-md); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* Progress is one line that must not reflow while it ticks; the finished
    message is two, because the timing under it is the point of reading it. */
-#render-text.done { white-space: pre-line; overflow: visible; text-overflow: clip; }
+#render-text.done { white-space: pre-line; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
+/* The one place text must be copyable: a render failure is the message people
+   are asked to send on, and the app selects nothing by default. */
+#render-text, #render-target, #preview-msg { user-select: text; -webkit-user-select: text; }
 #render-text.done { line-height: 1.35; font-size: var(--fs-sm); }
 /* The file a render will write, so it is knowable before it runs. */
 #render-target {

@@ -60,9 +60,11 @@ enum Command {
         /// Output PNG path.
         #[arg(long, short)]
         out: PathBuf,
-        #[arg(long, default_value_t = 1920)]
+        /// Output width in pixels (320-7680).
+        #[arg(long, default_value_t = 1920, value_parser = clap::value_parser!(u32).range(320..=7680))]
         width: u32,
-        #[arg(long, default_value_t = 1080)]
+        /// Output height in pixels (240-4320).
+        #[arg(long, default_value_t = 1080, value_parser = clap::value_parser!(u32).range(240..=4320))]
         height: u32,
         /// The player's config.json or exported .rhs skin (adopts their
         /// note skin, camera, colours). Defaults applied when omitted.
@@ -101,11 +103,14 @@ enum Command {
         /// Clip end (ms or mm:ss); default the replay's end (or fail time).
         #[arg(long)]
         end: Option<String>,
-        #[arg(long, default_value_t = 60)]
+        /// Frames per second (24-240).
+        #[arg(long, default_value_t = 60, value_parser = clap::value_parser!(u32).range(24..=240))]
         fps: u32,
-        #[arg(long, default_value_t = 1920)]
+        /// Output width in pixels (320-7680).
+        #[arg(long, default_value_t = 1920, value_parser = clap::value_parser!(u32).range(320..=7680))]
         width: u32,
-        #[arg(long, default_value_t = 1080)]
+        /// Output height in pixels (240-4320).
+        #[arg(long, default_value_t = 1080, value_parser = clap::value_parser!(u32).range(240..=4320))]
         height: u32,
         /// Render quality 0-100, higher is better. Mapped onto whichever
         /// encoder ends up being used; --crf overrides it with a raw CRF.
@@ -181,7 +186,7 @@ enum Command {
         #[arg(long)]
         background: Option<PathBuf>,
         /// How much the custom background is darkened, 0-100 percent.
-        #[arg(long, default_value_t = 60)]
+        #[arg(long, default_value_t = 60, value_parser = clap::value_parser!(u32).range(0..=100))]
         background_dim: u32,
         /// Zoom on the custom background, percent (100 = exactly covering
         /// the frame).
