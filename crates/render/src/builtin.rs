@@ -3,7 +3,7 @@
 //! `Textures/Game/colorsets/Arctic.txt` or `Textures/Game/notes/thin.png`.
 //!
 //! These assets are Capo Games' property. They are **not** shipped with this
-//! tool — [`BuiltinAssets::load`] reads them from a directory the user points
+//! tool. [`BuiltinAssets::load`] reads them from a directory the user points
 //! at (their own Rhythia installation, or a locally-extracted copy). The
 //! published renderer extracts them at runtime from the user's install; it
 //! never bundles them.

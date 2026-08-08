@@ -94,7 +94,7 @@ impl<'a> Reader<'a> {
     /// How deep marker arrays may nest. Real files use one level at most;
     /// the limit exists because the element type of an array can be another
     /// array, so a crafted file could otherwise drive this recursion until
-    /// the stack overflows — an abort no caller can catch.
+    /// the stack overflows: an abort no caller can catch.
     const MAX_ARRAY_DEPTH: u32 = 8;
 
     fn skip_value_at(&mut self, type_id: u8, depth: u32) -> Result<()> {

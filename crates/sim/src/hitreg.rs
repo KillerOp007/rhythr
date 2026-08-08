@@ -6,8 +6,8 @@
 //! order-preserving subsequence of the notes: the correct alignment is a
 //! monotonic two-pointer walk. Validated against all four reference replays,
 //! this reproduces the header hit/miss counts exactly. The tolerance is the
-//! game's own hit window, which scales with the run's speed — see
-//! [`hit_window_ms`].
+//! game's own hit window, which scales with the run's speed (see
+//! [`hit_window_ms`]).
 //!
 //! Unlike the naive walk in rhr2mp4, a flag that can no longer match any
 //! future note (its time is more than the window before the next
@@ -27,7 +27,7 @@ pub const BASE_HIT_WINDOW_MS: f64 = 55.0;
 
 /// The hit window the given run was played with, in song-time milliseconds.
 ///
-/// The window is one-sided — a note is missed the moment
+/// The window is one-sided: a note is missed the moment
 /// `ms > note_t + hit_window` (`NoteManager.gd:262`), and a flag never
 /// precedes its note. It is **not** a constant: the game scales it with the
 /// speed multiplier (`speed_hitwindow`, on by default), so it belongs to the
@@ -35,15 +35,15 @@ pub const BASE_HIT_WINDOW_MS: f64 = 55.0;
 ///
 /// Measured across 37 leaderboard replays covering every mod combination:
 /// with this window every recorded flag finds a note (zero orphans) and the
-/// latest attributed hit lands just under it at each speed — 55.0 at 1.00×,
-/// 63.0 at 1.15×, 68.0 at 1.25×, 74.0 at 1.35×, 79.0 at 1.45× — and never
+/// latest attributed hit lands just under it at each speed (55.0 at 1.00×,
+/// 63.0 at 1.15×, 68.0 at 1.25×, 74.0 at 1.35×, 79.0 at 1.45×) and never
 /// above. A flat 80 ms, which this replaced, was the 1.45× case generalised
 /// to every run; it stretched attribution ~25 ms past the game's own miss
 /// point on 1.00× replays.
 ///
 /// Deliberately NOT modelled: `NoteManager.gd:398-399` narrows the window to
 /// 0.8× under hardrock. The one hardrock replay we hold (testdata
-/// `hardrock_score192.rhr`, 1.45×) contradicts it — its latest honest flag
+/// `hardrock_score192.rhr`, 1.45×) contradicts it: its latest honest flag
 /// sits at 78 ms, which needs the full 79.75, while 0.8× (63.8) orphans 5
 /// flags and breaks the header totals. Either the factor postdates that
 /// recording or the online mod differs from the local one; until a hardrock
@@ -62,7 +62,7 @@ pub fn hit_window_ms(replay: &Replay) -> f64 {
 
 /// Half-width of the game's hit area, in world units: the fixed square
 /// around a note's centre the cursor must cover. `note_hitbox_size` is
-/// 1.140 by default, but the game special-cases exactly that value —
+/// 1.140 by default, but the game special-cases exactly that value:
 /// `NoteManager.gd:193-194` reads `hbs = note_hitbox_size/2` and then
 /// `if hbs == 0.57: hbs = 0.56875`. Attribution and the analyzer's
 /// hit-area boxes share this one constant.
@@ -70,7 +70,7 @@ pub const HITBOX_HALF: f32 = 0.56875;
 
 /// The game's cursor barrier: the cursor the game TESTS hits with is
 /// clamped to the field edge minus the fixed inset (Cursor.gd `edgec`
-/// 0.13125 cells) — recordings from absolute devices (tablets) contain
+/// 0.13125 cells). Recordings from absolute devices (tablets) contain
 /// raw positions beyond it, but no hit can ever happen out there.
 pub const CURSOR_EDGE_INSET: f32 = 0.13125;
 
@@ -80,8 +80,8 @@ fn note_world(n: &Note) -> (f32, f32) {
 }
 
 /// The cursor bound for a note set: normal grids clamp at ±1.36875,
-/// hardrock grids wider — derived from the notes themselves so this
-/// crate needs no mods knowledge.
+/// hardrock grids wider (derived from the notes themselves so this
+/// crate needs no mods knowledge).
 fn cursor_bound(notes: &[Note]) -> f32 {
     let mut grid = 1.0f32;
     for n in notes {
@@ -129,7 +129,7 @@ pub fn match_hits(notes: &[Note], frames: &[Frame], window_ms: f64) -> MatchOutc
 }
 
 /// Timing-only matching, no cursor-guided reattribution. Use when the
-/// note coordinates are NOT yet in the cursor's space — mirror-flip
+/// note coordinates are NOT yet in the cursor's space: mirror-flip
 /// detection runs on the unflipped map, and letting Phase 2 "correct"
 /// attributions against geometry the player never saw can invert the
 /// detected axis.
@@ -160,14 +160,14 @@ fn match_hits_inner(
 
     let mut orphan_flags = 0u32;
     let mut fi = 0usize;
-    // Which flag frame each hit note owns — Phase 2 swaps move the INDEX,
+    // Which flag frame each hit note owns. Phase 2 swaps move the INDEX,
     // so the cursor lookup can never alias two flags with equal stamps.
     let mut flag_of: Vec<Option<usize>> = vec![None; notes.len()];
 
     for (ni, note) in notes.iter().enumerate() {
         let note_ms = note.time_ms as f64;
         // A flag more than `window_ms` before this note can never match it
-        // or any later note — orphan it instead of stalling (rhr2mp4 bug).
+        // or any later note, so orphan it instead of stalling (rhr2mp4 bug).
         while fi < flags.len() && flags[fi] < note_ms - window_ms {
             orphan_flags += 1;
             fi += 1;
@@ -182,24 +182,24 @@ fn match_hits_inner(
     // Flags left after the last note matched nothing.
     orphan_flags += (flags.len() - fi) as u32;
 
-    // Phase 2 — cursor-guided reattribution. Timing alone cannot tell
+    // Phase 2: cursor-guided reattribution. Timing alone cannot tell
     // near-simultaneous notes apart, and the earliest-note rule above
     // sometimes hands a flag to the WRONG one: the analyzer then paints
     // a hit box the cursor never touched and a miss box it sat inside.
     // The flag frame recorded the cursor, so use it: a flag moves from
     // its note to a missed neighbour when the cursor covered the missed
-    // note's hit area and NOT the attributed one. Totals never change —
+    // note's hit area and NOT the attributed one. Totals never change:
     // each swap trades one hit and one miss between two notes.
     //
     // A note arms at its chart time: a flag may precede its true note
     // only by the replay's ~17 ms frame-stamp quantization (module docs),
-    // never by the full window — otherwise a cursor parked on a
+    // never by the full window. Otherwise a cursor parked on a
     // soon-future note's cell steals flags and manufactures impossible
     // early hits (negative timing errors).
     const EARLY_SLACK_MS: f64 = 17.0;
     let bound = cursor_bound(notes);
     // A mis-shifted CHAIN (every flag one note early) unravels one link
-    // per pass, from the tail backwards — so run to convergence. Each
+    // per pass, from the tail backwards, so run to convergence. Each
     // swap strictly increases the number of cursor-consistent hits, so
     // this terminates within one pass per note; the cap is a backstop.
     let passes = if cursor_guided { notes.len().max(1) } else { 0 };
@@ -239,7 +239,7 @@ fn match_hits_inner(
         }
     }
 
-    // Phase 3 — hit<->hit untangling. Two hit notes can have swapped
+    // Phase 3: hit<->hit untangling. Two hit notes can have swapped
     // flags when the player touched them in the OPPOSITE of chart order
     // (routine on near-simultaneous doubles): the order-preserving walk
     // then pins each flag to the wrong note and every verdict dot lands
@@ -254,8 +254,8 @@ fn match_hits_inner(
                 }
                 for j in (i + 1)..results.len() {
                     // Re-read every iteration: a swap below moves note i
-                    // onto a different flag — a stale binding would hand
-                    // the SAME flag to two notes on 3-note clusters.
+                    // onto a different flag (a stale binding would hand
+                    // the SAME flag to two notes on 3-note clusters).
                     let Some(fi) = flag_of[i] else { break };
                     let dt = notes[j].time_ms - notes[i].time_ms;
                     if dt as f64 > window_ms {
@@ -338,7 +338,7 @@ mod tests {
         assert!((w("[]", 1.0) - 55.0).abs() < 1e-9);
         assert!((w("[]", 1.45) - 79.75).abs() < 1e-4); // 1.45f32 is not exact
         assert!((w("[]", 2.0) - 110.0).abs() < 1e-9);
-        // Mods do not touch it — including hardrock, whose 0.8 factor the
+        // Mods do not touch it, including hardrock, whose 0.8 factor the
         // one real hardrock replay contradicts (see hit_window_ms docs).
         assert!((w("[\"mod_hardrock\"]", 1.0) - 55.0).abs() < 1e-9);
         assert!((w("[\"mod_hardrock\"]", 1.45) - 79.75).abs() < 1e-4);
@@ -446,7 +446,7 @@ mod tests {
 
     /// The pass_long real-replay case: two near-simultaneous notes, the
     /// flag lands on the earlier one by time but the cursor sat on the
-    /// later one — attribution must follow the cursor.
+    /// later one: attribution must follow the cursor.
     #[test]
     fn cursor_reattributes_swapped_double_note() {
         let notes = [
@@ -504,7 +504,7 @@ mod tests {
         assert!(!out.results[1].hit);
     }
 
-    /// A flag must never be stolen by a note far in the FUTURE — the
+    /// A flag must never be stolen by a note far in the FUTURE: the
     /// hitbox arms at the note's chart time (early slack = one frame).
     #[test]
     fn future_note_cannot_steal_a_flag() {

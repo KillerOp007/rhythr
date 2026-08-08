@@ -1,7 +1,7 @@
 //! Speed-mod replays exist in the wild with TWO time bases: most store
 //! their frame times in SONG time (a 1.45x run spans the full song
 //! length; the video pipeline compresses by the speed), but some store
-//! them in WALL-CLOCK time — already "shortened". Feeding the latter
+//! them in WALL-CLOCK time (already "shortened"). Feeding the latter
 //! through the song-time pipeline double-applies the speed and the video
 //! comes out ~2x fast; treating the former as wall-clock loses the speed
 //! entirely. The base is detected per replay instead of assumed: only in

@@ -4,7 +4,7 @@ use std::path::Path;
 /// Strips developer comments out of the frontend before tauri-build embeds
 /// it: the HTML/JS/CSS ship as readable text inside the exe, and comments
 /// are for the repo, not for whoever runs `strings` on a release binary.
-/// Conservative rules only — nothing that could touch string literals:
+/// Conservative rules only (nothing that could touch string literals):
 /// whole `//`-lines in JS, `/* … */` blocks in CSS, `<!-- … -->` in HTML,
 /// and blank lines everywhere.
 fn strip_comments(name: &str, text: &str) -> String {

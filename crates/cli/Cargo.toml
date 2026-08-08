@@ -9,6 +9,7 @@ name = "rhythr-cli"
 path = "src/main.rs"
 
 [dependencies]
+rhythia-errcode.workspace = true
 rhythia-formats.workspace = true
 rhythia-sim.workspace = true
 rhythia-render = { path = "../render" }

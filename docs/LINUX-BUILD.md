@@ -13,7 +13,7 @@ Three artifacts per release, all built by one script:
 The binaries inherit the glibc of the build system. Built on the dev
 machine (Ubuntu 24.04, glibc 2.39) they refuse to start on Ubuntu 22.04,
 Debian 12 or Mint 21. `scripts/build-linux.sh` therefore builds inside an
-**Ubuntu 22.04** container (glibc 2.35 baseline — the oldest possible,
+**Ubuntu 22.04** container (glibc 2.35 baseline: the oldest possible,
 since Tauri 2 needs webkit2gtk-4.1, which first shipped in 22.04). The
 result runs on any mainstream distro from 2022 onward, including SteamOS
 3.5+ and Arch derivatives.
@@ -45,17 +45,17 @@ scripts/build-linux.sh
 
 First run builds the container image (~10 min); after that only the app
 compiles. Bundles land in `target-linux22/release/bundle/`, with a
-`.sig` next to the AppImage for the auto-updater —
+`.sig` next to the AppImage for the auto-updater.
 `scripts/make-latest-json.py <version>` picks it up from there.
 
 ## Notes
 
-- The AppImage carries webkit/GTK and ffmpeg — self-contained by design.
+- The AppImage carries webkit/GTK and ffmpeg: self-contained by design.
   The deb/rpm stay slim and use the system webkit 4.1 + ffmpeg instead.
 - On Linux the app prefers the **system** ffmpeg when one is installed
   (its VAAPI/NVENC are linked against the system's driver stack; the
   bundled static build is the fallback so the AppImage works stand-alone).
 - The updater self-installs only for the AppImage (and the Windows
   installer); deb/rpm users get a "download page" banner instead.
-- The AUR package (`packaging/aur/`) repackages the release deb — see
+- The AUR package (`packaging/aur/`) repackages the release deb. See
   its README for the publishing steps.

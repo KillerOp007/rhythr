@@ -1,5 +1,5 @@
 //! HUD overlay: side-stat panels, health/progress bars, the combo ring, the
-//! faint centre combo number and the title header — everything the game draws
+//! faint centre combo number and the title header: everything the game draws
 //! on top of the 3D playfield.
 //!
 //! This module is pure CPU work: it rasterises the bundled font into a
@@ -271,8 +271,8 @@ pub struct HudStats {
     /// Milliseconds since the most recent miss (drives the ring's drain
     /// animation). Very large before the first miss.
     pub ms_since_miss: f64,
-    /// Combo ring side count (a stateful tier: +1 per full ring, −1 per
-    /// miss — not derivable from the combo alone).
+    /// Combo ring side count. A stateful tier (+1 per full ring, −1 per
+    /// miss), not derivable from the combo alone.
     pub ring_sides: u32,
     /// The ring's target fill fraction.
     pub ring_progress: f32,
@@ -293,7 +293,7 @@ pub enum Grade {
 
 impl Grade {
     /// Grade from an accuracy percentage (0..100). Official thresholds:
-    /// SS 100%, S ≥99%, A 95–98.99%, B 90–94.99%, C 85–89.99%, D below.
+    /// SS 100%, S ≥99%, A 95-98.99%, B 90-94.99%, C 85-89.99%, D below.
     pub fn from_accuracy(acc: f32) -> Grade {
         match acc {
             a if a >= 100.0 => Grade::SS,
@@ -330,9 +330,9 @@ impl Grade {
 }
 
 /// Per-note score weight: a note hit at combo `k` is worth `100·k` in the
-/// game (the "{k}x" ring is literally the points multiplier — verified at
+/// game (the "{k}x" ring is literally the points multiplier, verified at
 /// combo 53: 100·(1+…+53) = 143,100, and at 185: 1,720,500). The SCORE is
-/// the raw cumulative sum — the game applies no normalisation.
+/// the raw cumulative sum, and the game applies no normalisation.
 fn note_multiplier(combo: u32) -> f64 {
     combo as f64
 }
@@ -344,7 +344,7 @@ pub struct GhostInput {
     pub replay: Replay,
     pub state: HudState,
     pub color: [f32; 3],
-    /// The map as this ghost's player saw it — its own geometry mods
+    /// The map as this ghost's player saw it, with its own geometry mods
     /// (mirror/hardrock) applied, independent of the main side's.
     pub map: Map,
     /// This side's own resolved mods. The whole set travels rather than
@@ -363,8 +363,8 @@ pub struct HudState {
     /// The hit window this run was played with; a miss resolves this long
     /// after its note, and the meters scale to it.
     window_ms: f64,
-    /// The run's speed multiplier. Effects timed in REAL seconds — the miss
-    /// X, as the cursor trail already is — have to be converted, because
+    /// The run's speed multiplier. Effects timed in REAL seconds (the miss
+    /// X, as the cursor trail already is) have to be converted, because
     /// everything here walks in SONG time and a speed mod makes the two run
     /// at different rates.
     speed: f64,
@@ -375,7 +375,7 @@ pub struct HudState {
 ///
 /// The marker is three ASCII dots, not a single ellipsis character: the
 /// glyph atlas holds printable ASCII only, so U+2026 would be neither drawn
-/// nor measured — the text would simply lose its first characters with
+/// nor measured: the text would simply lose its first characters with
 /// nothing to show for it.
 fn fit_to_width(atlas: &FontAtlas, text: &str, px: f32, max_px: f32) -> String {
     if max_px <= 0.0 || atlas.measure(text, px) <= max_px {

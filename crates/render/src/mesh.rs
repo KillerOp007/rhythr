@@ -1,6 +1,6 @@
 //! Minimal Wavefront `.obj` loader for the note meshes.
 //!
-//! Only positions and triangulated faces are needed — the note look comes
+//! Only positions and triangulated faces are needed: the note look comes
 //! from the fragment shader (glow/edge), not from normals or UVs. Faces
 //! with more than three vertices are fan-triangulated. Negative (relative)
 //! indices are supported, as Blender emits them.

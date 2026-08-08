@@ -1,9 +1,9 @@
-# Windows build — desktop app + NSIS installer
+# Windows build: desktop app + NSIS installer
 
 ## Preferred: cross-build from Linux
 
-The NSIS installer cross-builds on Linux (~45 MB, ffmpeg bundled) —
-this is the tested path. One-time setup:
+The NSIS installer cross-builds on Linux (~45 MB, ffmpeg bundled).
+This is the tested path. One-time setup:
 
 ```sh
 sudo apt install nsis clang lld llvm
@@ -22,17 +22,17 @@ tauri build --runner cargo-xwin --target x86_64-pc-windows-msvc
 ```
 
 The LNK4099 "cannot use debug info" linker warnings are expected (the
-xwin SDK ships no PDBs) and harmless. The installer is unsigned —
+xwin SDK ships no PDBs) and harmless. The installer is unsigned:
 Windows SmartScreen will show "unknown publisher" on first run.
 
 ## Alternative: native build on Windows
 
 ### One-time setup
 
-1. **Rust** — https://rustup.rs (MSVC toolchain, the default).
-2. **Visual Studio Build Tools 2022** — workload "Desktop development with
+1. **Rust**: https://rustup.rs (MSVC toolchain, the default).
+2. **Visual Studio Build Tools 2022**: workload "Desktop development with
    C++" (the rustup installer offers to install this for you).
-3. **WebView2 runtime** — preinstalled on Windows 10/11; the installer
+3. **WebView2 runtime**: preinstalled on Windows 10/11; the installer
    bundles a bootstrapper for machines that lack it.
 4. **Tauri CLI**:
    ```
@@ -65,9 +65,9 @@ To ship it in the installer:
    where `resolve_ffmpeg` looks.
 
 **License note:** ffmpeg's prebuilt binaries are GPL. Shipping the unmodified
-exe and invoking it as a separate process keeps this project MIT — but the
+exe and invoking it as a separate process keeps this project MIT, but the
 installer must mention it. Include ffmpeg's license text (the builds ship a
-`LICENSE` file — add it to `resources` too) and state in the README/about
+`LICENSE` file, so add it to `resources` too) and state in the README/about
 where the ffmpeg source can be obtained (the build pages above link it).
 Do **not** link ffmpeg as a library.
 
@@ -84,14 +84,14 @@ Outputs:
 - NSIS installer: `target\release\bundle\nsis\rhythr_<version>_x64-setup.exe`
 
 The installer registers the `.rhr` file association (double-clicking a replay
-opens the app with it loaded — the path arrives as the first CLI argument)
+opens the app with it loaded; the path arrives as the first CLI argument)
 and installs per-user (no admin prompt, `installMode: currentUser`).
 
 ## What to verify on first Windows run
 
 - On NVIDIA GPUs the topbar should show "Hardware encoder: NVENC". Auto mode probes nvenc → qsv → vaapi → x264.
 - GPU renderer initializes via wgpu/Vulkan on the NVIDIA driver; if the
-  driver is exotic, wgpu falls back through DX12 — no code change needed.
+  driver is exotic, wgpu falls back through DX12. No code change needed.
 - Render a short replay end-to-end and check audio sync + the results
   screen tail.
 - `.rhr` double-click opens the app with the replay loaded.
@@ -116,7 +116,7 @@ python3 scripts/make-latest-json.py <version>
 gh release create v<version> <setup.exe> <AppImage> <deb> <rpm> latest.json ...
 ```
 
-`latest.json` must be attached to every release — installed apps poll
+`latest.json` must be attached to every release: installed apps poll
 `releases/latest/download/latest.json`, verify the signature against
 the pinned key, and offer the update in-app. Without the private key
 no valid update can be produced, so keep it backed up: losing it means

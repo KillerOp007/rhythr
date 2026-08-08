@@ -1,7 +1,7 @@
 //! Turning a rendered frame into what the encoder actually wants.
 //!
 //! The renderer produces RGBA and the video loop used to push all of it
-//! down a pipe — 8 MB per frame at 1080p, 33 MB at 4K — for ffmpeg to
+//! down a pipe (8 MB per frame at 1080p, 33 MB at 4K) for ffmpeg to
 //! convert to NV12 on the other side. Measured, that pipe was the render's
 //! entire speed limit: ffmpeg merely READING 900 RGBA frames and dropping
 //! them takes 3.1 s of an 8.5 s render.
@@ -11,7 +11,7 @@
 //! cores for it: during a render eleven of twelve threads were idle.
 //!
 //! The maths is BT.601 limited range, which is what ffmpeg's swscale was
-//! producing for these frames — verified against it rather than assumed
+//! producing for these frames, verified against it rather than assumed
 //! (pure red gives Y=81, green 145, blue 41, white 235, and swscale agrees
 //! on every one).
 
@@ -28,8 +28,8 @@ pub fn nv12_supported(width: usize, height: usize) -> bool {
 }
 
 /// Fixed-point BT.601 limited-range coefficients, scaled by 2^16. Chosen so
-/// the result matches ffmpeg's own output on the primaries exactly — 255,0,0
-/// gives 81, 0,255,0 gives 145, 0,0,255 gives 41, white gives 235 — which
+/// the result matches ffmpeg's own output on the primaries exactly (255,0,0
+/// gives 81, 0,255,0 gives 145, 0,0,255 gives 41, white gives 235), which
 /// float maths reproduces too but several times more slowly, on two million
 /// pixels a frame.
 const KY_R: i32 = 16830;
@@ -173,7 +173,7 @@ mod tests {
         }
     }
 
-    /// A neutral grey must land on chroma 128/128 — any drift there tints
+    /// A neutral grey must land on chroma 128/128: any drift there tints
     /// the whole picture.
     #[test]
     fn grey_stays_neutral() {

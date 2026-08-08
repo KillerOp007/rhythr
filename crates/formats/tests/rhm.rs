@@ -64,7 +64,7 @@ fn corrupt_zip_errors_without_panic() {
 #[test]
 fn oversized_map_entry_is_rejected() {
     // A map JSON past the 64 MiB cap must error, not allocate unbounded.
-    // (Real zip data, honestly large — the header-size fast path and the
+    // (Real zip data, honestly large: the header-size fast path and the
     // read-limit path both lead to ArchiveEntryTooLarge.)
     let big = vec![b' '; (64 << 20) + 1];
     let mut json = Vec::from(&b"{\"Notes\":[]"[..]);

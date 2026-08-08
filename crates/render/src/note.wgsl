@@ -1,5 +1,5 @@
 // Notes, cursor and playfield border, all drawn on one flat unit quad
-// (local xy in [-1,1]) with signed-distance shapes — so the note skin
+// (local xy in [-1,1]) with signed-distance shapes, so the note skin
 // (thin / square / rounded / circle) and the border style come from
 // parameters, not from separate meshes, and edges anti-alias via fwidth.
 
@@ -19,7 +19,7 @@ struct Globals {
 @group(0) @binding(0) var<uniform> globals: Globals;
 
 // Imported-skin textures (group 1). Bound to 1×1 transparent dummies when a
-// pack ships no texture — the tex_flags then keep the shader on the SDF path.
+// pack ships no texture. The tex_flags then keep the shader on the SDF path.
 @group(1) @binding(0) var note_tex: texture_2d<f32>;
 @group(1) @binding(1) var border_tex: texture_2d<f32>;
 @group(1) @binding(2) var cursor_tex: texture_2d<f32>;
@@ -120,7 +120,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             let mask = clamp(max(arm_v, arm_h), 0.0, 1.0);
             return vec4<f32>(in.color.rgb, in.color.a * mask);
         }
-        // Default frame — the game's grid_outer.png is a SHARP square
+        // Default frame: the game's grid_outer.png is a SHARP square
         // outline, so no corner rounding. params.w carries its width as a
         // fraction of the half-extent (see BORDER_OUTLINE in renderer.rs).
         let d = rrect_sd(in.local, 0.0);

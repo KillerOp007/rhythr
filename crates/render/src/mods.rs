@@ -10,9 +10,9 @@ use rhythia_sim::hitreg::{hit_window_ms, match_hits_timing_only};
 
 /// Hardrock scales the note grid outward around its centre. Empirical, from
 /// the hardrock testdata replay: the game's cursor clamp grows from
-/// ±1.36875 to ±1.51875 — +0.15000 exactly, i.e. grid half-extent 1.0 →
-/// 1.15 with the cursor margin unchanged — and cursor samples on edge
-/// notes sit ~1.18× out versus 0.83–1.01× on unmodded baselines.
+/// ±1.36875 to ±1.51875 (+0.15000 exactly, i.e. grid half-extent 1.0 →
+/// 1.15 with the cursor margin unchanged), and cursor samples on edge
+/// notes sit ~1.18× out versus 0.83-1.01× on unmodded baselines.
 pub const HARDROCK_GRID_SCALE: f32 = 1.15;
 
 /// What [`map_for_replay`] applied.
@@ -73,7 +73,7 @@ fn cursor_at(replay: &Replay, ms: f64) -> (f32, f32) {
 fn detect_flip(map: &Map, replay: &Replay, fallback: (bool, bool)) -> (bool, bool) {
     // Timing-only on purpose: this runs on the UNFLIPPED map, and the
     // cursor-guided phase would "correct" attributions against geometry
-    // the player never saw — biasing the flip score toward identity.
+    // the player never saw, biasing the flip score toward identity.
     let outcome = match_hits_timing_only(&map.notes, &replay.frames, hit_window_ms(replay));
     let mut best = fallback;
     let mut best_dist = f64::MAX;
@@ -98,8 +98,8 @@ fn detect_flip(map: &Map, replay: &Replay, fallback: (bool, bool)) -> (bool, boo
     best
 }
 
-/// Returns the map as this replay's player saw it — mirror flips and the
-/// hardrock spread applied to every note — plus what was applied. Sides of
+/// Returns the map as this replay's player saw it (mirror flips and the
+/// hardrock spread applied to every note) plus what was applied. Sides of
 /// a ghost race resolve this independently, so a hardrock run races a
 /// normal one with each side's own field.
 pub fn map_for_replay(map: &Map, replay: &Replay) -> (Map, ResolvedMods) {
@@ -119,12 +119,12 @@ pub fn map_for_replay(map: &Map, replay: &Replay) -> (Map, ResolvedMods) {
         resolved.grid_scale = HARDROCK_GRID_SCALE;
     }
     // Visibility mods change nothing about the notes themselves, only when
-    // they can be seen — but a render that ignores them shows a comfortable
+    // they can be seen, but a render that ignores them shows a comfortable
     // read of a run that was played half blind.
     resolved.ghost = has("mod_ghost");
     resolved.nearsighted = has("mod_nearsighted");
 
-    // Only the mods that MOVE notes force a rebuilt map — mirror flips and
+    // Only the mods that MOVE notes force a rebuilt map: mirror flips and
     // the hardrock grid scale, both applied in the loop below. The
     // visibility mods ride along on the params and must not be part of this
     // test, or a ghost run would rebuild the map for nothing.

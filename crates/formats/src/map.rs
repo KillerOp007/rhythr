@@ -7,7 +7,7 @@
 //!    CustomDifficultyName, StarRating, LegacyId, OnlineId,
 //!    Notes: [{Time(ms), X, Y}], AudioFileName, ImagePath }`
 //!
-//! Notes live on the 3×3 grid, X/Y ∈ {0,1,2} — but off-grid "quantum"
+//! Notes live on the 3×3 grid, X/Y ∈ {0,1,2}, but off-grid "quantum"
 //! floats exist in the Sound Space universe, so X/Y parse as f32.
 
 use std::io::{Cursor, Read};
@@ -56,7 +56,7 @@ pub struct Map {
 
 impl MapMeta {
     /// Mappers sometimes ship the editor's untouched placeholder metadata;
-    /// a literal "Artist Name - Song Name" is noise, not a name — prefer
+    /// a literal "Artist Name - Song Name" is noise, not a name, so prefer
     /// the map title then.
     pub fn normalize(&mut self) {
         let placeholder = |s: &str| {
@@ -174,7 +174,7 @@ impl Map {
                 Ok(entry) => {
                     // The declared uncompressed size comes straight from the
                     // zip header and is attacker-controlled: a tiny archive
-                    // can claim terabytes. Never pre-reserve from it — take
+                    // can claim terabytes. Never pre-reserve from it: take
                     // the entry through a hard read limit instead, so a zip
                     // bomb hits ArchiveEntryTooLarge rather than the OOM
                     // killer.

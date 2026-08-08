@@ -42,7 +42,7 @@ once.
    the rest belongs in "Save diagnostics".
 
 5. **Read the changelog as a user.** 0.6.0 in particular changes the DEFAULT
-   look — camera, approach rate, note shape, colours, hit window. Anyone who
+   look: camera, approach rate, note shape, colours, hit window. Anyone who
    rendered on an older version without their own config gets visibly different
    videos, and that belongs at the top of the notes as "what changes in your
    renders", not scattered through a list of fixes.

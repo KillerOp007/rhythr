@@ -1,5 +1,5 @@
 //! Integrity check against the four reference replays: every derived value
-//! must reproduce the game's own database numbers exactly — and a tampered
+//! must reproduce the game's own database numbers exactly, and a tampered
 //! header must be detected.
 
 use rhythia_formats::{map::Map, rhr::Replay};
@@ -51,7 +51,7 @@ fn real_replays_are_consistent() {
 fn tampered_header_is_detected() {
     for (file, mut replay, map) in load_all() {
         // Simulate replay editing: header claims better stats than the
-        // frames support. (In-memory only — nothing is ever written.)
+        // frames support. (In-memory only: nothing is ever written.)
         replay.hits += 10;
         replay.misses = replay.misses.saturating_sub(10);
         replay.accuracy_pct = 100.0;

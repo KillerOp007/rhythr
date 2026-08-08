@@ -3,7 +3,7 @@
 //!
 //! Images ride the existing skin background-layer pipeline (a synthetic
 //! cover layer). Videos are decoded by the bundled ffmpeg into a rawvideo
-//! pipe — one RGBA frame per output frame, looped and muted — and streamed
+//! pipe (one RGBA frame per output frame, looped and muted) and streamed
 //! into a persistent texture. The results screen is deliberately untouched.
 
 use std::path::Path;
@@ -12,7 +12,7 @@ use std::process::{Child, ChildStdout, Command, Stdio};
 use crate::config::{BackgroundLayer, SkinConfig};
 
 /// What kind of file the user picked. Detection is by content (magic
-/// bytes), not extension — "support as many formats as possible" means an
+/// bytes), not extension: "support as many formats as possible" means an
 /// image is whatever the image decoder recognises and everything else is
 /// handed to ffmpeg.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,7 +25,7 @@ pub enum BackgroundKind {
 /// actually play.
 pub fn classify_bytes(head: &[u8]) -> BackgroundKind {
     match image::guess_format(head) {
-        // Animated GIFs must play — ffmpeg's problem.
+        // Animated GIFs must play (ffmpeg's problem).
         Ok(image::ImageFormat::Gif) => BackgroundKind::Video,
         Ok(_) => BackgroundKind::Image,
         Err(_) => BackgroundKind::Video,
@@ -136,7 +136,7 @@ pub struct BackgroundOptions {
     pub zoom: f32,
     /// Shift as a fraction of the frame size (positive = image moves
     /// right/down). Clamped to the available overflow so the frame stays
-    /// covered — no black bars.
+    /// covered (no black bars).
     pub offset: [f32; 2],
     /// Videos: playback starts (and loops) from this point.
     pub start_secs: f64,
@@ -184,7 +184,7 @@ fn cover_vf(w: u32, h: u32, zoom: f32, offset: [f32; 2]) -> String {
 /// A muted, looping ffmpeg decode of the background video, delivering
 /// exactly one frame-sized RGBA frame per output frame. Looping is done
 /// by respawning the decoder at end-of-stream, so playback restarts at
-/// the USER'S start point — not at an intro the start point was meant to
+/// the USER'S start point, not at an intro the start point was meant to
 /// skip.
 pub struct VideoDecoder {
     child: Child,
@@ -200,12 +200,12 @@ pub struct VideoDecoder {
         f32,
         [f32; 2],
     ),
-    /// Frames delivered by the current child — a child that dies without
+    /// Frames delivered by the current child. A child that dies without
     /// producing any is broken (or the start point is past the end), and
     /// respawning it would loop forever.
     child_frames: u64,
     /// First-pass frames, recorded while they fit LOOP_BUF_CAP. A loop
-    /// that fits entirely replays from memory — a 1-frame GIF must not
+    /// that fits entirely replays from memory: a 1-frame GIF must not
     /// cost one ffmpeg spawn per loop iteration in the render hot path.
     loop_buf: Vec<Vec<u8>>,
     loop_bytes: usize,
@@ -294,7 +294,7 @@ impl VideoDecoder {
         })
     }
 
-    /// Byte cap for the in-memory loop buffer (~7 frames at 1080p) —
+    /// Byte cap for the in-memory loop buffer (~7 frames at 1080p):
     /// enough for 1-frame GIFs and tiny loops, negligible for real
     /// videos, which keep the respawn path.
     const LOOP_BUF_CAP: usize = 64 * 1024 * 1024;
@@ -306,8 +306,8 @@ impl VideoDecoder {
     ///
     /// Reads STRAIGHT into the caller's buffer. The previous version read
     /// into a scratch buffer and then copied that into a kept frame, so
-    /// every output frame paid a full frame-sized memcpy — 8 MB at 1080p,
-    /// 33 MB at 4K — purely to guarantee that a failed read could not
+    /// every output frame paid a full frame-sized memcpy (8 MB at 1080p,
+    /// 33 MB at 4K) purely to guarantee that a failed read could not
     /// corrupt the last good frame. Reporting failure and letting the
     /// caller keep its own last frame gives the same guarantee for free.
     pub fn next_frame_into(&mut self, dst: &mut [u8]) -> bool {
@@ -331,7 +331,7 @@ impl VideoDecoder {
                         self.loop_buf.push(dst.to_vec());
                         self.loop_bytes += dst.len();
                     } else {
-                        // Too big to keep — this loop respawns instead.
+                        // Too big to keep: this loop respawns instead.
                         self.buffering = false;
                         self.loop_buf.clear();
                         self.loop_bytes = 0;
@@ -385,7 +385,7 @@ impl VideoDecoder {
 /// Decoding used to sit in the middle of the render loop: it blocked on the
 /// decoder's pipe for a whole frame, copied it, and only then let the GPU
 /// have any work. Measured on a 15 s 1080p clip, adding a video background
-/// took the render from 8.7 s to 20.1 s while the GPU sat at 41% — the
+/// took the render from 8.7 s to 20.1 s while the GPU sat at 41%: the
 /// extra time was almost entirely waiting.
 ///
 /// The queue is deliberately short. It exists so the decoder can run a
@@ -417,7 +417,7 @@ impl BackgroundStream {
 
     /// `src_fps` is the rate the decoder was actually asked for and
     /// `out_fps` the video being rendered. A 30 fps background under a
-    /// 60 fps render shows each frame twice — the old code made ffmpeg
+    /// 60 fps render shows each frame twice. The old code made ffmpeg
     /// duplicate it and pushed both copies through the pipe and up to the
     /// GPU, two 8 MB transfers (33 MB at 4K) for one picture.
     pub fn spawn(
@@ -440,7 +440,7 @@ impl BackgroundStream {
                     buf.resize(frame_len, 0);
                 }
                 if !decoder.next_frame_into(&mut buf) {
-                    return; // stream finished — closing the channel says so
+                    return; // stream finished: closing the channel says so
                 }
                 // A full queue blocks here, which is the back-pressure.
                 if frame_tx.send(buf).is_err() {
@@ -459,7 +459,7 @@ impl BackgroundStream {
     }
 
     /// A NEW background frame for this output frame, or None when the one
-    /// already on the GPU is still the right picture — the caller skips its
+    /// already on the GPU is still the right picture. The caller skips its
     /// upload then. Blocks only while the decoder is genuinely behind.
     pub fn next_frame(&mut self) -> Option<&[u8]> {
         self.owed += self.per_output;

@@ -2,7 +2,7 @@
 //! must find a note (no orphans) and the derived totals must equal the header.
 //! The game misses a note once `ms > note_t + hit_window`, with
 //! `hit_window = hitwindow_ms * speed` (speed_hitwindow, on by default) and a
-//! further ×0.8 under hardrock — so the window is a function of the replay,
+//! further ×0.8 under hardrock, so the window is a function of the replay,
 //! not a constant. Usage: window_probe <replay.rhr> <map>
 fn main() {
     let a: Vec<String> = std::env::args().skip(1).collect();

@@ -34,7 +34,7 @@ body.an-playing #an-canvas {
   pointer-events: auto;
 }
 
-/* A quiet pill above the playbar — playback keeps running while a
+/* A quiet pill above the playbar. Playback keeps running while a
    segment renders in the background, so this must never block the view. */
 #an-prep {
   position: absolute;
@@ -162,7 +162,7 @@ body.an-immersive #an-playbar {
   bottom: 0;
   display: flex;
   /* The fixed-width controls alone outgrow the row at the window's
-     minimum width — and the drawer takes its full width off the row once
+     minimum width, and the drawer takes its full width off the row once
      it is in flow. Folding keeps every control reachable; clipping loses
      them. A larger interface scale only makes the window effectively
      narrower, so it folds the same way. */
@@ -181,7 +181,7 @@ body.an-immersive #an-playbar {
 #an-total {
   color: var(--muted);
 }
-/* Clock, scrub and total belong together — the scrub alone would fold and
+/* Clock, scrub and total belong together: the scrub alone would fold and
    leave the total time stranded on the next line. The basis stays above
    what the clock ever needs (it grows to "12:34.567  [120 fps]" while
    playing), so this block folds before it can squeeze its own contents.
@@ -317,7 +317,7 @@ body.an-immersive #an-playbar {
 /* ── native live mode ───────────────────────────────────────── */
 /* The GPU paints the frame BEHIND the webview: everything between the
    viewer's eye and that frame must be fully transparent. */
-/* The <html> layer paints last behind everything — it must go clear
+/* The <html> layer paints last behind everything: it must go clear
    too, or the GPU frame stays hidden behind an opaque page. */
 html.an-native,
 body.an-native,
@@ -358,7 +358,7 @@ body.an-native #an-options {
 }
 .an-swatch { display: block; width: 1.0667rem; height: 1.0667rem; margin-top: 0.0667rem; }
 /* The stroke widths quote the overlay's own lines, which are painted in
-   device pixels — only the box around them scales. */
+   device pixels. Only the box around them scales. */
 .an-sw-line { height: 0; border-top: 2px solid var(--sw); margin-top: 0.5333rem; }
 .an-sw-box { border: 2px solid var(--sw); border-radius: 1px; }
 .an-sw-dot {

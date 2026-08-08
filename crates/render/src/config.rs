@@ -1,7 +1,7 @@
 //! The player's visual settings, read from the game's `config.json` or an
 //! exported `.rhs` skin (a zip whose "config" entry is that same JSON).
 //!
-//! Only the fields that affect a rendered replay are kept — everything about
+//! Only the fields that affect a rendered replay are kept: everything about
 //! gameplay, audio devices, online play etc. is ignored. This is the "adopt
 //! the player's own skin" feature: the look should match what they see.
 
@@ -56,7 +56,7 @@ impl NoteShape {
 /// we: the render target is non-sRGB and every colour stays a raw sRGB
 /// value from config to pixel. (The previous linear-light pipeline needed
 /// an alpha-through-the-sRGB-curve hack to approximate the game's combo
-/// text on black; on light backgrounds it drifted badly — a 75%-alpha
+/// text on black; on light backgrounds it drifted badly: a 75%-alpha
 /// near-black note frame read 137/255 instead of the game's 69.)
 pub fn srgb8_to_linear(rgb: [u8; 3], a: f32) -> [f32; 4] {
     [
@@ -74,7 +74,7 @@ pub fn srgb8_to_linear(rgb: [u8; 3], a: f32) -> [f32; 4] {
 pub struct HudConfig {
     /// User-set element positions (normalised frame centre per element
     /// key), applied on top of the standard layout by the drag editor.
-    /// Not part of the game's config — filled in by the app's settings.
+    /// Not part of the game's config (filled in by the app's settings).
     pub positions: std::collections::BTreeMap<String, [f32; 2]>,
     /// User-set element sizes (scale factor per element key, 0.4..2.5),
     /// the drag editor's corner-handle resize. App-only, like positions.
@@ -114,7 +114,7 @@ pub struct HudConfig {
     pub aim_meter: ErrorMeter,
     /// Ghost races only: the score-lead widget at the split seam (numbers
     /// plus tournament-style lead bar) and the race delta graph on the
-    /// results screen. `ghost_x`/`ghost_y` are unused — the widget spans
+    /// results screen. `ghost_x`/`ghost_y` are unused: the widget spans
     /// the full frame, not one side.
     pub race_delta: ErrorMeter,
 }
@@ -186,7 +186,7 @@ impl Default for HudConfig {
             error_meter: ErrorMeter::at(0.5, 0.88),
             aim_meter: ErrorMeter::at(0.15, 0.32),
             // The race widget only ever appears in ghost races, which are
-            // deliberate — so unlike the meters it defaults to on.
+            // deliberate, so unlike the meters it defaults to on.
             race_delta: ErrorMeter::at(0.5, 0.095).on(),
         }
     }
@@ -288,7 +288,7 @@ pub struct SkinConfig {
     pub border_texture: Option<Vec<u8>>,
     /// PNG bytes of the bundled cursor/trail texture.
     pub cursor_texture: Option<Vec<u8>>,
-    /// `CursorTrailSkin` texture — the trail's stamps use their own image,
+    /// `CursorTrailSkin` texture: the trail's stamps use their own image,
     /// separate from the cursor (e.g. hollow cursor over a filled trail).
     pub trail_texture: Option<Vec<u8>>,
     /// Custom background layers from the skin's `BackgroundImages[]`,
@@ -354,14 +354,14 @@ pub struct SkinConfig {
 
 impl Default for SkinConfig {
     /// The game's own defaults, used when a field is absent and when no
-    /// config is loaded at all — so a bare render looks like a fresh
+    /// config is loaded at all, so a bare render looks like a fresh
     /// install of the game rather than like somebody's personal setup.
     ///
     /// Every value below is the initialiser of the matching setting in the
     /// game's `Rhythia.gd` (line numbers in the comments). Until v0.6 these
-    /// were one player's exported config — `notes/testdata-extra/
+    /// were one player's exported config (`notes/testdata-extra/
     /// player_skin_config.json`, whose NoteScale 0.9 / ApproachRate 24.5 /
-    /// SpawnDistance 12 / Parallax 5 they reproduced value for value — which
+    /// SpawnDistance 12 / Parallax 5 they reproduced value for value), which
     /// made the out-of-the-box render systematically unlike the game: notes
     /// were visible for 0.49 s instead of 1.0 s.
     fn default() -> Self {
@@ -376,7 +376,7 @@ impl Default for SkinConfig {
             // in notes/testdata-extra) both say 5, which kept this open as a
             // suspected wrong default. It is not one: 5 is what those two
             // players SET, and a player with a config gets their own value
-            // read back — this line only decides a render with no config at
+            // read back. This line only decides a render with no config at
             // all. The game's own initialiser is the only statement about the
             // default that exists, the settings menu documents no other (its
             // Parallax tooltip is the one control without a "[def. X]"), and
@@ -385,8 +385,8 @@ impl Default for SkinConfig {
             // fresh install to read it from.
             parallax: 6.5,
             half_ghost: false,
-            // Rhythia.gd:2354 selects "ssp_rounded" on a fresh install —
-            // the rounded mesh, not the square one.
+            // Rhythia.gd:2354 selects "ssp_rounded" on a fresh install
+            // (the rounded mesh, not the square one).
             note_shape: NoteShape::Rounded,
             note_skin_name: String::new(),
             border_skin_name: String::new(),
@@ -395,11 +395,11 @@ impl Default for SkinConfig {
             colorset_name: String::new(),
             border_color: [1.0, 1.0, 1.0],
             // song.tscn: the Outer border plane's material is white at
-            // alpha 0.588235 — the frame is deliberately not full white.
+            // alpha 0.588235. The frame is deliberately not full white.
             border_opacity: 0.588_235,
             cursor_color: [1.0, 1.0, 1.0],
             cursor_scale: 1.0, // :642
-            // :636 — the game ships the trail off.
+            // The game ships the trail off (:636).
             cursor_trail_enabled: false,
             cursor_trail_opacity: 0.5,
             cursor_trail_fade_secs: 0.15, // TrailTime, "[def. 0.15]"
@@ -460,7 +460,7 @@ fn read_zip_entry(zip: &mut ZipCursor, name: &str) -> Result<Option<Vec<u8>>, Er
                 )));
             }
             let mut buf = Vec::with_capacity(e.size() as usize);
-            // The header's `size` is untrusted — bound the actual read too.
+            // The header's `size` is untrusted, so bound the actual read too.
             e.take(MAX_RHS_ENTRY_BYTES + 1)
                 .read_to_end(&mut buf)
                 .map_err(|err| Error::Config(format!("reading {name}: {err}")))?;
@@ -514,7 +514,7 @@ impl SkinConfig {
     /// Loads from a `config.json` or an exported/downloaded `.rhs` skin, by
     /// extension. A `.rhs` may bundle textures and a colorset (see
     /// `docs/reference/rhs-skin-format.md`); those are extracted and rendered
-    /// directly — the only sanctioned way to get an exact skin (the user
+    /// directly: the only sanctioned way to get an exact skin (the user
     /// imports their own pack; no game assets are ripped).
     pub fn from_path(path: impl AsRef<Path>) -> Result<SkinConfig, Error> {
         let path = path.as_ref();
@@ -643,7 +643,7 @@ impl SkinConfig {
             playfield_combo_text: num("PlayfieldComboTextOpacity", hd.combo_text_opacity) > 0.0,
             song_info: boolean("SongInfoEnabled", hd.song_info),
             miss_effect_opacity: num("MissEffectOpacity", hd.miss_effect_opacity),
-            // Not game settings — the desktop app's HUD overrides use these.
+            // Not game settings: the desktop app's HUD overrides use these.
             speed_label: hd.speed_label,
             error_meter: hd.error_meter,
             aim_meter: hd.aim_meter,
@@ -872,7 +872,7 @@ mod tests {
     fn missing_fields_fall_back_to_game_defaults() {
         let c = SkinConfig::from_json("{}").unwrap();
         // These must stay the game's shipped values, not any one player's
-        // exported config — see the SkinConfig::default() docs.
+        // exported config (see the SkinConfig::default() docs).
         assert_eq!(c.camera_fov, 70.0);
         assert_eq!(c.approach_rate, 40.0);
         assert_eq!(c.spawn_distance, 40.0);

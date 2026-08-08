@@ -125,7 +125,7 @@ fn extended(b: B, speed: f32) -> B {
 #[test]
 fn extended_with_float_time_no_fail_time() {
     // 20260125 <= v20260200 < 20260222: extended block present, float
-    // time, no failTime, no hash — the combination rhr2mp4 never tests.
+    // time, no failTime, no hash: the combination rhr2mp4 never tests.
     let data = stats(extended(header(20260200), 1.25))
         .i32(1)
         .f32(99.75)
@@ -287,7 +287,7 @@ fn negative_frame_count_errors() {
 
 #[test]
 fn invalid_utf8_player_name_errors() {
-    // String length 1, byte 0xFF — not valid UTF-8.
+    // String length 1, byte 0xFF: not valid UTF-8.
     let mut data = B::new().i32(20260101).i64(0).0;
     data.push(1); // varint length 1
     data.push(0xFF); // invalid UTF-8 byte

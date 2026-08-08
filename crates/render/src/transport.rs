@@ -3,7 +3,7 @@
 //! The transport is worth up to a third of a render, and which setting wins
 //! is not predictable from first principles. It depends on the platform's
 //! loopback and pipe implementations, on how much of the frame budget the
-//! encoder is already using, and on the frame size — measured on one machine
+//! encoder is already using, and on the frame size. Measured on one machine
 //! (RTX 4070 SUPER, Ryzen 7 5800X3D) at quality 100, frames per second:
 //!
 //! ```text
@@ -15,7 +15,7 @@
 //! ```
 //!
 //! Two conclusions came out of that. 256 KiB over a socket is the best single
-//! default, and small writes into a socket are actively harmful — 16 KiB lost
+//! default, and small writes into a socket are actively harmful: 16 KiB lost
 //! to the plain pipe at three of the four sizes. But those are conclusions
 //! about one machine, and shipping them as constants means every other
 //! machine gets somebody else's answer.
@@ -126,10 +126,11 @@ const CANDIDATES: &[Transport] = &[
 /// How long to spend on each candidate. Long enough to get past the first few
 /// frames, short enough that the whole run is a few seconds.
 const PER_CANDIDATE: Duration = Duration::from_millis(700);
-/// A frame cap that only bites if the clock never advances — set well above
-/// what PER_CANDIDATE reaches even on a very fast machine (the owner's manages
-/// ~1900 frames/s at 720p, so ~1330 in the window), so TIME is the limit and
-/// a fast box is not measured over an unrepresentatively short slice.
+/// A frame cap that only bites if the clock never advances. It is set well
+/// above what PER_CANDIDATE reaches even on a very fast machine (the owner's
+/// manages ~1900 frames/s at 720p, so ~1330 in the window), so TIME is the
+/// limit and a fast box is not measured over an unrepresentatively short
+/// slice.
 const MAX_FRAMES: usize = 20_000;
 /// Frames pushed before the clock starts, so ffmpeg is already up and reading
 /// on every candidate rather than only on the sockets (which wait for accept).
@@ -137,7 +138,7 @@ const WARMUP_FRAMES: usize = 8;
 
 /// Measures every candidate at the given output size and picks a winner.
 ///
-/// `ffmpeg` is the binary to talk to. The frames are synthetic — content is
+/// `ffmpeg` is the binary to talk to. The frames are synthetic: content is
 /// irrelevant to `-c:v copy`, which is what makes this a measurement of the
 /// transport rather than of the encoder.
 pub fn benchmark(ffmpeg: &str, width: u32, height: u32) -> Benchmark {
@@ -199,7 +200,7 @@ fn measure(ffmpeg: &str, transport: Transport, w: u32, h: u32, frame: &[u8]) -> 
     // ALWAYS kill before reaping, on every path. If the accept loop gave up
     // but ffmpeg then connected to the still-listening backlog, it is blocked
     // reading frames that will never come, and a bare wait() would hang the
-    // whole benchmark forever — which is exactly what the sibling probe in
+    // whole benchmark forever, which is exactly what the sibling probe in
     // video.rs already guards against and this did not.
     let _ = child.kill();
     let _ = child.wait();
@@ -260,7 +261,7 @@ fn measure_into(
         }
     };
     // Warm up BEFORE starting the clock, for every candidate. A socket only
-    // starts timing after accept() — i.e. after ffmpeg is up — while a pipe
+    // starts timing after accept() (i.e. after ffmpeg is up), while a pipe
     // has no such barrier, so timing a pipe from the first write charged it
     // for ffmpeg's whole startup and biased the winner away from the pipe.
     // A few warm-up frames put both on the same footing: ffmpeg is reading by

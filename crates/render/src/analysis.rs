@@ -1,5 +1,5 @@
 //! Replay analytics for the Analyze mode: movement, timing, error
-//! forensics and integrity signals — all derived from the `.rhr` frame
+//! forensics and integrity signals, all derived from the `.rhr` frame
 //! stream and the (geometry-modded) map, no game code involved.
 //!
 //! Units: distances in grid cells (a note spans ±0.5 cells,
@@ -7,7 +7,7 @@
 //! times are song time; a speed mod compresses wall time, and the hand
 //! moves in wall time), times in song-time ms to match the scrubber.
 //!
-//! Numerical care: every aggregate must stay finite — a NaN would break
+//! Numerical care: every aggregate must stay finite. A NaN would break
 //! JSON serialization of the whole payload. Guard all divisions.
 
 use rhythia_formats::map::Map;
@@ -16,8 +16,8 @@ use rhythia_sim::hitreg::{hit_window_ms, match_hits};
 use rhythia_sim::integrity;
 use serde::Serialize;
 
-/// A frame gap larger than this (song ms) is a pause or a recording gap —
-/// movement across it must not count as cursor motion.
+/// A frame gap larger than this (song ms) is a pause or a recording gap.
+/// Movement across it must not count as cursor motion.
 const PAUSE_GAP_MS: f64 = 500.0;
 /// The cursor counts as "moving" above this speed (cells/s).
 const MOVING_SPEED: f64 = 0.5;
@@ -42,8 +42,8 @@ pub struct Analysis {
     pub heatmap: Heatmap,
     pub frame_deltas: FrameDeltas,
     pub signals: Vec<Signal>,
-    /// Overall verdict for the integrity panel: "clean", "notice" or "warn"
-    /// — the strongest severity among the signals (info never escalates).
+    /// Overall verdict for the integrity panel: "clean", "notice" or "warn",
+    /// the strongest severity among the signals (info never escalates).
     pub verdict: String,
 }
 
@@ -209,7 +209,7 @@ pub struct FrameDeltas {
 #[derive(Serialize, Clone)]
 pub struct Signal {
     pub id: String,
-    /// "info" | "notice" | "warn" — info is context, never suspicion.
+    /// "info" | "notice" | "warn" (info is context, never suspicion).
     pub severity: String,
     pub title: String,
     pub detail: String,
@@ -257,7 +257,7 @@ fn kinematics(replay: &Replay) -> Kinematics {
             seg_v.push(dist / dt_wall);
         }
     }
-    // Light smoothing (window of 3 segments) for series and extrema — raw
+    // Light smoothing (window of 3 segments) for series and extrema: raw
     // per-frame speed is quantization noise.
     let mut smooth_t = Vec::with_capacity(n);
     let mut smooth_v = Vec::with_capacity(n);
@@ -319,7 +319,7 @@ fn downsample(t: &[f64], v: &[f64]) -> Series {
     let mut i = 0;
     while i < n {
         let hi = (i + step).min(n);
-        // Keep the bucket maximum — peaks are what the eye looks for.
+        // Keep the bucket maximum: peaks are what the eye looks for.
         let (mut bt, mut bv) = (t[i], v[i]);
         for j in i..hi {
             if v[j] > bv {
@@ -358,8 +358,8 @@ fn percentile(sorted: &[f64], p: f64) -> f64 {
     sorted[idx.min(sorted.len() - 1)]
 }
 
-/// Full analysis of one replay against ITS map (geometry mods applied —
-/// pass the map from `mods::map_for_replay`).
+/// Full analysis of one replay against ITS map, with geometry mods applied
+/// (pass the map from `mods::map_for_replay`).
 pub fn analyze(map: &Map, replay: &Replay) -> Analysis {
     let f = &replay.frames;
     let speed = if replay.speed > 0.0 {
@@ -371,7 +371,7 @@ pub fn analyze(map: &Map, replay: &Replay) -> Analysis {
 
     // ---- judgement base (same pipeline as the HUD meters).
     // Attempted window: a practice run starts at start_from_ms and a
-    // failed run ends at fail_time_ms — notes outside that span were
+    // failed run ends at fail_time_ms: notes outside that span were
     // never played and must not count as misses (same rule the
     // integrity checker pins empirically).
     let attempt_lo = if replay.start_from_ms > 0 {
@@ -423,7 +423,7 @@ pub fn analyze(map: &Map, replay: &Replay) -> Analysis {
             na.off_y = Some(oy);
             na.dist = Some((ox * ox + oy * oy).sqrt());
         } else {
-            // Closest approach within ±250 ms — sampled at frame times.
+            // Closest approach within ±250 ms (sampled at frame times).
             let mut best = f32::MAX;
             let lo = f.partition_point(|fr| fr.ms < t - 250.0);
             for fr in &f[lo..] {
@@ -913,7 +913,7 @@ pub fn analyze(map: &Map, replay: &Replay) -> Analysis {
     if !report.consistent() {
         let practice = replay.start_from_ms > 0;
         // Fewer hit flags than the header claims, with zero orphans, is
-        // the RECORDER dropping frames under load — seen on legitimate
+        // the RECORDER dropping frames under load, seen on legitimate
         // leaderboard scores. An edited file looks different (orphans,
         // impossible stats), so keep the scary wording for those.
         let header_hits = u32::try_from(replay.hits).unwrap_or(0);
@@ -940,13 +940,13 @@ pub fn analyze(map: &Map, replay: &Replay) -> Analysis {
                 "File integrity check failed".into()
             },
             detail: if wrong_map {
-                "Most of the recorded hits find no note on this chart. That is what                  loading a different version of the map looks like — check that the                  map matches the replay before reading anything else here."
+                "Most of the recorded hits find no note on this chart. That is what                  loading a different version of the map looks like. Check that the                  map matches the replay before reading anything else here."
             } else if practice {
-                "Header stats and frame data disagree. This is a practice-mode run                  (started mid-song) — header semantics for partial runs are not fully                  pinned yet, so treat this as informational."
+                "Header stats and frame data disagree. This is a practice-mode run                  (started mid-song). Header semantics for partial runs are not fully                  pinned yet, so treat this as informational."
             } else if dropped_only {
-                "The header counts more hits than the file has flag frames — the                  game's recorder dropped frames (common under load). Derived stats                  undercount accordingly; the score itself is not in question."
+                "The header counts more hits than the file has flag frames. The                  game's recorder dropped frames (common under load). Derived stats                  undercount accordingly; the score itself is not in question."
             } else {
-                "Header stats and frame data disagree — the file may be corrupted or edited."
+                "Header stats and frame data disagree: the file may be corrupted or edited."
             }
             .into(),
             times: vec![],
@@ -969,7 +969,7 @@ pub fn analyze(map: &Map, replay: &Replay) -> Analysis {
         signals.push(Signal {
             id: "teleport".into(),
             // Population check (37 real leaderboard plays): tablet players
-            // routinely show dozens of these — never escalate on count.
+            // routinely show dozens of these, so never escalate on count.
             severity: "notice".into(),
             title: format!("{} instant jump(s) across the field", tp_times.len()),
             detail: "The cursor crossed more than 1.8 cells within a single ~16 ms frame. \
@@ -983,13 +983,13 @@ pub fn analyze(map: &Map, replay: &Replay) -> Analysis {
         signals.push(Signal {
             id: "accel".into(),
             // Population check (37 real leaderboard plays, all speeds and
-            // mods): 35 of 37 legitimate runs trip this — fast play plus
+            // mods): 35 of 37 legitimate runs trip this, as fast play plus
             // frame quantization IS extreme acceleration. Context only.
             severity: "info".into(),
             title: format!("{} extreme acceleration spikes", accel_events.len()),
             detail: "Acceleration beyond what smooth mouse movement produces. Nearly \
                      every fast legitimate play shows these (speed mods and tablets \
-                     amplify them) — only meaningful together with other signals."
+                     amplify them). Only meaningful together with other signals."
                 .into(),
             times: accel_events.iter().copied().take(5).collect(),
         });
@@ -1001,7 +1001,7 @@ pub fn analyze(map: &Map, replay: &Replay) -> Analysis {
             title: "Very low micro-jitter".into(),
             detail: format!(
                 "{:.0}% of moving windows show almost no hand tremor. Common for skilled \
-                 mouse players on low sensitivity — NOT evidence on its own; only meaningful \
+                 mouse players on low sensitivity. NOT evidence on its own; only meaningful \
                  together with other signals.",
                 jitter.smooth_windows_pct
             ),
@@ -1046,8 +1046,8 @@ pub fn analyze(map: &Map, replay: &Replay) -> Analysis {
                 severity: "notice".into(),
                 title: "Recording rate changes mid-run".into(),
                 detail: format!(
-                    "Frame spacing shifts from ~{lo:.1} ms to ~{hi:.1} ms between sections — \
-                     can indicate splicing, or simply performance dips."
+                    "Frame spacing shifts from ~{lo:.1} ms to ~{hi:.1} ms between sections. \
+                     This can indicate splicing, or simply performance dips."
                 ),
                 times: vec![],
             });
@@ -1058,7 +1058,7 @@ pub fn analyze(map: &Map, replay: &Replay) -> Analysis {
             id: "orphans".into(),
             severity: "notice".into(),
             title: format!("{} hit flag(s) match no note", outcome.orphan_flags),
-            detail: "Frames marked as hits that align with no map note — inconsistent data.".into(),
+            detail: "Frames marked as hits that align with no map note (inconsistent data).".into(),
             times: vec![],
         });
     }
@@ -1157,7 +1157,7 @@ mod tests {
     }
 
     /// Header stats derived from frames+notes so the integrity check
-    /// passes — synthetic replays must not trip the "integrity" signal.
+    /// passes: synthetic replays must not trip the "integrity" signal.
     fn replay_for(frames: Vec<Frame>, note_count: usize) -> Replay {
         let hits = frames.iter().filter(|f| f.hit).count() as i32;
         let misses = note_count as i32 - hits;
@@ -1217,7 +1217,7 @@ mod tests {
     }
 
     /// A 2× speed-mod replay covers the same song span in half the wall
-    /// time — cursor speeds double.
+    /// time, so cursor speeds double.
     #[test]
     fn speed_mod_scales_wall_clock() {
         let frames: Vec<Frame> = (0..=60)
@@ -1373,7 +1373,7 @@ mod tests {
     /// Perfectly linear long moves ⇒ smooth-windows signal fires (info).
     #[test]
     fn too_smooth_is_info_only() {
-        // Triangle wave: perfectly linear strokes back and forth — no
+        // Triangle wave: perfectly linear strokes back and forth, with no
         // teleport-like wrap, just an unnaturally clean path.
         let frames: Vec<Frame> = (0..500)
             .map(|i| {
@@ -1433,7 +1433,7 @@ mod tests {
         assert_eq!(a.meta.frame_count, 0);
     }
 
-    /// A 2× speed mod stretches song-time frame deltas to ~33 ms — the
+    /// A 2× speed mod stretches song-time frame deltas to ~33 ms, so the
     /// teleport gate must still fire (it compares WALL time).
     #[test]
     fn teleport_detected_under_speed_mod() {

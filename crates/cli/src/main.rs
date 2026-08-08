@@ -245,7 +245,7 @@ fn load_config(
 /// The layout half of the desktop app's settings file: where the drag editor
 /// put each HUD element, how large, which ones are on, and the optional
 /// overlay meters. The rest of what the app stores (resolution, encoder,
-/// output paths, background) already has its own flag here and is ignored —
+/// output paths, background) already has its own flag here and is ignored:
 /// a CLI render must stay driven by its command line.
 ///
 /// This mirrors `Settings` in crates/gui/src/main.rs by FIELD NAME; the app
@@ -365,7 +365,7 @@ impl AppLayout {
 }
 
 /// Where the desktop app keeps its settings. Spelled out rather than pulled
-/// in via the app's `dirs` dependency — one platform rule is cheaper here
+/// in via the app's `dirs` dependency: one platform rule is cheaper here
 /// than a crate, but it has to keep matching `config_dir()` over there.
 fn app_settings_path() -> PathBuf {
     let base = if cfg!(windows) {
@@ -404,7 +404,7 @@ fn load_app_layout(use_app: bool, file: &Option<PathBuf>) -> anyhow::Result<Opti
         }
         Err(_) => {
             eprintln!(
-                "note: no app settings at {} — rendering the config's own HUD layout",
+                "note: no app settings at {}, rendering the config's own HUD layout",
                 path.display()
             );
             return Ok(None);
@@ -437,7 +437,9 @@ fn main() -> ExitCode {
             }
         }
         Err(err) => {
-            eprintln!("error: {err:#}");
+            // The same code the desktop app would print for this failure, so
+            // a report is worth the same whichever one produced it.
+            eprintln!("error: {}", rhythia_errcode::stamp(&format!("{err:#}")));
             ExitCode::FAILURE
         }
     }
@@ -524,7 +526,7 @@ fn run() -> anyhow::Result<bool> {
                 // not done.
                 if integrity::looks_like_the_wrong_map(r.hits, &report, false) {
                     eprintln!(
-                        "warning: most recorded hits find no note on this map — this is \
+                        "warning: most recorded hits find no note on this map. This is \
                          probably not the map that was played"
                     );
                 } else {
@@ -641,8 +643,8 @@ fn run() -> anyhow::Result<bool> {
             }
 
             // Normalize BEFORE deriving the range: a wall-clock replay's raw
-            // fail time / length is 1/speed of the song and would truncate
-            // the render (render_video normalizes again — idempotent).
+            // fail time / length is 1/speed of the song and would truncate the
+            // render (render_video normalizes again, which is idempotent).
             let mut r = r;
             rhythia_sim::timebase::normalize(&mut r, &m);
 
@@ -654,7 +656,7 @@ fn run() -> anyhow::Result<bool> {
                 // not done.
                 if integrity::looks_like_the_wrong_map(r.hits, &report, false) {
                     eprintln!(
-                        "warning: most recorded hits find no note on this map — this is \
+                        "warning: most recorded hits find no note on this map. This is \
                          probably not the map that was played"
                     );
                 } else {
@@ -779,7 +781,7 @@ fn run() -> anyhow::Result<bool> {
                     // it always meant, so it is converted rather than read as
                     // a point on the new, inverted scale. The new scale does
                     // not reach past CRF 14 or 34, so anything outside that
-                    // is coerced — and says so, rather than quietly encoding
+                    // is coerced, and says so, rather than quietly encoding
                     // something other than what was asked for.
                     Some(c) => {
                         let q = rhythia_render::quality::from_legacy_crf(c);
@@ -840,7 +842,7 @@ fn run() -> anyhow::Result<bool> {
             // claim "done -> <path>" for a path it never created.
             if dry_run {
                 println!(
-                    "measured in {:.1}s (diagnostic run — no file written)",
+                    "measured in {:.1}s (diagnostic run: no file written)",
                     start_t.elapsed().as_secs_f64()
                 );
             } else {

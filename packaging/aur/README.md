@@ -1,7 +1,7 @@
 # AUR package (rhythr-bin)
 
 Repackages the release `.deb` for Arch-based distros (Arch, CachyOS,
-EndeavourOS, Manjaro). Nothing here is published automatically — the AUR
+EndeavourOS, Manjaro). Nothing here is published automatically: the AUR
 side is a separate git repository that has to be pushed by hand.
 
 ## Publishing (first time)
@@ -12,7 +12,7 @@ side is a separate git repository that has to be pushed by hand.
    on an Arch box/container, or paste the SHA-256 values from the
    GitHub release notes), then regenerate the metadata:
    `makepkg --printsrcinfo > .SRCINFO`
-4. Commit `PKGBUILD` + `.SRCINFO` and push — that IS the release.
+4. Commit `PKGBUILD` + `.SRCINFO` and push: that IS the release.
 
 ## Every release after that
 

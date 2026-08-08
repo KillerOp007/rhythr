@@ -1,7 +1,7 @@
 //! The NV12 conversion done on the GPU instead of the CPU.
 //!
 //! Measured at 3840x2160/120, a frame cost 0.64 ms to build on the GPU and
-//! then 10.84 ms to convert on the CPU — the renderer spent 97% of its time
+//! then 10.84 ms to convert on the CPU: the renderer spent 97% of its time
 //! waiting for a colour-space conversion. Doing it in a compute pass before
 //! the readback moves that work onto hardware that is idle anyway and, as a
 //! second effect, cuts what crosses the bus from 4 bytes per pixel to 1.5.
@@ -322,7 +322,7 @@ mod tests {
         let (w, h) = (64usize, 32usize);
         let rgba = test_image(w, h);
         let Some(gpu) = gpu_convert(&rgba, w as u32, h as u32) else {
-            eprintln!("no usable GPU adapter — skipping");
+            eprintln!("no usable GPU adapter, skipping");
             return;
         };
         let mut cpu = vec![0u8; crate::nv12::nv12_len(w, h)];
@@ -349,7 +349,7 @@ mod tests {
     }
 
     /// Sizes the shader cannot address must be refused rather than rendered
-    /// wrong — the video loop falls back to the CPU converter for those.
+    /// wrong: the video loop falls back to the CPU converter for those.
     #[test]
     fn unaddressable_sizes_are_refused() {
         assert!(gpu_supported(1920, 1080));

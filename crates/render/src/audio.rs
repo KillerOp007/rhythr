@@ -19,7 +19,7 @@ pub struct Clip {
 
 impl Clip {
     /// Parses a RIFF/WAVE file (PCM16, mono or stereo). Sample rates other
-    /// than 44.1 kHz are resampled naively (nearest) — the game's own clips
+    /// than 44.1 kHz are resampled naively (nearest). The game's own clips
     /// are all 44.1 kHz, so this is only a safety net for custom files.
     pub fn from_wav(data: &[u8]) -> Option<Clip> {
         if data.len() < 44 || &data[0..4] != b"RIFF" || &data[8..12] != b"WAVE" {

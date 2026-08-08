@@ -1,0 +1,9 @@
+[package]
+name = "rhythia-errcode"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Stable codes for the failures rhythr can show a user, plus the lookup table behind them"
+
+[dependencies]

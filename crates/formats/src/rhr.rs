@@ -4,7 +4,7 @@
 //! (LEB128 varint) + UTF-8. The format is versioned by an int32 date-number
 //! header. Layout verified byte-exact against 311 real replays and three
 //! independent open-source parsers (rhythia.com web bundle `parseRhr`,
-//! yo-ru/rhrParse, gerhaarrd/rhr2mp4 — all MIT or public reference).
+//! yo-ru/rhrParse, gerhaarrd/rhr2mp4, all of them MIT or public reference).
 //!
 //! This module is read-only by design (project hard rule #1): there is no
 //! serializer and none may be added.
@@ -71,11 +71,11 @@ pub struct Replay {
     /// Playback speed; 1.0 for pre-extended versions and when stored as 0.
     pub speed: f32,
     pub total_score: i64,
-    /// Header accuracy 0–100 as stored by the game.
+    /// Header accuracy 0-100 as stored by the game.
     pub accuracy_pct: f32,
     pub hits: i32,
     pub misses: i32,
-    /// Awarded SP — float32 in the wire format.
+    /// Awarded SP (float32 in the wire format).
     pub points: f32,
     /// −1 when the run was not failed.
     pub fail_time_ms: i32,

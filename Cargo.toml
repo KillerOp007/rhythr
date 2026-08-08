@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/formats", "crates/sim", "crates/cli", "crates/render", "crates/gui"]
+members = ["crates/errcode", "crates/formats", "crates/sim", "crates/cli", "crates/render", "crates/gui"]
 
 [workspace.package]
 version = "0.6.0"
@@ -9,6 +9,7 @@ license = "MIT"
 repository = "https://github.com/KillerOp007/rhythr"
 
 [workspace.dependencies]
+rhythia-errcode = { path = "crates/errcode" }
 rhythia-formats = { path = "crates/formats" }
 rhythia-sim = { path = "crates/sim" }
 rhythia-render = { path = "crates/render" }

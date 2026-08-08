@@ -3,8 +3,8 @@
 //! widget itself reads `stats_at` directly so its numbers always equal
 //! the per-side HUDs.
 //!
-//! All sampling goes through [`crate::hud::HudState::stats_at`] — the same
-//! walk that drives the on-screen score/accuracy — so the series can never
+//! All sampling goes through [`crate::hud::HudState::stats_at`] (the same
+//! walk that drives the on-screen score/accuracy), so the series can never
 //! disagree with what the viewer sees. A failed run is frozen at its fail
 //! time (fail + hit window, the results screen's convention): the game
 //! never resolved the later notes, so neither do we.
@@ -87,7 +87,7 @@ pub fn synced_race(main: &RaceSide, ghost: &RaceSide, t_ms: f64) -> SyncedRace {
         for s in 0..2 {
             let reg = sides[s].map.notes[i].time_ms as f64 + windows[s];
             let k = if reg >= ends[s] {
-                // Frozen side: the game never resolved this note — the
+                // Frozen side: the game never resolved this note, so the
                 // answer ("nothing") is known from the freeze on.
                 ends[s]
             } else {
@@ -97,7 +97,7 @@ pub fn synced_race(main: &RaceSide, ghost: &RaceSide, t_ms: f64) -> SyncedRace {
         }
         // A pending earlier note excludes any later note from a settled
         // prefix by definition, so breaking at the first pending note is
-        // correct — even though cursor reattribution means hit TIMES are
+        // correct, even though cursor reattribution means hit TIMES are
         // no longer strictly monotone over the note order.
         if known > t_ms {
             break;
@@ -301,8 +301,9 @@ mod tests {
     #[test]
     fn lead_changes_flag_each_sign_flip_and_zero_is_neutral() {
         // Main misses note 1 (0/100/300/600); ghost hits note 1 and misses
-        // 2+3 (100/100/100/200). Deltas: 0, -100, 0, +200, +400 — exactly
-        // one lead change, at the sample where the sign turns positive.
+        // 2+3 (100/100/100/200). Deltas: 0, -100, 0, +200, +400. That is
+        // exactly one lead change, at the sample where the sign turns
+        // positive.
         let (s, _, _) = series_for(&[2005.0, 3005.0, 4005.0], &[1005.0, 4005.0]);
         let deltas: Vec<i64> = s.samples.iter().map(|p| p.score_delta).collect();
         assert_eq!(deltas, vec![0, -100, 0, 200, 400]);
@@ -343,7 +344,7 @@ mod tests {
     fn synced_delta_stays_zero_while_both_answer_notes_identically() {
         // A hits note 1 at 1005, B the same note at 1030: the raw scores
         // differ between those instants, but the synced walk waits for
-        // both answers — an even race never shows a lead.
+        // both answers: an even race never shows a lead.
         let map = map_with(&[1000, 2000]);
         let (mr, gr) = (
             replay_with(&[1005.0, 2005.0]),
@@ -373,7 +374,7 @@ mod tests {
     #[test]
     fn synced_delta_moves_only_when_a_note_resolves_differently() {
         // B never answers note 2, so its outcome is known at the window
-        // end (2080) — only then does the lead appear.
+        // end (2080), and only then does the lead appear.
         let map = map_with(&[1000, 2000]);
         let (mr, gr) = (replay_with(&[1005.0, 2005.0]), replay_with(&[1030.0]));
         let (ms, gs) = (HudState::new(&map, &mr), HudState::new(&map, &gr));

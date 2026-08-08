@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# Builds the Linux packages — AppImage (self-contained, bundles ffmpeg),
-# deb and rpm — inside an Ubuntu 22.04 container so the binaries keep a
-# glibc 2.35 baseline and run on any mainstream distro from 2022 onward.
+# Builds the Linux packages: AppImage (self-contained, bundles ffmpeg),
+# deb and rpm. The build runs inside an Ubuntu 22.04 container so the
+# binaries keep a glibc 2.35 baseline and run on any mainstream distro
+# from 2022 onward.
 # Building directly on a newer host would silently raise that floor.
 #
 # Prereqs: podman; a static linux64 ffmpeg + its LICENSE staged as
@@ -16,7 +17,7 @@ CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/rhythr-linux-build"
 mkdir -p "$CACHE/registry" "$CACHE/git" "$CACHE/tauri"
 
 if [ ! -f "$ROOT/crates/gui/ffmpeg" ]; then
-    echo "error: crates/gui/ffmpeg missing (static linux ffmpeg — docs/LINUX-BUILD.md)" >&2
+    echo "error: crates/gui/ffmpeg missing (static linux ffmpeg, see docs/LINUX-BUILD.md)" >&2
     exit 1
 fi
 
@@ -37,9 +38,9 @@ podman run --rm \
         # so they carry none themselves (no ffmpeg in their bundle.*.files).
         cargo tauri build --bundles deb,rpm
         # Then the AppImage, which bundles its own ffmpeg via
-        # bundle.linux.appimage.files in tauri.conf.json — no overlay config,
-        # that file was deleted (it was named after a bundle format, which
-        # Tauri never reads).
+        # bundle.linux.appimage.files in tauri.conf.json. There is no overlay
+        # config, because that file was deleted (it was named after a bundle
+        # format, which Tauri never reads).
         cargo tauri build --bundles appimage
     '
 

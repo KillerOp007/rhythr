@@ -2,9 +2,9 @@
 //!
 //! rhythr used to hand the user's number straight to whichever encoder was
 //! selected: `-crf` to libx264, `-cq` to nvenc, `-global_quality` to qsv,
-//! `-qp` to vaapi. Those are four incompatible scales — x264's CRF is a rate
+//! `-qp` to vaapi. Those are four incompatible scales (x264's CRF is a rate
 //! factor that floats per frame with complexity, nvenc's CQ is a target hint,
-//! vaapi's QP is a flat quantiser — so switching encoder silently changed the
+//! vaapi's QP is a flat quantiser), so switching encoder silently changed the
 //! output while the number on screen stayed put.
 //!
 //! It also ran the wrong way round. Lower was better, which is correct for
@@ -15,7 +15,7 @@
 //! So: **0..=100, higher is better**, mapped per encoder here.
 //!
 //! How exact is the mapping? Honestly: approximate, and it cannot be
-//! otherwise. There is no published cross-encoder equivalence — the numbers
+//! otherwise. There is no published cross-encoder equivalence: the numbers
 //! only line up if you measure VMAF at matched bitrate on your own footage.
 //! The hardware offset below is a size-matching rule of thumb, not a
 //! measurement. That is why the resolved native value is shown in the UI
@@ -29,7 +29,7 @@ pub const MAX: u32 = 100;
 
 /// Default quality. 70 lands on x264 CRF 20, which is about where the useful
 /// range ends for an upload: YouTube re-encodes everything it is given and
-/// documents 53–68 Mbit/s for 4K60, while CRF 14 on the same clip produces
+/// documents 53-68 Mbit/s for 4K60, while CRF 14 on the same clip produces
 /// several times that. Everything below CRF ~18 is render time and disk spent
 /// on bits that get thrown away.
 pub const DEFAULT: u32 = 70;
@@ -47,13 +47,13 @@ pub fn x264_crf(quality: u32) -> u32 {
 /// Hardware encoders at a given quantiser produce a larger file than x264 at
 /// the numerically equal CRF, so matching x264's *size* means asking them for
 /// a slightly coarser number. Three steps is the commonly used figure and it
-/// is a rule of thumb, not a measured equivalence — see the module note.
+/// is a rule of thumb, not a measured equivalence (see the module note).
 pub fn hardware_q(quality: u32) -> u32 {
     (x264_crf(quality) + 3).min(51)
 }
 
-/// Converts a setting saved before the scale was inverted — where the stored
-/// number WAS the x264 CRF — into the new one, so an upgrade does not
+/// Converts a setting saved before the scale was inverted (where the stored
+/// number WAS the x264 CRF) into the new one, so an upgrade does not
 /// silently change anybody's output.
 pub fn from_legacy_crf(crf: u32) -> u32 {
     // Inverse of x264_crf, clamped to the scale.
@@ -63,7 +63,7 @@ pub fn from_legacy_crf(crf: u32) -> u32 {
 
 /// Short plain-language description of what a quality value costs, for the
 /// hint under the slider. The point is that "100" should not look like a free
-/// win — it is the setting that produced a 700 MB clip.
+/// win: it is the setting that produced a 700 MB clip.
 pub fn describe(quality: u32) -> &'static str {
     match quality {
         90..=u32::MAX => "Near-lossless. Very large files.",

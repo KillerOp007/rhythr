@@ -127,12 +127,12 @@ if [ -f crates/gui/THIRD-PARTY-CRATES.txt ]; then
   CUR=$(grep -c '^    license:' crates/gui/THIRD-PARTY-CRATES.txt || echo 0)
   LOCKED=$(grep -c '^name = ' Cargo.lock || echo 0)
   if [ "$CUR" -lt $((LOCKED - 20)) ]; then
-    bad "THIRD-PARTY-CRATES.txt lists $CUR crates against $LOCKED in Cargo.lock — run scripts/gen-crate-notices.sh"
+    bad "THIRD-PARTY-CRATES.txt lists $CUR crates against $LOCKED in Cargo.lock: run scripts/gen-crate-notices.sh"
   else
     ok "crate attribution present ($CUR crates)"
   fi
 else
-  bad "crates/gui/THIRD-PARTY-CRATES.txt is missing — run scripts/gen-crate-notices.sh"
+  bad "crates/gui/THIRD-PARTY-CRATES.txt is missing: run scripts/gen-crate-notices.sh"
 fi
 
 echo

@@ -1,4 +1,4 @@
-//! Presenting rendered frames straight to a window surface — the live
+//! Presenting rendered frames straight to a window surface: the live
 //! path of the Analyze window. The frame is still rendered into the
 //! calibrated offscreen `color_tex` (identical pixels to every export);
 //! this module only adds the final hop: a blit onto the swapchain image,
@@ -34,7 +34,7 @@ fn vs_main(@builtin(vertex_index) i: u32) -> VsOut {
 @group(0) @binding(1) var frame_samp: sampler;
 
 // x: 1.0 => the target view is sRGB and re-encodes: hand it linear.
-// (A vec4, not a struct with vec3 padding — that would align to 32 B
+// (A vec4, not a struct with vec3 padding: that would align to 32 B
 // while the CPU side uploads 16.)
 @group(0) @binding(2) var<uniform> params: vec4<f32>;
 
@@ -78,7 +78,7 @@ fn pick_format(caps: &wgpu::SurfaceCapabilities) -> wgpu::TextureFormat {
 
 impl Presenter {
     /// `surface` must have been created from the target window (on the
-    /// main thread — macOS/Metal panics otherwise) with the same
+    /// main thread, as macOS/Metal panics otherwise) with the same
     /// `wgpu::Instance` the renderer was built against.
     pub fn new(
         renderer: &Renderer,
@@ -99,7 +99,7 @@ impl Presenter {
             width: win_w.max(1),
             height: win_h.max(1),
             // Fifo is available everywhere and blocks in get_current_texture
-            // until a vblank slot frees up — natural vsync pacing.
+            // until a vblank slot frees up (natural vsync pacing).
             present_mode: wgpu::PresentMode::Fifo,
             desired_maximum_frame_latency: 2,
             alpha_mode: caps.alpha_modes[0],
@@ -238,7 +238,7 @@ impl Presenter {
         self.surface.configure(renderer.device(), &self.config);
     }
 
-    /// The offscreen frame texture was recreated (render size changed) —
+    /// The offscreen frame texture was recreated (render size changed):
     /// the bind group must point at the new texture.
     pub fn rebind(&mut self, renderer: &Renderer) {
         self.bind = Self::make_bind(
@@ -256,7 +256,7 @@ impl Presenter {
 
     /// Blits the current offscreen frame to the swapchain, letterboxed to
     /// the frame's aspect, and presents. Blocks until the compositor has
-    /// a slot (Fifo) — this IS the frame pacing. Returns false when the
+    /// a slot (Fifo). This IS the frame pacing. Returns false when the
     /// frame was skipped (occluded/outdated): no vsync block happened, so
     /// the caller must pace itself or it spins at an uncapped rate.
     pub fn present_frame(&self, renderer: &Renderer) -> Result<bool, Error> {
@@ -320,7 +320,7 @@ impl Presenter {
     }
 
     /// Where the frame lands inside the window (letterbox rect, physical
-    /// px) — the overlay layer aligns itself to this.
+    /// px). The overlay layer aligns itself to this.
     pub fn frame_rect(&self, renderer: &Renderer) -> (f32, f32, f32, f32) {
         let (fw, fh) = renderer.dimensions();
         let (sw, sh) = (self.config.width as f32, self.config.height as f32);

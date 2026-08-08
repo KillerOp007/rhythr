@@ -4,11 +4,11 @@
 (`.rhr`) replays into videos. It is not affiliated with or endorsed by
 Rhythia or Capo Games.
 
-**[Download from the releases page](https://github.com/KillerOp007/rhythr/releases/latest)** —
+**[Download from the releases page](https://github.com/KillerOp007/rhythr/releases/latest)**,
 then start it and drop a replay into the window: the map downloads
 itself, a live preview appears and **Render video** does the rest. Your
-game install is detected on startup — the **Game** card reports it, and
-carries *Detect* / *Locate…* for installs in unusual places — so built-in
+game install is detected on startup (the **Game** card reports it, and
+carries *Detect* / *Locate…* for installs in unusual places), so built-in
 skins use its own textures and colors. Rendering works without it.
 GPU renderer (wgpu) aiming for pixel-parity with the game, so a rendered
 video looks exactly like watching the replay in-game with your own skin.
@@ -16,21 +16,21 @@ video looks exactly like watching the replay in-game with your own skin.
 Step by step, including how to export a replay and your skin from the
 game: **[the user guide](docs/USER-GUIDE.md)**.
 
-- **Windows** — `rhythr_x.y.z_x64-setup.exe`. Click through SmartScreen
+- **Windows**: `rhythr_x.y.z_x64-setup.exe`. Click through SmartScreen
   ("More info" → "Run anyway"; the installer is not code-signed).
-- **Linux (any distro)** — `rhythr_x.y.z_amd64.AppImage`. One
+- **Linux (any distro)**: `rhythr_x.y.z_amd64.AppImage`. One
   self-contained file (ffmpeg included): `chmod +x`, run. Needs glibc
   2.35+ (Ubuntu 22.04 / Debian 12 / Fedora 36 or newer, Arch, openSUSE
   Leap 15.6+, SteamOS 3.5+). If it won't start, install your distro's
   `fuse3`/`fuse` package (the runtime needs a `fusermount` binary), or
   run with `--appimage-extract-and-run`.
-- **Debian/Ubuntu/Mint** — `rhythr_x.y.z_amd64.deb`
+- **Debian/Ubuntu/Mint**: `rhythr_x.y.z_amd64.deb`
   (`sudo apt install ./rhythr_*.deb`; uses the system ffmpeg and
   registers the `.rhr` file type).
-- **Fedora/openSUSE** — `rhythr-x.y.z-1.x86_64.rpm`. Install ffmpeg
+- **Fedora/openSUSE**: `rhythr-x.y.z-1.x86_64.rpm`. Install ffmpeg
   separately (RPM Fusion on Fedora) or use the AppImage.
-- **Arch-based (Arch, CachyOS, Manjaro, EndeavourOS, …)** — install
-  from the AUR: `rhythr-bin`. Recommended over the AppImage there: a
+- **Arch-based (Arch, CachyOS, Manjaro, EndeavourOS, …)**: install
+  `rhythr-bin` from the AUR. Recommended over the AppImage there: a
   native install against your rolling-release system libraries, no
   FUSE involved.
 
@@ -45,7 +45,7 @@ releases page.
 
 ## Screenshot
 
-*Placeholder — no screenshot is committed yet.*
+*Placeholder: no screenshot is committed yet.*
 
 <!-- Drop a current shot of the app window into the repo as
      docs/screenshot-app.png and replace this whole section body with:
@@ -57,15 +57,15 @@ releases page.
 
 This tool is a strict **read-only renderer**:
 
-- No code path writes or re-encodes `.rhr` files — there is no replay
+- No code path writes or re-encodes `.rhr` files: there is no replay
   serializer in this codebase, and none will be accepted.
 - Nothing can alter cursor positions, hits, misses, timing, accuracy or
   mods. Only visuals are configurable (skin, camera, HUD, resolution, FPS).
 - Every replay is run through an **integrity check**: hits/misses/accuracy
   are re-derived from the raw input frames and compared against the header.
-  On mismatch the tool warns loudly and burns a "replay data inconsistent —
-  possibly manipulated" notice into the rendered video.
-- This check (and any rendered video) is a heuristic by this tool — it is
+  On mismatch the tool warns loudly and burns a "replay data inconsistent
+  (possibly manipulated)" notice into the rendered video.
+- This check (and any rendered video) is a heuristic by this tool. It is
   **not** an official Rhythia score verification.
 
 ## Workspace
@@ -92,7 +92,7 @@ cargo run -p rhythia-cli -- video testdata/pass_long_score77.rhr \
     --map testdata/pass_long_map_map_json.json --start 1:25 --end 1:37 -o clip.mp4
 ```
 
-The renderer runs headlessly on the GPU (Vulkan) — the same wgpu backend
+The renderer runs headlessly on the GPU (Vulkan), the same wgpu backend
 the game itself uses. The camera model (perspective FOV, note approach,
 grid placement) was derived from the game's own shaders and calibrated
 against real footage; no game code or assets are vendored.
@@ -108,7 +108,7 @@ rhythia.com (hash-verified against the replay header and cached), the
 replay is integrity-checked (a "verified" / "inconsistent" badge on the
 replay card), and a live GPU preview with a scrubbable timeline (health
 graph + miss markers) appears. Individual HUD elements can be toggled per
-user preference — overrides persist across restarts and apply to every
+user preference. Overrides persist across restarts and apply to every
 render. Building the Windows installer: see
 [docs/WINDOWS-BUILD.md](docs/WINDOWS-BUILD.md).
 
@@ -126,4 +126,4 @@ local replays.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).

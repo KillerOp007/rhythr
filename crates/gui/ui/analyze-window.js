@@ -1,6 +1,6 @@
 // Analyze window: the replay at full window size with overlays, live
 // playback at any speed, and an options drawer that hides without losing
-// a single setting. Standalone — it talks to the backend directly.
+// a single setting. Standalone: it talks to the backend directly.
 "use strict";
 
 const invoke = window.__TAURI__.core.invoke;
@@ -13,13 +13,13 @@ const GHOST = "#ff9c41";
 const MUTED = "#8b98a9";
 
 /// Overlay strokes must survive any skin: on a bright background the
-/// light defaults vanish, so the whole palette flips dark — the same
+/// light defaults vanish, so the whole palette flips dark, the same
 /// rule the HUD meters follow.
 function olPalette() {
   // From status, not the analysis payload: a mid-session skin swap
   // refreshes it through the normal status poll. The fallback engines
   // show the user's custom background (native deliberately keeps the
-  // skin one) — with an image behind the picture, keep the light set.
+  // skin one). With an image behind the picture, keep the light set.
   const light =
     !!status?.light_background && (engine === "native" || !status?.settings?.background);
   return light
@@ -47,7 +47,7 @@ const WARN = "#f2c14e";
 const OK = "#58d68b";
 
 // Everything the drawer edits lives here, so hiding the drawer can never
-// drop a setting — the panel is rebuilt from this state when it reopens.
+// drop a setting: the panel is rebuilt from this state when it reopens.
 const opt = {
   path: true,
   raw: true,
@@ -93,7 +93,7 @@ function saveOpt() {
     try {
       localStorage.setItem(OPT_STORE, JSON.stringify(opt));
     } catch {
-      /* private mode or a full quota — not worth bothering the user */
+      /* private mode or a full quota: not worth bothering the user */
     }
   }, 400);
 }
@@ -125,11 +125,11 @@ let heatCanvases = { main: null, ghost: null };
 // ── song audio ──────────────────────────────────────────────
 // The map's own music through WebAudio, rate-locked to the analyzer
 // clock. Resampling, not time-stretching: changing the speed bends the
-// pitch like a record — which is what makes a spot findable by ear.
+// pitch like a record, which is what makes a spot findable by ear.
 const audioUrl = () =>
   navigator.userAgent.includes("Windows") ? "http://rhaudio.localhost/song" : "rhaudio://localhost/song";
 
-// performance.now() at the last playback-clock write — the follower
+// performance.now() at the last playback-clock write: the follower
 /// extrapolates the staircase clock between writes.
 let clockWall = 0;
 
@@ -158,7 +158,7 @@ function sndCtx() {
 }
 
 function sndLoad() {
-  // The audio belongs to the MAP — a replay or ghost change must not
+  // The audio belongs to the MAP: a replay or ghost change must not
   // re-download and re-decode the same song.
   const key = status?.map?.path || "";
   if (!key || (snd.key === key && snd.state !== "off" && !snd.state.startsWith("failed"))) return;
@@ -188,7 +188,7 @@ function replaySpeed() {
   return clamp(status?.replay?.speed || 1, 0.25, 3);
 }
 
-/// The run's hit window in song-time ms — the mirror of
+/// The run's hit window in song-time ms, the mirror of
 /// `rhythia_sim::hitreg::hit_window_ms`. The game misses a note once
 /// `ms > note_t + 55 * speed`, so an unhit note's box lives exactly that
 /// long. This was a hardcoded 80 here while the renderer had already moved
@@ -291,7 +291,7 @@ function sndStateText() {
   return snd.state;
 }
 
-/// Targeted update — drawSection() must NOT rebuild mid-drag, so state
+/// Targeted update: drawSection() must NOT rebuild mid-drag, so state
 /// transitions patch only this one value.
 function sndDiagUpdate() {
   const el = document.getElementById("an-audio-kv");
@@ -315,7 +315,7 @@ let engine = "video"; // "native" | "video" | "stream"
 // Live engine: the picture is painted by the GPU BEHIND this webview;
 // this page only draws overlays and controls on a transparent body.
 const liveState = { active: false, tick: null, ended: false, key: "", seekTarget: null, seekWall: 0 };
-// Short trace of what the playback engine did last — visible under
+// Short trace of what the playback engine did last, visible under
 // View -> Diagnostics, so a problem report says where it went wrong.
 const trace = [];
 function tr(s) {
@@ -339,7 +339,7 @@ const seg = {
   preparingFrom: -1,
   switchOnReady: false,
   spanSetting: 12000, // song ms per segment at 1x
-  current: null, // {url, startMs, spanMs, outFps} — loaded in <video>
+  current: null, // {url, startMs, spanMs, outFps}, loaded in <video>
   next: null, // buffered follow-up
 };
 
@@ -351,7 +351,7 @@ const videoUrl = (token) => {
 };
 
 /// A media element refuses a playbackRate below this and quietly clamps
-/// it back up — and the segment engine READS the playhead off that
+/// it back up, and the segment engine READS the playhead off that
 /// element, so a slower speed would run the whole clock too fast. This is
 /// the video path's own floor, not the analyzer's: below it the frame
 /// stream (no rate limit at all) carries playback instead.
@@ -362,7 +362,7 @@ const segmentsUsable = () => engine === "video" && play.factor >= VIDEO_MIN_RATE
 
 /// Frames per SONG second so the played result still shows ~60 frames a
 /// second at the chosen speed: 60 at 1x, 240 at 0.25x. Every displayed
-/// frame is a real rendered frame — no duplicates, no stutter.
+/// frame is a real rendered frame: no duplicates, no stutter.
 function segmentFps() {
   return Math.round(clamp(60 / clamp(play.factor, VIDEO_MIN_RATE, 4), 60, 480));
 }
@@ -592,13 +592,13 @@ function switchToStreamingNow() {
   startStreaming();
 }
 
-/// The overlay follows the video's own clock — it can never drift from
+/// The overlay follows the video's own clock: it can never drift from
 /// the picture.
 function videoTick() {
   const v = $("an-video");
   if (!play.on || v.hidden) return;
   // The segment file has the replay's speed mod baked in (video.rs:
-  // one video second holds `speed` song seconds) — map back to song time.
+  // one video second holds `speed` song seconds). Map back to song time.
   currentMs = seg.current.startMs + v.currentTime * 1000 * replaySpeed();
   clockWall = performance.now();
   updateTime();
@@ -611,7 +611,7 @@ function videoTick() {
   drawOverlay();
   refreshLive();
   sndFollow();
-  // Buffer the follow-up EARLY — the moment this segment starts playing.
+  // Buffer the follow-up EARLY: the moment this segment starts playing.
   if (!seg.next && !seg.preparing) {
     const end = seg.current.startMs + seg.current.spanMs;
     if (end < runEnd() - 100) requestSegment(end, false);
@@ -718,7 +718,7 @@ function msg(text) {
 
 // The interface size belongs to the whole app, not to the analyzer: the
 // main window owns the control, and both windows share an origin, so the
-// stored factor is simply readable here. Not an entry in opt — a window
+// stored factor is simply readable here. Not an entry in opt: a window
 // that opened at another size than the one the user set is a bug.
 const SCALE_STORE = "rhythr.ui.scale";
 const SCALE_MIN = 0.8;
@@ -745,7 +745,7 @@ window.addEventListener("storage", (e) => {
   if (e.key != null && e.key !== SCALE_STORE) return;
   applyUiScale();
   // Canvases take their bitmap from their CSS box and only follow it on a
-  // redraw — and the stage observer stays silent when nothing but the
+  // redraw, and the stage observer stays silent when nothing but the
   // controls inside it changed size.
   drawScrub();
   refreshLive();
@@ -830,7 +830,7 @@ function withTimeout(promise, ms, onTimeout) {
 async function bitmapFromUrl(url) {
   const img = new Image();
   // CORS-mode load keeps the canvas origin-clean (the scheme handler
-  // sends Access-Control-Allow-Origin: *) — the overlay snapshot reads
+  // sends Access-Control-Allow-Origin: *). The overlay snapshot reads
   // the canvas back, and one tainted frame would poison it for good.
   img.crossOrigin = "anonymous";
   img.src = url;
@@ -865,7 +865,7 @@ async function fetchBitmap(t) {
     frameFails++;
     if (frameFails >= 2 && transport !== "ipc") {
       transport = transport === "fetch" ? "img" : "ipc";
-      transportNote = `Frame channel fell back to "${transport}" — ${e}`;
+      transportNote = `Frame channel fell back to "${transport}": ${e}`;
       frameFails = 0;
       msgFlash(transportNote);
       return loadBitmap(t);
@@ -927,7 +927,7 @@ function seek(t) {
       return;
     }
     if (entryCovers(seg.next, currentMs)) {
-      // The follow-up covers it — promote it now.
+      // The follow-up covers it: promote it now.
       freeEntry(seg.current);
       seg.current = seg.next;
       seg.next = null;
@@ -985,7 +985,7 @@ function collectMisses() {
   setMissLoop(false);
 }
 
-/// The miss the playhead is at or heading into — the one a loop should
+/// The miss the playhead is at or heading into: the one a loop should
 /// repeat, and the anchor "previous"/"next" step away from.
 function currentMissIndex() {
   if (!missTimes.length) return -1;
@@ -1015,7 +1015,7 @@ function gotoMiss(dir) {
   // Re-anchor the loop on the DESTINATION before seeking, not after. Seeking
   // first fires updateTime() -> enforceLoop(), and with the loop still on the
   // old miss and playback running, the new position lies outside it, so
-  // enforceLoop yanks the playhead straight back to the old miss — and the
+  // enforceLoop yanks the playhead straight back to the old miss, and the
   // jump silently does nothing. Moving the loop first means the seek lands
   // inside it.
   if (missLoop) {
@@ -1053,7 +1053,7 @@ function enforceLoop() {
 // ------------------------------------------------------------ overlay
 
 /// Fits the canvas into the stage at the frame's aspect ratio, in real
-/// device pixels — the backend renders at exactly this size, so nothing
+/// device pixels: the backend renders at exactly this size, so nothing
 /// is scaled and everything stays sharp.
 function syncCanvas() {
   const cv = $("an-canvas");
@@ -1083,8 +1083,8 @@ function drawFrame() {
   if (engine === "native") {
     // The picture is painted BEHIND the webview by the live thread and the
     // canvas is overlay-only; its position and size belong to the tick.
-    // Falling through blitted `currentBitmap` — the one still fetched at
-    // t=0 before the native engine took over — over the running picture,
+    // Falling through blitted `currentBitmap` (the one still fetched at
+    // t=0 before the native engine took over) over the running picture,
     // and syncCanvas() then moved and resized the canvas to fit that old
     // frame. Clicking the playfield while paused showed the start of the
     // map on top of the current one, shifted.
@@ -1148,7 +1148,7 @@ function pathFrom(ctx, pts) {
 function drawOverlay() {
   const cv = $("an-canvas");
   const ctx = cv.getContext("2d");
-  // Native mode has no bitmap — the GPU paints the picture; the canvas
+  // Native mode has no bitmap: the GPU paints the picture; the canvas
   // carries overlays alone.
   if (!data || !lastFrame) return;
   if (engine !== "native" && !currentBitmap) return;
@@ -1169,7 +1169,7 @@ function drawOverlay() {
     const color = si === 0 ? pal.main : pal.ghost;
     if (!a) return;
     // The game's barrier: the visible cursor (and every hit test) is
-    // clamped to the field — raw tablet recordings go beyond it, but
+    // clamped to the field: raw tablet recordings go beyond it, but
     // "outside the field" never happened on screen. Draw the truth.
     const cb = (si === 0 ? data.cursor_bound : data.ghost_cursor_bound) ?? 1.36875;
     const cpx = (wx, wy) => projectPx(side, clamp(wx, -cb, cb), clamp(wy, -cb, cb));
@@ -1245,7 +1245,7 @@ function drawOverlay() {
           fade = age > 0 ? Math.max(0.3, 1 - age / Math.max(opt.linger, 1)) : 1;
           ctx.globalAlpha = 0.85 * fade;
         }
-        // Approaching notes stay NEUTRAL — the verdict colours the box
+        // Approaching notes stay NEUTRAL: the verdict colours the box
         // only once the note reaches the plane. Painting the outcome
         // early reads like the analyzer marking un-reached notes as hit.
         ctx.strokeStyle = sel ? pal.main : !judging ? pal.approach : hit ? pal.box : pal.boxMiss;
@@ -1259,7 +1259,7 @@ function drawOverlay() {
           ctx.fill();
         }
         // Verdict marker: where the cursor actually was at the deciding
-        // moment — the recorded hit frame, or the note time for a miss.
+        // moment (the recorded hit frame, or the note time for a miss).
         // THIS answers "was I really inside?", not the moving picture.
         if (judging) {
           const rm = n.hit ? (n.hit_ms ?? n.t) : n.t;
@@ -1396,7 +1396,7 @@ function pickNote(ev) {
   if (best >= 0) {
     // Clicking a note is documented as the way to inspect it, but the
     // inspector only ever redrew if the drawer already happened to be open
-    // on that tab — so for most people the click did nothing visible.
+    // on that tab, so for most people the click did nothing visible.
     opt.section = "notes";
     saveOpt();
     renderNav();
@@ -1468,13 +1468,13 @@ async function syncRenderSize() {
   }
 }
 
-// The backend keys frames by round(from + step*k) — the frontend must use
+// The backend keys frames by round(from + step*k): the frontend must use
 // the exact same base and step or every request misses the cache.
 function prefetch(fromMs) {
   invoke("prefetch_frames", { fromMs, stepMs: frameStep(), count: 45 }).catch(() => {});
 }
 
-/// Stops the background renderer — it must not keep working for a
+/// Stops the background renderer: it must not keep working for a
 /// playhead that moved on.
 function cancelPrefetch() {
   invoke("cancel_prefetch").catch(() => {});
@@ -1488,7 +1488,7 @@ function setPlaying(on) {
   play.on = on;
   play.gen++;
   if (on && opt.audio) {
-    // This runs inside a real user gesture (click/space) — the only
+    // This runs inside a real user gesture (click/space), the only
     // place the autoplay policy lets the AudioContext start.
     sndLoad();
     if (snd.ctx?.state === "suspended") snd.ctx.resume().catch(() => {});
@@ -1555,13 +1555,13 @@ function startStreaming() {
   pump(play.gen);
 }
 
-/// The video element never became ready — this platform cannot play the
+/// The video element never became ready: this platform cannot play the
 /// prepared segment, so switch to frames for the rest of the session.
 function fallbackToStreaming(why) {
   tr(`fallback: ${why}`);
   clearTimeout(watchdog);
   engine = "stream";
-  transportNote = `Segment playback unavailable (${why}) — using single frames.`;
+  transportNote = `Segment playback unavailable (${why}). Using single frames.`;
   dropSegment();
   const v = $("an-video");
   v.hidden = true;
@@ -1573,12 +1573,12 @@ async function pump(gen) {
   if (gen !== play.gen || !play.on) return;
   if (renderBusy || status?.rendering) {
     setPlaying(false);
-    msg("Paused — a video render is using the renderer.");
+    msg("Paused: a video render is using the renderer.");
     return;
   }
   const step = frameStep();
   // Time comes from the wall clock, quantized to the frame grid the
-  // prefetcher renders — so playback keeps real time even if a frame is
+  // prefetcher renders, so playback keeps real time even if a frame is
   // slow, and every request hits a ready image.
   const elapsed = performance.now() - play.startWall;
   // ONLY the wall clock advances the song. Flooring this at "one more per
@@ -1587,7 +1587,7 @@ async function pump(gen) {
     (elapsed * play.factor * clamp(status?.replay?.speed || 1, 0.25, 3)) / step,
   );
   if (kw <= play.k) {
-    // Same grid point — wait for the next one instead of re-rendering it.
+    // Same grid point: wait for the next one instead of re-rendering it.
     requestAnimationFrame(() => pump(gen));
     return;
   }
@@ -1612,16 +1612,16 @@ async function pump(gen) {
     await showFrame(currentMs);
     loopFails = 0;
   } catch (e) {
-    // Never spin on a broken frame channel — say what happened and stop.
+    // Never spin on a broken frame channel: say what happened and stop.
     if (++loopFails >= 3) {
       setPlaying(false);
-      msg(`Playback stopped — ${e}`);
+      msg(`Playback stopped: ${e}`);
       return;
     }
   }
   const dt = performance.now() - t0;
   fps = fps ? fps * 0.9 + (1000 / Math.max(1, dt)) * 0.1 : 1000 / Math.max(1, dt);
-  // Displayed frames per second of wall clock — that is what "smooth"
+  // Displayed frames per second of wall clock: that is what "smooth"
   // means, and what the Auto scale must judge.
   const now2 = performance.now();
   if (lastTick) {
@@ -1649,7 +1649,7 @@ async function pump(gen) {
       }
     }
   }
-  // Keep frames and geometry a second ahead of the playhead — on the
+  // Keep frames and geometry a second ahead of the playhead, on the
   // same grid points the playback will ask for.
   // Distance-based: a slow frame can skip right over any fixed multiple.
   if (k - lastPrefetchK >= 20) {
@@ -1708,15 +1708,15 @@ function setSpeed(v) {
   // frames per song second), so a new speed needs a new segment.
   // Debounced: dragging the slider must not start a dozen renders.
   clearTimeout(speedTimer);
-  // Buffered segments were rendered for the old speed — their frame
+  // Buffered segments were rendered for the old speed: their frame
   // density no longer matches.
   freeEntry(seg.next);
   seg.next = null;
   if (play.on) {
     if (!$("an-video").hidden) {
       if (play.factor < VIDEO_MIN_RATE) {
-        // The element cannot go this slow, and its clock is the playhead —
-        // hand the run back to the frame stream, which has no such floor.
+        // The element cannot go this slow, and its clock is the playhead,
+        // so hand the run back to the frame stream, which has no such floor.
         dropSegment();
         switchToStreamingNow();
         return;
@@ -1787,10 +1787,10 @@ function drawSection() {
     html += card(
       "What you are looking at",
       `<div class="an-legend">
-        ${swatch(pal.main, "line")}<span>Cursor path — where the cursor actually was, clamped to the field barrier the game enforces.</span>
+        ${swatch(pal.main, "line")}<span>Cursor path: where the cursor actually was, clamped to the field barrier the game enforces.</span>
         ${data.ghost ? `${swatch(pal.ghost, "line")}<span>The ghost run's path.</span>` : ""}
         ${swatch(pal.raw, "dot")}<span>Raw cursor: the recorded position before that clamp. Tablets record beyond the field; no hit ever happened out there.</span>
-        ${swatch(pal.approach, "box")}<span>A note's hit area on approach. Neutral on purpose — nothing has been decided yet.</span>
+        ${swatch(pal.approach, "box")}<span>A note's hit area on approach. Neutral on purpose: nothing has been decided yet.</span>
         ${swatch(pal.box, "box")}<span>The note was taken. The box freezes at the plane and stays until the hit, plus the linger time you set.</span>
         ${swatch(pal.boxMiss, "box")}<span>The note was missed. It survives to the end of the hit window, then the line shows how far the cursor stayed away.</span>
         ${swatch(pal.main, "dot")}<span>Verdict dot: where the cursor sat at the exact moment the note resolved.</span>
@@ -1824,7 +1824,7 @@ function drawSection() {
         <label class="an-tog"><input type="checkbox" data-view="notes"${opt.notes ? " checked" : ""}> Notes</label>
       </div>
       <p class="hint">Hide the game's cursor to study the raw recorded one, or the notes to see nothing but hit areas. Changes re-render the picture.</p>
-      <p class="hint">Hitboxes show the game's TRUE hit area (a fixed square, larger than the visual note) and follow each note in. At the hit plane the box freezes — the game judges in 2D, so cursor vs. box is only comparable there — and lingers briefly with a dot marking exactly where the cursor was at the deciding moment: dot inside the box = hit, outside = miss. Works on skins that fade notes out early (half ghost).</p>`,
+      <p class="hint">Hitboxes show the game's TRUE hit area (a fixed square, larger than the visual note) and follow each note in. At the hit plane the box freezes (the game judges in 2D, so cursor vs. box is only comparable there) and lingers briefly with a dot marking exactly where the cursor was at the deciding moment: dot inside the box = hit, outside = miss. Works on skins that fade notes out early (half ghost).</p>`,
     );
   } else if (opt.section === "cursor") {
     const c = a.cursor;
@@ -1832,7 +1832,7 @@ function drawSection() {
     const i = Math.max(0, lastIndexLE(t, currentMs));
     html += card(
       "Speed",
-      kv("Now", `<span id="an-live-speed">${t.length ? `${fmt1(a.speed_series.v[i])} cells/s` : "–"}</span>`) +
+      kv("Now", `<span id="an-live-speed">${t.length ? `${fmt1(a.speed_series.v[i])} cells/s` : "-"}</span>`) +
         kv("Average / p95", `${fmt1(c.avg_speed)} / ${fmt1(c.p95_speed)} cells/s`) +
         kv("Max", `<a class="an-jump" data-t="${c.max_speed.t}">${fmt1(c.max_speed.v)} @ ${fmtMs(c.max_speed.t)}</a>`) +
         kv("Max accel", `<a class="an-jump" data-t="${c.max_accel.t}">${fmt1(c.max_accel.v)} cells/s²</a>`) +
@@ -1850,7 +1850,7 @@ function drawSection() {
     html += card(
       "Aim placement",
       `<canvas class="an-scatter"></canvas>` +
-        kv("Bias", `${fmt2(a.direction_bias.dx)} / ${fmt2(a.direction_bias.dy)} cells`, "Mean hit offset from note centres — the arrow"),
+        kv("Bias", `${fmt2(a.direction_bias.dx)} / ${fmt2(a.direction_bias.dy)} cells`, "Mean hit offset from note centres (the arrow)"),
     );
   } else if (opt.section === "timing") {
     const tm = a.timing;
@@ -1876,7 +1876,7 @@ function drawSection() {
         `<div class="an-list">${sec
           .map(
             (s) =>
-              `<a class="an-jump" data-t="${s.start_ms}">${fmtMs(s.start_ms)}–${fmtMs(s.end_ms)} · ${fmt1(s.acc_pct)}% · UR ${Math.round(s.ur)} · ${s.misses} miss</a>`,
+              `<a class="an-jump" data-t="${s.start_ms}">${fmtMs(s.start_ms)}-${fmtMs(s.end_ms)} · ${fmt1(s.acc_pct)}% · UR ${Math.round(s.ur)} · ${s.misses} miss</a>`,
           )
           .join("")}</div>`,
       );
@@ -1901,7 +1901,7 @@ function drawSection() {
         `<div class="an-list">${worst
           .map(
             (n) =>
-              `<a class="an-jump" data-t="${n.t}" data-note="${n.i}">${fmtMs(n.t)} — ${fmt2(n.near_dist)} cells away</a>`,
+              `<a class="an-jump" data-t="${n.t}" data-note="${n.i}">${fmtMs(n.t)} · ${fmt2(n.near_dist)} cells away</a>`,
           )
           .join("")}</div>`,
       );
@@ -1916,7 +1916,7 @@ function drawSection() {
             (n.hit
               ? kv("Timing", `${n.err_ms >= 0 ? "+" : ""}${fmt1(n.err_ms)} ms (${n.err_ms >= 0 ? "late" : "early"})`) +
                 kv("Hit offset", `${fmt2(n.dist)} cells (${fmt2(n.off_x)}, ${fmt2(n.off_y)})`)
-              : kv("Closest approach", n.near_dist != null ? `${fmt2(n.near_dist)} cells` : "–")) +
+              : kv("Closest approach", n.near_dist != null ? `${fmt2(n.near_dist)} cells` : "-")) +
             kv("Approach speed", `${fmt1(n.approach_v)} cells/s`)
         : `<p class="hint">Click a note in the replay to inspect it. Pause first (Space) and step with ← / → to catch a single frame.</p>`,
     );
@@ -1937,7 +1937,7 @@ function drawSection() {
     html += card(
       "Signals",
       `<div class="an-verdict"><span class="chip ${v === "clean" ? "ok" : v === "notice" ? "warn" : "bad"}">${
-        v === "clean" ? "no integrity signals" : v === "notice" ? "signals — take a look" : "strong signals"
+        v === "clean" ? "no integrity signals" : v === "notice" ? "signals: take a look" : "strong signals"
       }</span></div>` +
         (a.signals.length
           ? a.signals
@@ -1952,7 +1952,7 @@ function drawSection() {
               )
               .join("")
           : `<p class="hint">Nothing unusual found in this replay's data.</p>`) +
-        `<p class="hint an-foot">Signals are hints derived from the recording — context, not verdicts. Absolute input devices (graphics tablets) naturally produce teleport-like jumps when the pen re-enters hover range: on tablet plays, movement signals here are expected and are NOT evidence of cheating.</p>`,
+        `<p class="hint an-foot">Signals are hints derived from the recording: context, not verdicts. Absolute input devices (graphics tablets) naturally produce teleport-like jumps when the pen re-enters hover range: on tablet plays, movement signals here are expected and are NOT evidence of cheating.</p>`,
     );
     html += card("Recording rate", kv("Frame delta", `${fmt1(a.frame_deltas.avg_ms)} ms avg · ${fmt1(a.frame_deltas.median_ms)} ms median`) + `<canvas class="an-graph" data-hist="delta"></canvas>`);
   } else if (opt.section === "export") {
@@ -1963,10 +1963,10 @@ function drawSection() {
         <button class="btn small ghost" id="exp-json">JSON</button>
         <button class="btn small ghost" id="exp-csv">CSV</button>
         <button class="btn small ghost" id="exp-snap">Overlay snapshot (F8)</button>
-      </div><p class="hint">The card is a shareable summary; JSON and CSV carry the per-note data. The overlay snapshot saves exactly what you see — picture plus hitboxes/path — ideal for bug reports.</p>`,
+      </div><p class="hint">The card is a shareable summary; JSON and CSV carry the per-note data. The overlay snapshot saves exactly what you see (picture plus hitboxes/path), ideal for bug reports.</p>`,
     );
   } else if (opt.section === "view") {
-    // Every shortcut in one place — they were only discoverable by hovering
+    // Every shortcut in one place: they were only discoverable by hovering
     // the right button, and half of them have no button at all.
     html += card(
       "Keyboard",
@@ -1999,7 +1999,7 @@ function drawSection() {
               `<label class="an-tog"><input type="radio" name="q" data-q="${q}"${String(opt.quality) === String(q) ? " checked" : ""}> ${label}</label>`,
           )
           .join("")}
-      </div><p class="hint">Frames render at the window's own pixel size — nothing is scaled, so Native is the sharpest AND the cheapest way to fill the window. Auto starts there and steps down once if playback can't hold ~55 fps${
+      </div><p class="hint">Frames render at the window's own pixel size: nothing is scaled, so Native is the sharpest AND the cheapest way to fill the window. Auto starts there and steps down once if playback can't hold ~55 fps${
         fps ? ` (currently ${Math.round(fps)} fps at ${scalePct()}%)` : ""
       }.</p>`,
     );
@@ -2011,7 +2011,7 @@ function drawSection() {
     html += card(
       "Song audio",
       `<label class="an-tog"><input type="checkbox" data-opt="audio"${opt.audio ? " checked" : ""}> Play the map's music</label>
-       <p class="hint">The music follows the playback clock. Slowing down bends the pitch down with it — find a spot by ear, the way you can't mid-run. Volume lives in the playbar.</p>`,
+       <p class="hint">The music follows the playback clock. Slowing down bends the pitch down with it. Find a spot by ear, the way you can't mid-run. Volume lives in the playbar.</p>`,
     );
     html += card(
       "Diagnostics",
@@ -2019,16 +2019,16 @@ function drawSection() {
         kv("Engine", engine === "native" ? "live GPU (native)" : engine === "video" ? "rendered video" : "single frames") +
         kv("Still frames", transport) +
         kv("Playback", !$("an-video").hidden ? `video · ${seg.current?.outFps ?? "?"} fps/song-s` : seg.preparing ? "rendering…" : loopFps ? `stream · ${Math.round(loopFps)} fps` : "idle") +
-        kv("Buffered", seg.current ? `${fmtMs(seg.current.startMs)}+${(seg.current.spanMs / 1000).toFixed(0)}s${seg.next ? ` · next ${fmtMs(seg.next.startMs)}+${(seg.next.spanMs / 1000).toFixed(0)}s` : ""}` : "–") +
+        kv("Buffered", seg.current ? `${fmtMs(seg.current.startMs)}+${(seg.current.spanMs / 1000).toFixed(0)}s${seg.next ? ` · next ${fmtMs(seg.next.startMs)}+${(seg.next.spanMs / 1000).toFixed(0)}s` : ""}` : "-") +
         kv("Render size", `${lastRenderH}p at ${scalePct()}%`) +
         `<div class="an-kv"><span>Audio</span><b id="an-audio-kv">${sndStateText()}</b></div>` +
-        `<div class="an-list"><span class="hint">${esc(trace.join(" · ") || "—")}</span></div>` +
+        `<div class="an-list"><span class="hint">${esc(trace.join(" · ") || "-")}</span></div>` +
         (transportNote ? `<p class="hint">${esc(transportNote)}</p>` : "") +
         `<p class="hint">If playback stalls, this tells us where. "fetch" is the fast path; the window falls back on its own if a platform blocks it.</p>`,
     );
     html += card(
       "Shortcuts",
-      `<div class="an-list"><span>Space — play / pause</span><span>← / → — one frame</span><span>Shift + ← / → — one second</span><span>O — options · Esc — hide options</span><span>F8 — save overlay snapshot</span><span>Click a note — inspect it</span></div>`,
+      `<div class="an-list"><span>Space: play / pause</span><span>← / →: one frame</span><span>Shift + ← / →: one second</span><span>O: options · Esc: hide options</span><span>F8: save overlay snapshot</span><span>Click a note: inspect it</span></div>`,
     );
   }
 
@@ -2036,8 +2036,8 @@ function drawSection() {
   wireSection();
 }
 
-/// Per-frame update of the drawer: canvases and live readouts only —
-/// rebuilding the DOM here would swallow clicks and abort slider drags.
+/// Per-frame update of the drawer: canvases and live readouts only.
+/// Rebuilding the DOM here would swallow clicks and abort slider drags.
 function refreshLive() {
   if ($("an-options").hidden || !data) return;
   redrawGraphs();
@@ -2045,7 +2045,7 @@ function refreshLive() {
   if (live) {
     const t = data.main.speed_series.t;
     const i = Math.max(0, lastIndexLE(t, currentMs));
-    live.textContent = t.length ? `${fmt1(data.main.speed_series.v[i])} cells/s` : "–";
+    live.textContent = t.length ? `${fmt1(data.main.speed_series.v[i])} cells/s` : "-";
   }
 }
 
@@ -2153,7 +2153,7 @@ function wireSection() {
       lin.nextElementSibling.textContent =
         opt.linger === 0 ? "instant" : `${(opt.linger / 1000).toFixed(2)}s`;
       // 0 must mean INSTANT for the engine, but the backend treats 0 as
-      // "use default" — send 1 ms instead (visually identical).
+      // "use default", so send 1 ms instead (visually identical).
       const ms = Math.max(1, opt.linger);
       invoke("live_cmd", { cmd: "linger", value: ms }).catch(() => {});
       invoke("set_analyze_linger", { ms }).catch(() => {});
@@ -2323,7 +2323,7 @@ async function exportJson() {
   const out = { ...data, main: strip(data.main), ghost: data.ghost ? strip(data.ghost) : null };
   try {
     await invoke("save_text_file", { path: p, contents: JSON.stringify(out, null, 2) });
-    msgFlash(`Saved — ${p}`);
+    msgFlash(`Saved: ${p}`);
   } catch (e) {
     msg(String(e));
   }
@@ -2358,13 +2358,13 @@ async function exportCsv() {
   if (data.ghost) emit("ghost", data.ghost.notes);
   try {
     await invoke("save_text_file", { path: p, contents: rows.join("\n") });
-    msgFlash(`Saved — ${p}`);
+    msgFlash(`Saved: ${p}`);
   } catch (e) {
     msg(String(e));
   }
 }
 
-/// Composites the current picture and the overlay canvas into one PNG —
+/// Composites the current picture and the overlay canvas into one PNG:
 /// exactly what the eye sees, portable and test-friendly (F8).
 let snapBusy = false;
 async function snapOverlay() {
@@ -2372,7 +2372,7 @@ async function snapOverlay() {
   snapBusy = true;
   try {
     // Freeze the moment FIRST: the overlay pixels now, the still for the
-    // same clock value — during playback the clock moves while the frame
+    // same clock value. During playback the clock moves while the frame
     // fetch runs, and a late picture under a fresh overlay lies.
     const t0 = currentMs;
     const ov = document.createElement("canvas");
@@ -2386,10 +2386,10 @@ async function snapOverlay() {
     x.fillStyle = "#000";
     x.fillRect(0, 0, c.width, c.height);
     try {
-      // Native mode: ask the live engine itself — its picture (skin
+      // Native mode: ask the live engine itself. Its picture (skin
       // background, live resolution) is what the screen shows; the
       // preview pipeline would paint the custom background instead.
-      // fetch + ImageBitmap keeps the canvas origin-clean — an <img>
+      // fetch + ImageBitmap keeps the canvas origin-clean: an <img>
       // without CORS would taint it and toDataURL throws SecurityError.
       let blob = null;
       if (engine === "native") {
@@ -2459,7 +2459,7 @@ async function exportCard() {
   x.fillRect(0, 0, 1200, 630);
   x.fillStyle = "#e8edf3";
   x.font = "600 34px system-ui";
-  x.fillText(`${data.player} — ${data.map_title || "run"}`, 48, 72);
+  x.fillText(`${data.player} · ${data.map_title || "run"}`, 48, 72);
   x.fillStyle = MUTED;
   x.font = "16px system-ui";
   x.fillText(`${a.meta.hits}/${a.meta.hits + a.meta.misses} hits · analyzed with rhythr`, 48, 102);
@@ -2504,7 +2504,7 @@ async function exportCard() {
   x.fillText(a.verdict === "clean" ? "● no integrity signals" : `● integrity: ${a.verdict}`, 48, 600);
   try {
     await invoke("save_data_url", { path: p, dataUrl: c.toDataURL("image/png") });
-    msgFlash(`Saved — ${p}`);
+    msgFlash(`Saved: ${p}`);
   } catch (e) {
     msg(String(e));
   }
@@ -2530,7 +2530,7 @@ async function refresh() {
     return;
   }
   const title = status?.replay
-    ? `${status.replay.player} — ${status.map?.song_name || status.map?.title || ""}`
+    ? `${status.replay.player} · ${status.map?.song_name || status.map?.title || ""}`
     : "No replay loaded";
   $("an-title").textContent = status?.build ? `${title}   ·   build ${status.build}` : title;
   if (!status?.replay || !status?.map) {
@@ -2539,7 +2539,7 @@ async function refresh() {
     geoCache.clear();
     $("an-chip").hidden = true;
     setPlaying(false);
-    msg("Load a replay (and its map) in the main window — this view follows it.");
+    msg("Load a replay (and its map) in the main window. This view follows it.");
     drawSection();
     return;
   }
@@ -2553,7 +2553,7 @@ async function refresh() {
     if (!ok) fallbackFromNative("could not restart");
   } else if (engine !== "native") {
     // Native may have been unavailable when the window opened (no replay
-    // loaded yet) or the engine died — sources changed, so try again.
+    // loaded yet) or the engine died: sources changed, so try again.
     // On platforms without native support this returns false instantly.
     await bootNative();
   }
@@ -2585,7 +2585,7 @@ async function loadData(key) {
   timeline = tl;
   dataKey = key;
   collectMisses();
-  // Geometry describes THIS replay on THIS field — never reuse any of it.
+  // Geometry describes THIS replay on THIS field: never reuse any of it.
   geoCache.clear();
   segGeo = { times: [], list: [] };
   heatCanvases = {
@@ -2647,7 +2647,7 @@ window.addEventListener("unhandledrejection", (e) => msg(`Error: ${e.reason}`));
 /// One live-tick: the native engine's clock and per-side geometry. The
 /// canvas paints ONLY overlays; the picture sits behind the webview.
 function onLiveTick(tk) {
-  // Ticks in flight from before a seek carry the OLD clock — letting
+  // Ticks in flight from before a seek carry the OLD clock: letting
   // them through rewinds the UI and yanks the audio back for a beat.
   if (liveState.seekTarget != null) {
     if (Math.abs(tk.t - liveState.seekTarget) < 250 || performance.now() - liveState.seekWall > 300) {
@@ -2732,7 +2732,7 @@ function wireNativeOnce() {
     clearTimeout(rzTimer);
     rzTimer = setTimeout(() => {
       // No size args: the backend reads the window's true physical size
-      // itself — innerWidth*dpr is off by one at fractional Windows DPI.
+      // itself: innerWidth*dpr is off by one at fractional Windows DPI.
       invoke("live_cmd", { cmd: "resize" }).catch(() => {});
     }, 120);
   });
@@ -2767,7 +2767,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   // Before anything reads opt: restore what the last session chose.
   loadOpt();
   // The restored checkboxes/slider only change the picture if the backend is
-  // told too — the change handlers do that, but they never fire at boot, so
+  // told too: the change handlers do that, but they never fire at boot, so
   // without this a reopened window shows "Notes off" while a rendered segment
   // still has notes. Sync the backend to the restored state once.
   invoke("set_analyze_view", { hideCursor: !opt.gameCursor, hideNotes: !opt.notes }).catch(() => {});
@@ -2815,7 +2815,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     const r = $("an-scrub").getBoundingClientRect();
     seek(clamp((e.clientX - r.left) / r.width, 0, 1) * runEnd());
   };
-  // Scrubbing pauses while you drag — but it used to leave playback off
+  // Scrubbing pauses while you drag, but it used to leave playback off
   // afterwards, so finding a spot always cost an extra press of space.
   let resumeAfterScrub = false;
   $("an-scrub").addEventListener("pointerdown", (e) => {

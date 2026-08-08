@@ -2,7 +2,7 @@
 //!
 //! Derives hits/misses/accuracy from the frame stream + map and compares
 //! them with the replay's header values. Any mismatch means the replay is
-//! inconsistent — possibly edited — and every consumer (CLI, GUI, video
+//! inconsistent (possibly edited) and every consumer (CLI, GUI, video
 //! renderer) must surface a clear warning, including one burned into the
 //! rendered video.
 //!
@@ -21,7 +21,7 @@ const ACCURACY_TOLERANCE_PCT: f64 = 0.01;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Severity {
-    /// Mismatch in gameplay data — treat the replay as possibly manipulated.
+    /// Mismatch in gameplay data: treat the replay as possibly manipulated.
     Error,
     /// Suspicious but not by itself proof of tampering.
     Warning,
@@ -63,7 +63,7 @@ pub fn looks_like_the_wrong_map(
         return true;
     }
     // A failed map-id check is direct evidence the loaded chart is not the one
-    // the replay was recorded on — stronger than any heuristic below. Ignoring
+    // the replay was recorded on (stronger than any heuristic below). Ignoring
     // it let a run whose id mismatch is printed two lines above still read as
     // "possibly manipulated" when the timing heuristics happened not to fire.
     let id_mismatch = report.checks.iter().any(|c| {
@@ -78,7 +78,7 @@ pub fn looks_like_the_wrong_map(
     let header_hits = replay_hits.max(0) as u32;
     // A wrong map cannot change the FILE: the number of flagged frames still
     // matches the header it was written with. A header inflated past its own
-    // frames is the opposite — evidence about the replay, not the chart — so
+    // frames is the opposite (evidence about the replay, not the chart), so
     // it must keep reading as inconsistent instead of being explained away.
     if flags != header_hits {
         return false;
@@ -86,7 +86,7 @@ pub fn looks_like_the_wrong_map(
     // With an honest header, a third of the recorded hits finding no note at
     // all, or barely half of them landing, is what a foreign chart looks
     // like. It is also what injected hit flags would look like, which is why
-    // the wording this feeds is "may not match" rather than a verdict — only
+    // the wording this feeds is "may not match" rather than a verdict: only
     // the map hash can tell those apart, and that is the branch above.
     let orphan_heavy = flags > 20 && u64::from(report.orphan_flags) * 3 > u64::from(flags);
     let lost_most = header_hits > 20 && report.derived_hits * 2 < header_hits;
@@ -291,7 +291,7 @@ mod wrong_map_tests {
         assert!(looks_like_the_wrong_map(471, &report, false));
     }
 
-    /// A passing id check with quiet heuristics is NOT the wrong map — this
+    /// A passing id check with quiet heuristics is NOT the wrong map: this
     /// must not fire on an honest run just because an id check exists.
     #[test]
     fn a_passing_id_check_is_not_a_wrong_map() {

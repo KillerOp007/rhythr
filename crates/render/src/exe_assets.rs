@@ -3,8 +3,8 @@
 //! [`crate::BuiltinAssets::load`] reads.
 //!
 //! Legal note: nothing here ships game content. The extraction runs locally
-//! against the user's own installation, at the user's explicit request —
-//! the renderer never redistributes the assets.
+//! against the user's own installation, at the user's explicit request. The
+//! renderer never redistributes the assets.
 //!
 //! Format: the exe embeds .NET managed resources. Their index stores each
 //! entry as a NativeFormat vertex containing the resource name (varint
@@ -25,9 +25,9 @@ const NAME_PREFIX: &[u8] = b"Rhythia.Resources.";
 const MAX_ASSET_BYTES: u64 = 64 << 20;
 /// The real exe has ~600 game entries; a crafted file must not mint more.
 const MAX_ENTRIES: usize = 10_000;
-/// Total extraction budget — the real asset set is ~2 MB.
+/// Total extraction budget (the real asset set is ~2 MB).
 const MAX_TOTAL_BYTES: u64 = 256 << 20;
-/// Colorset lines become heap strings (~7x amplification) — cap the total.
+/// Colorset lines become heap strings (~7x amplification), so cap the total.
 const MAX_COLORSET_LINES: usize = 100_000;
 /// Skin-texture categories under Textures.Game; anything else there is a
 /// scan false positive.
@@ -68,7 +68,7 @@ fn decode_unsigned(data: &[u8], pos: usize) -> Option<(u64, usize)> {
 
 /// Scans the exe for resource-index entries: a varint string length, the
 /// UTF-8 name starting with `Rhythia.Resources.Textures.Game.`, then two
-/// varints (offset, size). The surrounding vertex structure is skipped —
+/// varints (offset, size). The surrounding vertex structure is skipped:
 /// the (name, offset, size) triple is all the extraction needs.
 pub fn scan_entries(exe: &[u8]) -> Vec<Entry> {
     let mut entries = Vec::new();
@@ -131,8 +131,8 @@ pub fn locate_blob_base(exe: &[u8], entries: &[Entry]) -> Option<u64> {
             == Some(SIG)
     };
     // A garbage first entry must not poison calibration: anchor on several
-    // different probes and demand that (almost) every PNG entry agrees —
-    // scan false positives may contribute a few bad offsets.
+    // different probes and demand that (almost) every PNG entry agrees.
+    // Scan false positives may contribute a few bad offsets.
     for probe in pngs.iter().take(8) {
         let mut at = 0usize;
         while let Some(hit) = find(exe, SIG, at) {
@@ -165,7 +165,7 @@ fn route_name(name: &str) -> Option<(&str, &str)> {
         return if file.contains('.') {
             (!file.is_empty()).then_some((category, file))
         } else {
-            // "kfc" + "png": no category segment — the whole rest is the name.
+            // "kfc" + "png": no category segment, so the whole rest is the name.
             Some(("", game))
         };
     }
@@ -206,7 +206,7 @@ pub fn extract_to_dir(exe_path: &Path, out_dir: &Path) -> Result<usize, String> 
         std::fs::read(exe_path).map_err(|e| format!("reading {}: {e}", exe_path.display()))?;
     let entries = scan_entries(&exe);
     if entries.is_empty() {
-        return Err("no game resources found in this file — is it rhythia.exe?".into());
+        return Err("no game resources found in this file (is it rhythia.exe?)".into());
     }
     let base = locate_blob_base(&exe, &entries)
         .ok_or("could not locate the resource data in this exe (unsupported game version?)")?;
@@ -234,7 +234,7 @@ pub fn extract_to_dir(exe_path: &Path, out_dir: &Path) -> Result<usize, String> 
         }
         budget += e.size;
         if budget > MAX_TOTAL_BYTES {
-            return Err("resource index claims implausibly large assets — refusing".into());
+            return Err("resource index claims implausibly large assets, refusing".into());
         }
         let bytes = base
             .checked_add(e.offset)
@@ -261,7 +261,7 @@ pub fn extract_to_dir(exe_path: &Path, out_dir: &Path) -> Result<usize, String> 
             if !colors.is_empty() {
                 let total: usize = colorsets.values().map(Vec::len).sum();
                 if total + colors.len() > MAX_COLORSET_LINES {
-                    return Err("implausibly many colorset entries — refusing".into());
+                    return Err("implausibly many colorset entries, refusing".into());
                 }
                 colorsets.insert(set_name.to_string(), colors);
                 written += 1;

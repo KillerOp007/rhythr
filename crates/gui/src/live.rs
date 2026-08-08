@@ -1,7 +1,7 @@
 //! The live Analyze engine: a dedicated render thread drawing every
 //! displayed frame directly to the Analyze window's surface, paced by
 //! vsync. Time is a virtual clock (`t += dt · speed`), so changing the
-//! playback speed, seeking and stepping are free — there is nothing to
+//! playback speed, seeking and stepping are free: there is nothing to
 //! buffer and nothing to invalidate.
 //!
 //! The webview stays on top of the surface as a transparent layer for
@@ -33,7 +33,7 @@ pub enum LiveCmd {
     },
     /// How long resolved hit-area boxes linger (ms of song time).
     Linger(f64),
-    /// Render the CURRENT clock position to PNG bytes — the overlay
+    /// Render the CURRENT clock position to PNG bytes: the overlay
     /// snapshot wants exactly what the screen shows (skin background,
     /// live resolution), not the preview pipeline's version.
     Still(Sender<Result<Vec<u8>, String>>),
@@ -54,7 +54,7 @@ pub struct LiveHandles {
     pub starting: AtomicBool,
 }
 
-/// Everything the render thread owns — cloned out of the app state once,
+/// Everything the render thread owns, cloned out of the app state once,
 /// so the live loop never touches the shared preview lock.
 pub struct LiveInit {
     pub replay: Replay,
@@ -94,7 +94,7 @@ struct LiveTick {
     fps: f32,
     /// Letterbox rect of the frame inside the window (physical px).
     rect: [f32; 4],
-    /// Render size in frame px — overlay coordinates live in this space.
+    /// Render size in frame px: overlay coordinates live in this space.
     fw: u32,
     fh: u32,
     sides: Vec<TickSide>,
@@ -130,7 +130,7 @@ pub fn spawn(
     running: Arc<AtomicBool>,
 ) {
     std::thread::spawn(move || {
-        // Runs on EVERY exit — early error returns, panics, clean stop.
+        // Runs on EVERY exit: early error returns, panics, clean stop.
         // The closer waits on `running`; a path that forgets to flip it
         // turns every window close into a full watchdog timeout.
         struct DoneGuard {
@@ -178,7 +178,7 @@ pub fn spawn(
         // The value to restore a toggle TO is the skin's real opacity, so it
         // must be read before the hide flags zero it. Reading it afterwards
         // meant a window opened with notes or cursor hidden could only ever
-        // bring them back at 1% — max(0.01) of the zero the hide had already
+        // bring them back at 1%: max(0.01) of the zero the hide had already
         // written.
         let base_cursor_opacity = cfg.cursor_opacity.max(0.01);
         let base_note_opacity = cfg.note_opacity.max(0.01);
@@ -248,7 +248,7 @@ pub fn spawn(
         let _ = app_handle.emit("live-started", ());
 
         'run: loop {
-            // Commands first — they are cheap and must not lag a frame.
+            // Commands first: they are cheap and must not lag a frame.
             loop {
                 match rx.try_recv() {
                     Ok(LiveCmd::Play) => {
@@ -277,7 +277,7 @@ pub fn spawn(
                         cfg.cursor_trail_enabled = !hide_cursor;
                         cfg.note_opacity = if hide_notes { 0.0 } else { base_note_opacity };
                         // Note opacity lives in SceneParams, built once at
-                        // startup — rebuild it or the toggle never lands.
+                        // startup, so rebuild it or the toggle never lands.
                         let mut p = SceneParams::from(&cfg);
                         p.apply_mods(&main_mods);
                         p.apply_speed(replay.speed);
@@ -333,7 +333,7 @@ pub fn spawn(
                     playing = false;
                     let _ = app_handle.emit("live-ended", ());
                 }
-                // Only real frame intervals feed the meter — the first
+                // Only real frame intervals feed the meter: the first
                 // loop pass after unpausing arrives ~0 ms after `last`
                 // was reset and would inject a ~1000 fps spike.
                 if dt >= 2.0 {
@@ -362,9 +362,9 @@ pub fn spawn(
                     break 'run;
                 }
                 match presenter.present_frame(&renderer) {
-                    // Skipped (occluded/outdated): no vsync block happened
-                    // — sleep, or this loop spins a core at full rate
-                    // while the window is minimized.
+                    // Skipped (occluded/outdated): no vsync block happened.
+                    // Sleep, or this loop spins a core at full rate while
+                    // the window is minimized.
                     Ok(false) => std::thread::sleep(std::time::Duration::from_millis(8)),
                     Ok(true) => {}
                     Err(e) => {
@@ -396,7 +396,7 @@ pub fn spawn(
                 std::thread::sleep(std::time::Duration::from_millis(8));
             }
 
-            // Overlay tick at ~half display rate — plenty for the canvas.
+            // Overlay tick at ~half display rate (plenty for the canvas).
             tick_counter += 1;
             let (fw, fh) = renderer.dimensions();
             let (rx0, ry0, rvw, rvh) = presenter.frame_rect(&renderer);
@@ -483,7 +483,7 @@ pub fn spawn(
         }
 
         // Release every window-bound GPU object BEFORE the DoneGuard
-        // signals done — the closer destroys the window the moment
+        // signals done: the closer destroys the window the moment
         // `running` flips.
         drop(presenter);
         drop(renderer);

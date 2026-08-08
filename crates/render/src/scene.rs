@@ -4,7 +4,7 @@
 //!
 //! Coordinate model (world units == cursor units, so the cursor lands on
 //! the note it hits): the game places grid index X∈{0,1,2} at world (X−1),
-//! one cell per world unit. Verified empirically against the test replays —
+//! one cell per world unit. Verified empirically against the test replays:
 //! at hit-flag frames the recorded cursor sits at ~±0.85 for edge cells,
 //! i.e. inside the ±1 note (the note's world half-width covers the gap).
 //!
@@ -21,19 +21,19 @@ use glam::{Mat4, Vec3};
 
 /// World spacing between adjacent grid cells. The game places grid index
 /// X∈{0,1,2} at world (X−1), so one cell == one world unit; outer notes sit
-/// at ±1. (The recorded cursor sits at ~±0.85 on a hit — inside the note,
-/// not at its centre — because of the hitbox size and aim bias.)
+/// at ±1. (The recorded cursor sits at ~±0.85 on a hit, inside the note
+/// rather than at its centre, because of the hitbox size and aim bias.)
 pub const GRID_SPACING: f32 = 1.0;
 
 /// The game clamps the VISIBLE cursor to the field edge minus a fixed
-/// inset (Cursor.gd: `edgec = 0.13125` cells) — the recorded positions go
+/// inset (Cursor.gd: `edgec = 0.13125` cells). The recorded positions go
 /// further out, but the player never sees that. ±1.36875 on a normal
 /// grid; hardrock widens it with the grid (empirically +0.15, i.e. the
 /// margin stays put while the outer cell centres move out). One source
 /// of truth, shared with hit attribution.
 pub const CURSOR_EDGE_INSET: f32 = rhythia_sim::hitreg::CURSOR_EDGE_INSET;
 
-/// Half-width of the game's true hit area — one source of truth, shared
+/// Half-width of the game's true hit area. One source of truth, shared
 /// with hit attribution in the sim crate.
 pub const HITBOX_HALF: f32 = rhythia_sim::hitreg::HITBOX_HALF;
 
@@ -46,7 +46,7 @@ pub struct SceneParams {
     pub fov_y_deg: f32,
     /// Camera distance from the hit plane, in world units. The game keeps
     /// this as a fixed constant chosen so the ±1 grid fills the FOV; the
-    /// exact value is calibrated against real frames (~1.4–2.0).
+    /// exact value is calibrated against real frames (~1.4-2.0).
     pub eye_z: f32,
     /// Note world half-width (baseScale·NoteScale ≈ 0.5·0.9). Meshes are
     /// normalised to ±1, so this is the scale applied to them directly.
@@ -80,7 +80,7 @@ pub struct SceneParams {
     pub grid_scale: f32,
     /// Replay speed already folded into `approach_rate` by [`apply_speed`]
     /// (1.0 until then). Depth thresholds that are real-world constants in
-    /// the game — the HalfGhost fade zone — multiply it back out.
+    /// the game (the HalfGhost fade zone) multiply it back out.
     ///
     /// [`apply_speed`]: SceneParams::apply_speed
     pub speed: f32,
@@ -92,7 +92,7 @@ pub struct SceneParams {
 /// Mesh half-extent (±1) mapped to this many world units at NoteScale 1.0.
 /// The game's own factor: `NoteManager.gd:345` scales the note mesh by
 /// `0.45 * note_size * (note_hitbox_size / 1.14)`, and the hitbox term is
-/// exactly 1 at its 1.140 default — so a note is 0.45 world units at
+/// exactly 1 at its 1.140 default, so a note is 0.45 world units at
 /// NoteScale 1.0, leaving the visible gap between adjacent cells.
 const BASE_NOTE_SCALE: f32 = 0.45;
 
@@ -104,14 +104,14 @@ impl Default for SceneParams {
             // MEASURED against the game rather than read out of it.
             //
             // The source says 3.75: song.tscn parks the Camera at 3.5 and
-            // NoteManager.gd `do_half_lock` — the else-branch at :672, i.e.
-            // everything that is not VR or free-cam — overwrites it every
+            // NoteManager.gd `do_half_lock` (the else-branch at :672, i.e.
+            // everything that is not VR or free-cam) overwrites it every
             // frame. A screenshot of the real game says otherwise, and the
             // screenshot wins: with the same skin config at 2560x1440, its
             // border square measures 876 px. The border plane is 3.04 units
             // (song.tscn PlaneMesh id=30, no scale on the node) and the
             // border texture covers 99.6% of it, so at 3.75 the plane could
-            // only project to 834 px — the visible border cannot be larger
+            // only project to 834 px. The visible border cannot be larger
             // than the plane it is painted on. Solving the same measurement
             // against our own render, which cancels the texture and the fov,
             // gives 3.53. 3.5 is the game's own scene value and sits 0.9%
@@ -121,7 +121,7 @@ impl Default for SceneParams {
             // would put the plane at 962 px, 9% above what was measured.
             eye_z: 3.5,
             note_radius: BASE_NOTE_SCALE,
-            // Rhythia.gd:563/567 — the game's own note travel settings.
+            // The game's own note travel settings (Rhythia.gd:563/567).
             spawn_depth: 40.0,
             approach_rate: 40.0,
             fade_length: 0.5,
@@ -154,7 +154,7 @@ impl From<&crate::config::SkinConfig> for SceneParams {
             // give `hlpower = 0.1 * parallax` and `hlm = 0.25`, and :541
             // moves the camera by `centeroff * hlpower * hlm`. `centeroff`
             // is `cursorpos - (1,-1,0)`, i.e. the cursor in exactly the
-            // world units we use — so one config unit is 0.025.
+            // world units we use, so one config unit is 0.025.
             parallax: c.parallax * 0.025,
             spin: c.spin_camera,
             note_opacity: c.note_opacity,
@@ -195,7 +195,7 @@ impl SceneParams {
     /// too, but must keep the landscape camera it always had.
     pub fn view_proj(&self, aspect: f32, portrait: bool, cursor: (f32, f32)) -> Mat4 {
         // Portrait frames keep the HORIZONTAL field of view of the usual
-        // landscape render (fov_y is widened so fov_x stays put) — the
+        // landscape render (fov_y is widened so fov_x stays put). The
         // square playfield then fills the width instead of vanishing.
         let fov_y = if portrait && aspect < 1.0 {
             2.0 * ((self.fov_y_deg.to_radians() * 0.5).tan() / aspect).atan()
@@ -204,14 +204,14 @@ impl SceneParams {
         };
         let proj = Mat4::perspective_rh(fov_y, aspect, self.near, self.far);
         let view = if self.spin {
-            // SpinCamera: the camera rotates to keep the cursor dead centre —
-            // the world pans around it like looking through a VR headset.
+            // SpinCamera: the camera rotates to keep the cursor dead centre.
+            // The world pans around it like looking through a VR headset.
             let eye = Vec3::new(0.0, 0.0, self.eye_z);
             let target = Vec3::new(cursor.0, cursor.1, 0.0);
             Mat4::look_at_rh(eye, target, Vec3::Y)
         } else {
             // Camera sits in front of the hit plane looking toward −z and
-            // slides TOWARD the cursor as the player aims — the game
+            // slides TOWARD the cursor as the player aims: the game
             // translates the camera without re-aiming it
             // (NoteManager.gd:539-541 sets only `cam.transform.origin`),
             // which is what an unrotated look-at from the swayed position
@@ -230,8 +230,8 @@ impl SceneParams {
     /// worth of notes covers speed× more song time. The renderer works in
     /// song time and then compresses by the speed, so the approach rate
     /// must shrink by the same factor for the on-screen approach DURATION
-    /// to match the game's. (User-verified: identical play, same skin —
-    /// without this the notes flew in 45% faster than in game at 1.45x.)
+    /// to match the game's. (User-verified: identical play, same skin.
+    /// Without this the notes flew in 45% faster than in game at 1.45x.)
     pub fn apply_speed(&mut self, speed: f32) {
         let s = speed.clamp(0.25, 3.0);
         self.approach_rate /= s;
@@ -247,7 +247,7 @@ impl SceneParams {
     /// health bar spanning it measures 773px at 1440p ↔ 1.3395 world units).
     pub fn playfield_half(&self) -> f32 {
         // The game's border is a fixed 3.04-unit plane (song.tscn, Outer
-        // PlaneMesh) around the 3.0 grid — half 1.52, NOT a function of
+        // PlaneMesh) around the 3.0 grid: half 1.52, NOT a function of
         // the note size. Edge notes (edge 1.45) stay inside with 0.07 of
         // air, exactly as on screen in the real client.
         self.grid_scale + 0.52
@@ -265,7 +265,7 @@ impl SceneParams {
         (c.0.clamp(-b, b), c.1.clamp(-b, b))
     }
 
-    /// Model matrix for a note's HIT AREA — the fixed square the game
+    /// Model matrix for a note's HIT AREA: the fixed square the game
     /// actually tests the cursor against, larger than the visual note.
     pub fn hitbox_model(&self, gx: f32, gy: f32, depth: f32) -> Mat4 {
         let (wx, wy) = grid_to_world(gx, gy);
@@ -302,10 +302,10 @@ impl SceneParams {
     /// `NoteManager.gd` fade model (MIT) the Steam client inherited:
     ///
     /// * fade-in over the first `FadeLength` of the spawn distance, `^1.3`;
-    /// * with HalfGhost, a fade-out over the same window SS+ uses — 12/50·AR
+    /// * with HalfGhost, a fade-out over the same window SS+ uses (12/50·AR
     ///   to 3/50·AR from the plane, a fixed 240 ms → 60 ms before the hit
     ///   because both distances scale with AR and the note travels AR
-    ///   units/second;
+    ///   units/second);
     /// * `alpha = min(fade_in, fade_out) · NoteOpacity`.
     ///
     /// The fade-out floor and curvature are **calibrated to the player's own
@@ -364,7 +364,7 @@ impl SceneParams {
 ///
 /// This was 0.26, fitted to a footage reading of 72/255 (α≈0.28) at 70 ms
 /// out. The source formula reaches 0.28 at ~90 ms instead, so the two
-/// disagree by about 20 ms of timing rather than by shape — most likely the
+/// disagree by about 20 ms of timing rather than by shape: most likely the
 /// timestamp or the approach rate assumed for that measurement. The source
 /// wins here because it is unambiguous, and it is the same reasoning that
 /// corrected the camera, the parallax and the colorset; if fresh half-ghost
@@ -382,7 +382,7 @@ mod tests {
 
     /// The bug this guards: the visibility mods were resolved out of the
     /// replay and understood by the fade model, and the two ends were never
-    /// connected — thirteen call sites each copied `grid_scale` by hand and
+    /// connected: thirteen call sites each copied `grid_scale` by hand and
     /// nothing else, so a run played half blind rendered as a comfortable
     /// read of itself. Adding a field to ResolvedMods without carrying it
     /// here must fail loudly rather than quietly ship.
@@ -390,7 +390,7 @@ mod tests {
     fn every_resolved_mod_reaches_the_scene() {
         // Written out in full ON PURPOSE, no `..none()`: struct-update syntax
         // is not exhaustive, so a future field would default in here and this
-        // test would keep passing while the new mod never reached the scene —
+        // test would keep passing while the new mod never reached the scene,
         // which is the exact bug it exists to catch.
         let mods = crate::mods::ResolvedMods {
             grid_scale: 1.4,
@@ -436,7 +436,7 @@ mod tests {
     #[test]
     fn all_grid_notes_are_inside_the_frame_at_the_hit_plane() {
         // Every cell of the 3×3 grid must project inside the frustum on the
-        // hit plane — the playfield fits the camera.
+        // hit plane: the playfield fits the camera.
         let p = SceneParams::default();
         let vp = p.view_proj(16.0 / 9.0, false, (0.0, 0.0));
         for gy in 0..3 {
@@ -454,8 +454,8 @@ mod tests {
 
     #[test]
     fn farther_notes_project_smaller() {
-        // A fixed-size note should subtend less screen space as depth grows
-        // — the essence of the perspective look.
+        // A fixed-size note should subtend less screen space as depth grows,
+        // the essence of the perspective look.
         let p = SceneParams::default();
         let vp = p.view_proj(1.0, false, (0.0, 0.0));
         let screen_half = |depth: f32| {

@@ -1,7 +1,7 @@
 //! Full forensics for one moment of a replay: every note in a time
 //! window with its verdict, the deciding flag frame, the RAW and the
-//! game-clamped cursor, and the covers test — for checking exactly what
-//! the analyzer shows against the recorded ground truth.
+//! game-clamped cursor, and the covers test. Use it to check exactly
+//! what the analyzer shows against the recorded ground truth.
 //! Usage: moment_probe <replay.rhr> <map> <from_ms> <to_ms>
 
 fn main() {

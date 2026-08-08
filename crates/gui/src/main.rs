@@ -710,19 +710,33 @@ fn apply_overrides(cfg: &mut SkinConfig, overrides: &BTreeMap<String, bool>) {
 
 // ----------------------------------------------------------------- helpers
 
+/// Every command's error passes through here on its way to the window, which
+/// makes it the one place that can guarantee no failure reaches a user without
+/// a code. The code is what a bug report can be searched for; the sentence in
+/// front of it is for the person reading it. See [`rhythia_errcode`].
 fn err_str(e: impl std::fmt::Display) -> String {
-    e.to_string()
+    rhythia_errcode::stamp(&e.to_string())
+}
+
+/// Anything that went wrong while talking to rhythia.com. Coded inside the
+/// network area, so "connection refused" cannot be classified as some
+/// unrelated failure that happens to use the same words.
+fn net_err(msg: &str) -> String {
+    rhythia_errcode::stamp_in(rhythia_errcode::Area::Network, msg)
 }
 
 /// A GPU that cannot be brought up reaches the user as one line of text, so
 /// that line has to carry the next step: which layer failed, why it usually
 /// fails, and the two escapes that exist (a driver the backend can use, or a
 /// different backend). Errors that are not GPU bring-up keep their own text.
+///
+/// Everything out of here is stamped with a code, since these are the
+/// failures people report rather than the ones they fix themselves.
 fn gpu_err(e: &rhythia_render::Error) -> String {
-    match e {
+    let msg = match e {
         rhythia_render::Error::NoAdapter => "no usable GPU: no graphics adapter accepted the \
              renderer. rhythr draws through Vulkan (Linux, Windows), DX12 (Windows) or Metal \
-             (macOS) — on Linux a driver without Vulkan support is the usual cause. Update the \
+             (macOS). On Linux a driver without Vulkan support is the usual cause. Update the \
              graphics driver, or start rhythr with WGPU_BACKEND=gl to force the OpenGL backend."
             .to_string(),
         rhythia_render::Error::Device(msg) => format!(
@@ -731,7 +745,8 @@ fn gpu_err(e: &rhythia_render::Error) -> String {
              WGPU_BACKEND=gl, is the next thing to try."
         ),
         other => other.to_string(),
-    }
+    };
+    rhythia_errcode::stamp(&msg)
 }
 
 /// Placement/looks of an optional overlay meter (normalised position).
@@ -1121,25 +1136,35 @@ fn ffmpeg_version(ffmpeg: &str) -> Option<String> {
 /// `C:\Users\<their real name>\`, and the report is meant to be sent to a
 /// stranger for help. The path stays useful for diagnosis (what matters is
 /// `~\Videos\clip.mp4`, not who owns the folder) and the name is gone.
+/// Every occurrence is replaced, not just a leading one: error messages carry
+/// their paths in the middle of a sentence, and those are exactly the lines
+/// worth sending.
 fn redact_path(p: &str) -> String {
     let Some(home) = dirs::home_dir() else {
         return p.to_string();
     };
-    let home = home.to_string_lossy();
+    let home = home.to_string_lossy().to_string();
     if home.is_empty() {
         return p.to_string();
     }
     // Windows paths compare case-insensitively; doing it on both is harmless
-    // and catches a drive letter written differently.
-    if p.to_lowercase().starts_with(&home.to_lowercase()) {
-        let sep = if home.contains('\\') { "\\" } else { "/" };
-        let rest = p[home.len()..].trim_start_matches(['/', '\\']);
-        if rest.is_empty() {
-            return "~".to_string();
-        }
-        return format!("~{sep}{rest}");
+    // and catches a drive letter written differently. ASCII-only folding keeps
+    // byte offsets valid, which the slicing below depends on.
+    let needle = home.to_ascii_lowercase();
+    let hay = p.to_ascii_lowercase();
+    let mut out = String::with_capacity(p.len());
+    let mut at = 0;
+    while let Some(rel) = hay[at..].find(&needle) {
+        let start = at + rel;
+        out.push_str(&p[at..start]);
+        out.push('~');
+        at = start + needle.len();
     }
-    p.to_string()
+    if at == 0 {
+        return p.to_string();
+    }
+    out.push_str(&p[at..]);
+    out
 }
 
 /// A plain-text description of this build and what it is working with, for
@@ -1159,6 +1184,25 @@ fn diagnostics_report(app: &App) -> String {
         "cpu: {} logical cores",
         std::thread::available_parallelism().map_or(0, |n| n.get())
     );
+
+    // First, because it is the answer often enough to save reading the rest.
+    // Each code is one row in docs/ERROR-CODES.md, which is where the cause
+    // per operating system lives.
+    let errors = rhythia_errcode::recent();
+    let _ = writeln!(s, "\nerrors this session");
+    if errors.is_empty() {
+        let _ = writeln!(s, "  none");
+    } else {
+        for e in errors {
+            let times = if e.count > 1 {
+                format!(" (x{})", e.count)
+            } else {
+                String::new()
+            };
+            let _ = writeln!(s, "  {}{}: {}", e.code, times, redact_path(&e.message));
+        }
+    }
+
     // The single most common cause of a render problem, and it used to be the
     // one fact a bug report never carried.
     let _ = writeln!(s, "\ngpu");
@@ -1765,16 +1809,17 @@ async fn download_map(
             .set("User-Agent", USER_AGENT)
             .send_json(serde_json::json!({"session": "", "id": map_id, "limit": 1}))
             .map_err(|e| match e {
-                ureq::Error::Status(429, _) => {
-                    "rhythia.com is rate-limiting requests — please wait a moment and press Download".to_string()
-                }
-                ureq::Error::Status(code, _) if code >= 500 => {
-                    format!("rhythia.com is unavailable right now (HTTP {code}) — try again later")
-                }
-                e => format!("map lookup failed: {e}"),
+                ureq::Error::Status(429, _) => net_err(
+                    "rhythia.com is rate-limiting requests, please wait a moment and press \
+                     Download again",
+                ),
+                ureq::Error::Status(code, _) if code >= 500 => net_err(&format!(
+                    "rhythia.com is unavailable right now (HTTP {code}), try again later"
+                )),
+                e => net_err(&format!("map lookup failed: {e}")),
             })?
             .into_json()
-            .map_err(|e| format!("map lookup: bad response: {e}"))?;
+            .map_err(|e| net_err(&format!("map lookup: bad response: {e}")))?;
         let beatmap = &resp["beatmap"];
         let file_url = beatmap["beatmapFile"]
             .as_str()
@@ -1789,14 +1834,14 @@ async fn download_map(
         http.get(&file_url)
             .set("User-Agent", USER_AGENT)
             .call()
-            .map_err(|e| format!("map download failed: {e}"))?
+            .map_err(|e| net_err(&format!("map download failed: {e}")))?
             .into_reader()
             .take(MAX_MAP_BYTES)
             .read_to_end(&mut bytes)
-            .map_err(|e| format!("map download failed: {e}"))?;
+            .map_err(|e| net_err(&format!("map download failed: {e}")))?;
         let map = rhythia_formats::sspm::parse(&bytes)
             .or_else(|_| Map::from_rhm(&bytes))
-            .map_err(|e| format!("downloaded map does not parse: {e}"))?;
+            .map_err(|e| net_err(&format!("downloaded map does not parse: {e}")))?;
 
         let dir = maps_cache_dir();
         std::fs::create_dir_all(&dir).map_err(err_str)?;
@@ -1832,7 +1877,10 @@ async fn download_map(
             normalize_time_bases(&mut inner);
             invalidate_preview(&mut inner);
         }
-        Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
+        Ok(assemble_status(
+            &inner,
+            app.rendering.load(Ordering::SeqCst),
+        ))
     })
     .await
     .map_err(err_str)?
@@ -4206,7 +4254,13 @@ fn start_render(
                     .map(|s| s.to_string())
                     .or_else(|| panic.downcast_ref::<String>().cloned())
                     .unwrap_or_else(|| "render thread panicked".into());
-                let _ = app_handle.emit("render-error", format!("renderer crashed: {msg}"));
+                let _ = app_handle.emit(
+                    "render-error",
+                    rhythia_errcode::stamp_in(
+                        rhythia_errcode::Area::App,
+                        &format!("renderer crashed: {msg}"),
+                    ),
+                );
             }
         }
     });
@@ -5239,5 +5293,38 @@ mod settings_migration_tests {
         let mut s: Settings = serde_json::from_str("{}").expect("parses");
         s.adopt_legacy_quality();
         assert_eq!(s.quality, rhythia_render::quality::DEFAULT);
+    }
+}
+
+#[cfg(test)]
+mod diagnostics_tests {
+    use super::redact_path;
+
+    /// The report is written to be sent to a stranger, and on Windows every
+    /// absolute path starts with the account name. A path that only shortens
+    /// when it happens to start the line would leak it from every error
+    /// message, which is precisely the part worth sending.
+    #[test]
+    fn the_home_folder_is_shortened_wherever_it_appears() {
+        let Some(home) = dirs::home_dir() else {
+            return; // No home on this host, nothing to redact against.
+        };
+        let home = home.to_string_lossy().to_string();
+        let sep = if home.contains('\\') { '\\' } else { '/' };
+
+        assert_eq!(redact_path(&home), "~");
+        assert_eq!(
+            redact_path(&format!("{home}{sep}Videos{sep}clip.mp4")),
+            format!("~{sep}Videos{sep}clip.mp4")
+        );
+        let mid = format!("could not write {home}{sep}out.mp4: disk full");
+        assert_eq!(
+            redact_path(&mid),
+            format!("could not write ~{sep}out.mp4: disk full")
+        );
+        assert!(!redact_path(&mid).contains(&home));
+
+        // Paths outside the home folder are nobody's name and stay readable.
+        assert_eq!(redact_path("/usr/bin/ffmpeg"), "/usr/bin/ffmpeg");
     }
 }
