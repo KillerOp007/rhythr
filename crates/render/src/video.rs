@@ -1030,23 +1030,39 @@ impl FrameSink {
     /// Hands one whole frame over, in whatever shape this transport wants.
     ///
     /// The two want opposite things, which is not obvious and took a
-    /// measurement to find. On 4K NV12 frames into a real ffmpeg:
+    /// measurement to find, and then a second one on other hardware to get
+    /// right. A pipe wants small writes: one big write fills it and then
+    /// waits for the reader to drain it, so the two processes take turns.
+    /// 16 KiB pieces beat a whole frame there, 6.2 ms against 8.6.
+    ///
+    /// A socket has no such ceiling, and there the same reasoning is simply
+    /// wrong. Measured across four output sizes at quality 100 on an
+    /// RTX 4070 SUPER with a Ryzen 7 5800X3D, frames per second:
     ///
     /// ```text
-    ///            whole    256 KiB   64 KiB   16 KiB    4 KiB
-    ///   pipe      8.6 ms      —      7.5 ms   6.2 ms   7.9 ms
-    ///   socket    4.25 ms   4.46 ms  4.83 ms  6.14 ms     —
+    ///              pipe   16 KiB   64 KiB  256 KiB    1 MiB   whole
+    ///   4K/240      170      200      245      245      245     220
+    ///   1440p/240   480      440      530      530      530     500
+    ///   1080p/240   930      710      930      930      900     900
+    ///   720p/240   1700     1300     1800     1900     1900    1900
     /// ```
     ///
-    /// A single large write into a pipe fills it and then waits for the
-    /// reader to drain enough of it, so the two processes take turns; small
-    /// writes come back as soon as there is room. A socket has no such
-    /// ceiling and every extra write is pure syscall, so it wants the frame
-    /// in one go. Chunking both — which this did at first — left a third of
-    /// the socket's advantage on the floor.
+    /// 256 KiB is the only value that is best or tied-best at every size, so
+    /// it is the default. 16 KiB is the worst at every size and is SLOWER
+    /// THAN NOT USING THE SOCKET AT ALL at three of the four — which is worth
+    /// spelling out, because a single earlier reading pointed at 16 KiB and
+    /// very nearly became the default on the strength of it.
     ///
-    /// Enlarging the socket's send buffer was measured too and does nothing:
-    /// 5.02 ms by default against 4.99 at 1 MiB and 5.27 at 4 MiB.
+    /// What the socket is worth over the pipe depends entirely on how much
+    /// there is to move: +44% at 4K, +10% at 1440p, +12% at 720p, and nothing
+    /// at 1080p. Enlarging the socket's send buffer was measured too and does
+    /// nothing.
+    ///
+    /// That hardware is near the top of what a consumer machine does, which
+    /// is the useful end to have measured: it is where the transport is a
+    /// large enough share of the frame to matter at all. On slower hardware
+    /// the encoder dominates and the choice stops mattering, so a value that
+    /// wins here and is harmless there is the right default everywhere.
     fn write_frame(&mut self, frame: &[u8]) -> std::io::Result<()> {
         use std::io::Write as _;
         match self {

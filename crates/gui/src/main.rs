@@ -2317,7 +2317,15 @@ fn set_output(state: tauri::State<'_, App>, update: OutputUpdate) -> Result<Stat
         s.tcp_feed = v;
     }
     if let Some(v) = update.socket_chunk_kib {
-        s.socket_chunk_kib = v.min(4096);
+        // Anything under 64 KiB measured worse than not using the socket at
+        // all on three of four output sizes, so it is not offered and not
+        // accepted from a settings file either. 0 stays valid: that is the
+        // whole frame in one write, which is merely unremarkable.
+        s.socket_chunk_kib = match v {
+            0 => 0,
+            v if v < 64 => 256,
+            v => v.min(4096),
+        };
     }
     if let Some(v) = update.dry_run {
         s.dry_run = v;
