@@ -5435,7 +5435,7 @@ mod settings_migration_tests {
 
 #[cfg(test)]
 mod diagnostics_tests {
-    use super::{diagnostics_report, redact_path, App, Shared};
+    use super::{diagnostics_report, err_str, redact_path, App, Shared};
     use std::sync::Arc;
 
     /// The report exists to be sent to a stranger, so the test that matters
@@ -5461,6 +5461,18 @@ mod diagnostics_tests {
         ] {
             assert!(text.contains(section), "no {section:?} section:\n{text}");
         }
+
+        // The whole chain, end to end: a failure anywhere in the app goes
+        // through err_str, gets a code, and has to come back out at the top
+        // of the report. Each half of that has its own test; this is the one
+        // that fails if they stop being connected.
+        let stamped = err_str("Error opening output ~/out.mp4: No space left on device");
+        assert!(stamped.contains("[RH-OUT-302-"), "not stamped: {stamped}");
+        let text = diagnostics_report(&app);
+        assert!(
+            text.contains("RH-OUT-302-") && text.contains("No space left on device"),
+            "the recorded failure is missing from the report:\n{text}"
+        );
 
         if let Some(home) = dirs::home_dir() {
             let home = home.to_string_lossy().to_string();
