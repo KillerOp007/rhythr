@@ -306,12 +306,19 @@
             <span class="sub">Sends frames to the encoder over a local connection instead of a pipe. Worth up to a third of the render time on a fast graphics card, nothing on a slow one. Checked before it is used and quietly skipped if your ffmpeg cannot do it.</span>
           </label>
           <div class="field">
-            <span>Frame transport</span>
+            <span>Write size</span>
             <div class="row">
+              <select id="set-socket-chunk"
+                      title="How much of each frame is handed over per write. 256 KiB was at or near the fastest at every output size measured">
+                <option value="64">64 KiB</option>
+                <option value="256">256 KiB (recommended)</option>
+                <option value="1024">1 MiB</option>
+                <option value="0">Whole frame</option>
+              </select>
               <button class="btn small" id="btn-bench-transport"
                       title="Try every way of handing frames to the encoder and keep the fastest one for this machine">Measure fastest</button>
             </div>
-            <span class="sub" id="bench-note">rhythr picks a sensible default. Measuring takes about ten seconds and keeps the result, including across updates. It measures the transport alone (nothing rendered, nothing encoded), so the number is far above real render speed, and it only changes the setting when something is faster by more than the measurement can be wrong by.</span>
+            <span class="sub" id="bench-note">Pick one yourself, or let rhythr measure. Measuring takes about ten seconds and keeps its result, including across updates. It measures the transport alone (nothing rendered, nothing encoded), so its number is far above real render speed, and it only changes your choice when something is faster by more than the measurement can be wrong by.</span>
           </div>
           <div class="field">
             <span>Diagnostics</span>

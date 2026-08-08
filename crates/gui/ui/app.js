@@ -715,6 +715,8 @@ function renderOutputTab() {
   $("set-quality").value = String(s.quality);
   paintQuality();
   $("set-tcpfeed").checked = !!s.tcp_feed;
+  $("set-socket-chunk").value = String(s.socket_chunk_kib);
+  syncTransportControls();
   if (s.transport_note) $("bench-note").textContent = s.transport_note;
   $("set-encoder").value = s.encoder;
   $("set-results").value = String(Math.round(s.results_secs));
@@ -2209,8 +2211,19 @@ function initControls() {
     pushOutput({ fps });
   });
   $("set-preset").addEventListener("change", () => pushOutput({ preset: $("set-preset").value }));
-  $("set-tcpfeed").addEventListener("change", () =>
-    pushOutput({ tcp_feed: $("set-tcpfeed").checked }));
+  $("set-tcpfeed").addEventListener("change", () => {
+    pushOutput({ tcp_feed: $("set-tcpfeed").checked });
+    syncTransportControls();
+  });
+  // Picking a size by hand is back next to the button: the measurement cannot
+  // separate the sizes on a machine where the transport is already faster
+  // than the render, so somebody who knows their machine should be able to
+  // just say so.
+  $("set-socket-chunk").addEventListener("change", () => {
+    pushOutput({ socket_chunk_kib: Number($("set-socket-chunk").value) });
+    $("bench-note").textContent =
+      `Set by hand: ${$("set-socket-chunk").selectedOptions[0].textContent}. Measure fastest overwrites this.`;
+  });
   $("btn-bench-transport").addEventListener("click", async () => {
     const btn = $("btn-bench-transport");
     const note = $("bench-note");
@@ -2390,6 +2403,17 @@ function initControls() {
 /// update.
 function updateRenderReady() {
   updateRenderButton();
+}
+
+// The write size only means anything while frames go over a connection: a
+// pipe is fed in 16 KiB pieces because that is what a pipe wants, and that is
+// not a choice. Greying it out says so without hiding it.
+function syncTransportControls() {
+  const on = $("set-tcpfeed").checked;
+  $("set-socket-chunk").disabled = !on;
+  $("set-socket-chunk").title = on
+    ? "How much of each frame is handed over per write. 256 KiB was at or near the fastest at every output size measured"
+    : "Only applies when frames go over a local connection";
 }
 
 // Higher is better on this slider: that inversion is the whole point of it,
