@@ -78,6 +78,22 @@ once.
     makepkg --printsrcinfo > .SRCINFO
     ```
 
+    On a machine without the Arch tools, write the two sha256 values by hand
+    (`sha256sum` of the published .deb and of LICENSE at the tag) and edit
+    `.SRCINFO` to match: it is a flat listing of the same fields.
+
+    Then push it, which is a separate git repository:
+
+    ```
+    scripts/push-aur.sh
+    ```
+
+    That script verifies the published .deb against the checksum in the
+    PKGBUILD before it pushes, and it stops with a plain message when the AUR
+    is in maintenance (its web interface and RPC stay up while every git
+    command is refused, so a raw `git push` just says "could not read from
+    remote repository").
+
 11. **Verify one artefact per format actually contains the licensing.** The deb
     and rpm should have `/usr/share/doc/rhythr/copyright`; the installer should
     show a license page; all four should carry `LICENSE.txt`,
