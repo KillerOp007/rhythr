@@ -246,6 +246,9 @@ one, because the old one wrote several times what an upload needs.
   analyze window's overlay and playback settings, are remembered; deleting a
   preset and resetting the HUD ask first; `settings.json` is written
   atomically and a broken one is kept instead of silently replaced.
+- **The hit-sound volume slider works over its whole range.** Anything above
+  100% was flattened back to 100%, so the top third of the control did
+  nothing; it now boosts up to 150% the way the music slider always has.
 
 ### Added
 
