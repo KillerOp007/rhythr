@@ -445,6 +445,13 @@ fn main() -> ExitCode {
 fn run() -> anyhow::Result<bool> {
     match Cli::parse().command {
         Command::BenchTransport { width, height, ffmpeg } => {
+            // Distinguish "ffmpeg cannot run" from "every transport failed":
+            // without this the whole table printed "failed" and the command
+            // still exited 0, so a script could not tell a broken ffmpeg from
+            // a measurement.
+            if !rhythia_render::video::ffmpeg_runs(&ffmpeg) {
+                anyhow::bail!("ffmpeg could not be run ({ffmpeg}); nothing to measure");
+            }
             eprintln!("measuring at {width}x{height} (a few seconds)…");
             let b = rhythia_render::transport::benchmark(&ffmpeg, width, height);
             for m in &b.results {
@@ -455,7 +462,8 @@ fn run() -> anyhow::Result<bool> {
             }
             println!();
             println!("=> {}", b.summary());
-            Ok(true)
+            // Non-zero exit if nothing could actually be measured.
+            Ok(b.best.is_some())
         }
         Command::Info { replay, json } => {
             let r = Replay::from_path(&replay)
@@ -822,11 +830,20 @@ fn run() -> anyhow::Result<bool> {
             .context("rendering video")?;
             eprintln!();
             eprintln!("  {}", stats.summary());
-            println!(
-                "done in {:.1}s -> {}",
-                start_t.elapsed().as_secs_f64(),
-                out.display()
-            );
+            // --dry-run encodes nothing and writes no file, so it must not
+            // claim "done -> <path>" for a path it never created.
+            if dry_run {
+                println!(
+                    "measured in {:.1}s (diagnostic run — no file written)",
+                    start_t.elapsed().as_secs_f64()
+                );
+            } else {
+                println!(
+                    "done in {:.1}s -> {}",
+                    start_t.elapsed().as_secs_f64(),
+                    out.display()
+                );
+            }
             Ok(true)
         }
     }

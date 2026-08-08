@@ -33,10 +33,14 @@ podman run --rm \
     -e TAURI_SIGNING_PRIVATE_KEY_PASSWORD \
     -w /work/crates/gui \
     "$IMG" bash -ec '
-        # Native packages first (system ffmpeg via dependency/docs) …
+        # Native packages first: deb and rpm declare ffmpeg as a dependency,
+        # so they carry none themselves (no ffmpeg in their bundle.*.files).
         cargo tauri build --bundles deb,rpm
-        # … then the AppImage with the bundled ffmpeg overlaid in.
-        cargo tauri build --bundles appimage --config tauri.appimage.conf.json
+        # Then the AppImage, which bundles its own ffmpeg via
+        # bundle.linux.appimage.files in tauri.conf.json — no overlay config,
+        # that file was deleted (it was named after a bundle format, which
+        # Tauri never reads).
+        cargo tauri build --bundles appimage
     '
 
 echo
