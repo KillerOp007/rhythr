@@ -232,7 +232,11 @@ struct Kinematics {
 
 fn kinematics(replay: &Replay) -> Kinematics {
     let f = &replay.frames;
-    let speed = if replay.speed > 0.0 { replay.speed as f64 } else { 1.0 };
+    let speed = if replay.speed > 0.0 {
+        replay.speed as f64
+    } else {
+        1.0
+    };
     let n = f.len().saturating_sub(1);
     let mut seg_dt = Vec::with_capacity(n);
     let mut seg_dist = Vec::with_capacity(n);
@@ -268,7 +272,13 @@ fn kinematics(replay: &Replay) -> Kinematics {
         smooth_t.push(f[i + 1].ms);
         smooth_v.push(if t > 0.0 { d / t } else { 0.0 });
     }
-    Kinematics { seg_dt, seg_dist, seg_v, smooth_t, smooth_v }
+    Kinematics {
+        seg_dt,
+        seg_dist,
+        seg_v,
+        smooth_t,
+        smooth_v,
+    }
 }
 
 fn cursor_at(frames: &[rhythia_formats::rhr::Frame], t: f64) -> (f32, f32) {
@@ -292,7 +302,11 @@ fn cursor_at(frames: &[rhythia_formats::rhr::Frame], t: f64) -> (f32, f32) {
 }
 
 fn finite(v: f64) -> f64 {
-    if v.is_finite() { v } else { 0.0 }
+    if v.is_finite() {
+        v
+    } else {
+        0.0
+    }
 }
 
 fn downsample(t: &[f64], v: &[f64]) -> Series {
@@ -321,7 +335,11 @@ fn downsample(t: &[f64], v: &[f64]) -> Series {
 }
 
 fn mean(v: &[f64]) -> f64 {
-    if v.is_empty() { 0.0 } else { v.iter().sum::<f64>() / v.len() as f64 }
+    if v.is_empty() {
+        0.0
+    } else {
+        v.iter().sum::<f64>() / v.len() as f64
+    }
 }
 
 fn std_dev(v: &[f64]) -> f64 {
@@ -344,7 +362,11 @@ fn percentile(sorted: &[f64], p: f64) -> f64 {
 /// pass the map from `mods::map_for_replay`).
 pub fn analyze(map: &Map, replay: &Replay) -> Analysis {
     let f = &replay.frames;
-    let speed = if replay.speed > 0.0 { replay.speed as f64 } else { 1.0 };
+    let speed = if replay.speed > 0.0 {
+        replay.speed as f64
+    } else {
+        1.0
+    };
     let kin = kinematics(replay);
 
     // ---- judgement base (same pipeline as the HUD meters).
@@ -471,10 +493,20 @@ pub fn analyze(map: &Map, replay: &Replay) -> Analysis {
         }
     }
     let cursor = CursorStats {
-        avg_speed: finite(if wall_time > 0.0 { total_path / wall_time } else { 0.0 }),
+        avg_speed: finite(if wall_time > 0.0 {
+            total_path / wall_time
+        } else {
+            0.0
+        }),
         p95_speed: finite(percentile(&sorted_v, 0.95)),
-        max_speed: Extremum { v: finite(max_v), t: max_vt },
-        max_accel: Extremum { v: finite(max_a), t: max_at },
+        max_speed: Extremum {
+            v: finite(max_v),
+            t: max_vt,
+        },
+        max_accel: Extremum {
+            v: finite(max_a),
+            t: max_at,
+        },
         total_path_cells: finite(total_path),
         optimal_path_cells: finite(optimal_path),
         efficiency_pct: finite(if total_path > 0.0 {
@@ -482,7 +514,11 @@ pub fn analyze(map: &Map, replay: &Replay) -> Analysis {
         } else {
             0.0
         }),
-        moving_pct: finite(if wall_time > 0.0 { moving_time / wall_time * 100.0 } else { 0.0 }),
+        moving_pct: finite(if wall_time > 0.0 {
+            moving_time / wall_time * 100.0
+        } else {
+            0.0
+        }),
     };
 
     // ---- overshoot: after a hit at the end of a real approach, does the
@@ -492,7 +528,9 @@ pub fn analyze(map: &Map, replay: &Replay) -> Analysis {
     let mut over_worst: Option<Extremum> = None;
     let mut over_samples = 0u32;
     for na in &notes {
-        let (Some(h), Some(_)) = (na.hit_ms, na.dist) else { continue };
+        let (Some(h), Some(_)) = (na.hit_ms, na.dist) else {
+            continue;
+        };
         let (p0x, p0y) = cursor_at(f, h - 60.0);
         let (p1x, p1y) = cursor_at(f, h);
         let (dirx, diry) = ((p1x - p0x) as f64, (p1y - p0y) as f64);
@@ -512,7 +550,10 @@ pub fn analyze(map: &Map, replay: &Replay) -> Analysis {
             over_n += 1;
             over_sum += worst;
             if over_worst.as_ref().is_none_or(|w| worst > w.v) {
-                over_worst = Some(Extremum { v: finite(worst), t: h });
+                over_worst = Some(Extremum {
+                    v: finite(worst),
+                    t: h,
+                });
             }
         }
     }
@@ -522,7 +563,11 @@ pub fn analyze(map: &Map, replay: &Replay) -> Analysis {
         } else {
             0.0
         }),
-        avg_cells: finite(if over_n > 0 { over_sum / over_n as f64 } else { 0.0 }),
+        avg_cells: finite(if over_n > 0 {
+            over_sum / over_n as f64
+        } else {
+            0.0
+        }),
         worst: over_worst,
         samples: over_samples,
     };
@@ -537,7 +582,11 @@ pub fn analyze(map: &Map, replay: &Replay) -> Analysis {
     } else {
         let dx = offs.iter().map(|o| o.0).sum::<f64>() / offs.len() as f64;
         let dy = offs.iter().map(|o| o.1).sum::<f64>() / offs.len() as f64;
-        DirectionBias { dx: finite(dx), dy: finite(dy), magnitude: finite((dx * dx + dy * dy).sqrt()) }
+        DirectionBias {
+            dx: finite(dx),
+            dy: finite(dy),
+            magnitude: finite((dx * dx + dy * dy).sqrt()),
+        }
     };
 
     // ---- snap vs flow between consecutive hit notes
@@ -622,7 +671,11 @@ pub fn analyze(map: &Map, replay: &Replay) -> Analysis {
     }
     let smooth_windows = window_flags.iter().filter(|(_, s)| *s).count();
     let jitter = Jitter {
-        rms_cells: finite(if dev_n > 0.0 { (dev_sq / dev_n).sqrt() } else { 0.0 }),
+        rms_cells: finite(if dev_n > 0.0 {
+            (dev_sq / dev_n).sqrt()
+        } else {
+            0.0
+        }),
         smooth_windows_pct: finite(if window_flags.is_empty() {
             0.0
         } else {
@@ -644,7 +697,11 @@ pub fn analyze(map: &Map, replay: &Replay) -> Analysis {
     }
     // Drift: least-squares slope of err over hit time.
     let drift = if errs.len() >= 8 {
-        let ts: Vec<f64> = notes.iter().filter(|n| n.err_ms.is_some()).map(|n| n.t).collect();
+        let ts: Vec<f64> = notes
+            .iter()
+            .filter(|n| n.err_ms.is_some())
+            .map(|n| n.t)
+            .collect();
         let tm = mean(&ts);
         let em = mean(&errs);
         let mut num = 0.0;
@@ -653,7 +710,11 @@ pub fn analyze(map: &Map, replay: &Replay) -> Analysis {
             num += (t - tm) * (e - em);
             den += (t - tm) * (t - tm);
         }
-        if den > 0.0 { num / den * 60_000.0 } else { 0.0 }
+        if den > 0.0 {
+            num / den * 60_000.0
+        } else {
+            0.0
+        }
     } else {
         0.0
     };
@@ -713,7 +774,10 @@ pub fn analyze(map: &Map, replay: &Replay) -> Analysis {
 
     // ---- miss summary
     let miss_notes: Vec<&NoteAnalysis> = notes.iter().filter(|n| !n.hit).collect();
-    let near: Vec<f64> = miss_notes.iter().filter_map(|n| n.near_dist.map(|d| d as f64)).collect();
+    let near: Vec<f64> = miss_notes
+        .iter()
+        .filter_map(|n| n.near_dist.map(|d| d as f64))
+        .collect();
     let mut on_fast = 0u32;
     let mut on_stream = 0u32;
     let mut other = 0u32;
@@ -793,7 +857,11 @@ pub fn analyze(map: &Map, replay: &Replay) -> Analysis {
     let hm_extent = 1.6f32;
     let mut hm = vec![0.0f64; hm_size * hm_size];
     for (i, fr) in f.iter().enumerate() {
-        let dt = if i < kin.seg_dt.len() { kin.seg_dt[i] } else { 0.0 };
+        let dt = if i < kin.seg_dt.len() {
+            kin.seg_dt[i]
+        } else {
+            0.0
+        };
         if dt <= 0.0 {
             continue;
         }
@@ -849,8 +917,7 @@ pub fn analyze(map: &Map, replay: &Replay) -> Analysis {
         // leaderboard scores. An edited file looks different (orphans,
         // impossible stats), so keep the scary wording for those.
         let header_hits = u32::try_from(replay.hits).unwrap_or(0);
-        let dropped_only =
-            report.orphan_flags == 0 && report.flagged_frames < header_hits;
+        let dropped_only = report.orphan_flags == 0 && report.flagged_frames < header_hits;
         // Loading somebody else's chart is not tampering, and telling people
         // their file "may be corrupted or edited" for it is both wrong and
         // alarming. The desktop app learned to say so in 0.6; this window and
@@ -942,11 +1009,13 @@ pub fn analyze(map: &Map, replay: &Replay) -> Analysis {
         });
     }
     {
-        let hits_with_dist: Vec<f64> =
-            notes.iter().filter_map(|n| n.dist.map(|d| d as f64)).collect();
+        let hits_with_dist: Vec<f64> = notes
+            .iter()
+            .filter_map(|n| n.dist.map(|d| d as f64))
+            .collect();
         if hits_with_dist.len() >= 30 {
-            let centred =
-                hits_with_dist.iter().filter(|d| **d < 0.06).count() as f64 / hits_with_dist.len() as f64;
+            let centred = hits_with_dist.iter().filter(|d| **d < 0.06).count() as f64
+                / hits_with_dist.len() as f64;
             if centred > 0.4 {
                 signals.push(Signal {
                     id: "center".into(),
@@ -1043,7 +1112,12 @@ pub fn cursor_distance(a: &Replay, b: &Replay) -> Series {
     if a.frames.is_empty() || b.frames.is_empty() {
         return Series::default();
     }
-    let lo = a.frames.first().unwrap().ms.max(b.frames.first().unwrap().ms);
+    let lo = a
+        .frames
+        .first()
+        .unwrap()
+        .ms
+        .max(b.frames.first().unwrap().ms);
     let hi = a.frames.last().unwrap().ms.min(b.frames.last().unwrap().ms);
     for fr in &a.frames {
         if fr.ms < lo || fr.ms > hi {
@@ -1064,11 +1138,22 @@ mod tests {
     use rhythia_formats::rhr::{Frame, Replay};
 
     fn frame(ms: f64, x: f32, y: f32, hit: bool) -> Frame {
-        Frame { ms, x, y, health: 1.0, hit }
+        Frame {
+            ms,
+            x,
+            y,
+            health: 1.0,
+            hit,
+        }
     }
 
     fn test_map(notes: Vec<Note>) -> Map {
-        Map { meta: MapMeta::default(), notes, audio: None, cover: None }
+        Map {
+            meta: MapMeta::default(),
+            notes,
+            audio: None,
+            cover: None,
+        }
     }
 
     /// Header stats derived from frames+notes so the integrity check
@@ -1116,7 +1201,11 @@ mod tests {
             .map(|i| frame(i as f64 * 16.0, -1.0 + i as f32 * (2.0 / 60.0), 0.0, false))
             .collect();
         let a = analyze(&test_map(vec![]), &test_replay(frames));
-        assert!((a.cursor.total_path_cells - 2.0).abs() < 0.01, "{}", a.cursor.total_path_cells);
+        assert!(
+            (a.cursor.total_path_cells - 2.0).abs() < 0.01,
+            "{}",
+            a.cursor.total_path_cells
+        );
         let expect_v = 2.0 / (60.0 * 16.0 / 1000.0);
         assert!(
             (a.cursor.max_speed.v - expect_v).abs() < 0.15,
@@ -1148,15 +1237,20 @@ mod tests {
         frames.push(frame(5016.0, 1.0, 0.0, false)); // jump across the pause
         frames.push(frame(5032.0, 1.0, 0.0, false));
         let a = analyze(&test_map(vec![]), &test_replay(frames));
-        assert!(a.cursor.total_path_cells < 0.01, "{}", a.cursor.total_path_cells);
+        assert!(
+            a.cursor.total_path_cells < 0.01,
+            "{}",
+            a.cursor.total_path_cells
+        );
         assert!(a.signals.iter().all(|s| s.id != "teleport"));
     }
 
     /// An in-frame 2-cell jump in 10 ms is a teleport signal.
     #[test]
     fn teleport_flagged() {
-        let mut frames: Vec<Frame> =
-            (0..30).map(|i| frame(i as f64 * 16.0, 0.0, 0.0, false)).collect();
+        let mut frames: Vec<Frame> = (0..30)
+            .map(|i| frame(i as f64 * 16.0, 0.0, 0.0, false))
+            .collect();
         frames.push(frame(480.0, 2.0, 0.0, false));
         frames.push(frame(496.0, 2.0, 0.0, false));
         let a = analyze(&test_map(vec![]), &test_replay(frames));
@@ -1168,12 +1262,25 @@ mod tests {
     #[test]
     fn timing_ur_and_mean() {
         let notes = vec![
-            Note { time_ms: 500, x: 1.0, y: 1.0 },
-            Note { time_ms: 1000, x: 1.0, y: 1.0 },
-            Note { time_ms: 1500, x: 1.0, y: 1.0 },
+            Note {
+                time_ms: 500,
+                x: 1.0,
+                y: 1.0,
+            },
+            Note {
+                time_ms: 1000,
+                x: 1.0,
+                y: 1.0,
+            },
+            Note {
+                time_ms: 1500,
+                x: 1.0,
+                y: 1.0,
+            },
         ];
-        let mut frames: Vec<Frame> =
-            (0..125).map(|i| frame(i as f64 * 16.0, 0.0, 0.0, false)).collect();
+        let mut frames: Vec<Frame> = (0..125)
+            .map(|i| frame(i as f64 * 16.0, 0.0, 0.0, false))
+            .collect();
         for f in frames.iter_mut() {
             if [510.0, 1010.0, 1510.0].contains(&f.ms.round()) {}
         }
@@ -1185,7 +1292,11 @@ mod tests {
         let n = notes.len();
         let a = analyze(&test_map(notes), &replay_for(frames, n));
         assert_eq!(a.meta.hits, 3);
-        assert!((a.timing.mean_err_ms - 10.0).abs() < 0.5, "{}", a.timing.mean_err_ms);
+        assert!(
+            (a.timing.mean_err_ms - 10.0).abs() < 0.5,
+            "{}",
+            a.timing.mean_err_ms
+        );
         assert!(a.timing.ur < 1.0, "{}", a.timing.ur);
     }
 
@@ -1193,11 +1304,20 @@ mod tests {
     #[test]
     fn near_miss_distance() {
         let notes = vec![
-            Note { time_ms: 500, x: 1.0, y: 1.0 }, // world (0,0)
-            Note { time_ms: 1000, x: 2.0, y: 1.0 }, // world (1,0)
+            Note {
+                time_ms: 500,
+                x: 1.0,
+                y: 1.0,
+            }, // world (0,0)
+            Note {
+                time_ms: 1000,
+                x: 2.0,
+                y: 1.0,
+            }, // world (1,0)
         ];
-        let mut frames: Vec<Frame> =
-            (0..80).map(|i| frame(i as f64 * 16.0, 0.0, 0.0, false)).collect();
+        let mut frames: Vec<Frame> = (0..80)
+            .map(|i| frame(i as f64 * 16.0, 0.0, 0.0, false))
+            .collect();
         frames.push(frame(500.0, 0.0, 0.0, true));
         frames.sort_by(|a, b| a.ms.total_cmp(&b.ms));
         let n = notes.len();
@@ -1214,8 +1334,16 @@ mod tests {
     #[test]
     fn movement_efficiency() {
         let notes = vec![
-            Note { time_ms: 100, x: 0.0, y: 1.0 },
-            Note { time_ms: 1900, x: 2.0, y: 1.0 },
+            Note {
+                time_ms: 100,
+                x: 0.0,
+                y: 1.0,
+            },
+            Note {
+                time_ms: 1900,
+                x: 2.0,
+                y: 1.0,
+            },
         ];
         // Legs: (−1→1) + (1→0) + (0→1) = 2 + 1 + 1 = 4 cells travelled.
         let mut frames = Vec::new();
@@ -1229,9 +1357,17 @@ mod tests {
         }
         let n = notes.len();
         let a = analyze(&test_map(notes), &replay_for(frames, n));
-        assert!((a.cursor.total_path_cells - 4.0).abs() < 0.1, "{}", a.cursor.total_path_cells);
+        assert!(
+            (a.cursor.total_path_cells - 4.0).abs() < 0.1,
+            "{}",
+            a.cursor.total_path_cells
+        );
         assert!((a.cursor.optimal_path_cells - 2.0).abs() < 0.01);
-        assert!((a.cursor.efficiency_pct - 50.0).abs() < 3.0, "{}", a.cursor.efficiency_pct);
+        assert!(
+            (a.cursor.efficiency_pct - 50.0).abs() < 3.0,
+            "{}",
+            a.cursor.efficiency_pct
+        );
     }
 
     /// Perfectly linear long moves ⇒ smooth-windows signal fires (info).
@@ -1259,13 +1395,22 @@ mod tests {
     fn sections_split() {
         let mut notes = Vec::new();
         for i in 0..10 {
-            notes.push(Note { time_ms: 1000 + i * 2000, x: 1.0, y: 1.0 });
+            notes.push(Note {
+                time_ms: 1000 + i * 2000,
+                x: 1.0,
+                y: 1.0,
+            });
         }
         for i in 0..10 {
-            notes.push(Note { time_ms: 31000 + i * 2000, x: 1.0, y: 1.0 });
+            notes.push(Note {
+                time_ms: 31000 + i * 2000,
+                x: 1.0,
+                y: 1.0,
+            });
         }
-        let mut frames: Vec<Frame> =
-            (0..3200).map(|i| frame(i as f64 * 16.0, 0.0, 0.0, false)).collect();
+        let mut frames: Vec<Frame> = (0..3200)
+            .map(|i| frame(i as f64 * 16.0, 0.0, 0.0, false))
+            .collect();
         // hit all of bucket 1, none of bucket 2
         for i in 0..10 {
             frames.push(frame((1000 + i * 2000) as f64, 0.0, 0.0, true));
@@ -1292,8 +1437,9 @@ mod tests {
     /// teleport gate must still fire (it compares WALL time).
     #[test]
     fn teleport_detected_under_speed_mod() {
-        let mut frames: Vec<Frame> =
-            (0..30).map(|i| frame(i as f64 * 33.4, 0.0, 0.0, false)).collect();
+        let mut frames: Vec<Frame> = (0..30)
+            .map(|i| frame(i as f64 * 33.4, 0.0, 0.0, false))
+            .collect();
         frames.push(frame(1002.0, 2.0, 0.0, false));
         frames.push(frame(1035.4, 2.0, 0.0, false));
         let mut r = test_replay(frames);
@@ -1307,13 +1453,30 @@ mod tests {
     #[test]
     fn failed_run_ignores_post_fail_notes() {
         let notes = vec![
-            Note { time_ms: 500, x: 1.0, y: 1.0 },
-            Note { time_ms: 1000, x: 1.0, y: 1.0 },
-            Note { time_ms: 5000, x: 1.0, y: 1.0 },
-            Note { time_ms: 6000, x: 1.0, y: 1.0 },
+            Note {
+                time_ms: 500,
+                x: 1.0,
+                y: 1.0,
+            },
+            Note {
+                time_ms: 1000,
+                x: 1.0,
+                y: 1.0,
+            },
+            Note {
+                time_ms: 5000,
+                x: 1.0,
+                y: 1.0,
+            },
+            Note {
+                time_ms: 6000,
+                x: 1.0,
+                y: 1.0,
+            },
         ];
-        let mut frames: Vec<Frame> =
-            (0..80).map(|i| frame(i as f64 * 16.0, 0.0, 0.0, false)).collect();
+        let mut frames: Vec<Frame> = (0..80)
+            .map(|i| frame(i as f64 * 16.0, 0.0, 0.0, false))
+            .collect();
         frames.push(frame(500.0, 0.0, 0.0, true));
         frames.push(frame(1000.0, 0.0, 0.0, true));
         frames.sort_by(|a, b| a.ms.total_cmp(&b.ms));
@@ -1331,8 +1494,16 @@ mod tests {
     #[test]
     fn practice_run_skips_pre_start_notes() {
         let notes = vec![
-            Note { time_ms: 500, x: 1.0, y: 1.0 },
-            Note { time_ms: 10_000, x: 1.0, y: 1.0 },
+            Note {
+                time_ms: 500,
+                x: 1.0,
+                y: 1.0,
+            },
+            Note {
+                time_ms: 10_000,
+                x: 1.0,
+                y: 1.0,
+            },
         ];
         let mut frames: Vec<Frame> = (0..40)
             .map(|i| frame(9800.0 + i as f64 * 16.0, 0.0, 0.0, false))
@@ -1344,13 +1515,20 @@ mod tests {
         let a = analyze(&test_map(notes), &r);
         assert_eq!(a.meta.hits, 1);
         assert_eq!(a.meta.misses, 0, "pre-start notes are not misses");
-        assert_ne!(a.verdict, "warn", "practice runs must never hard-warn on header checks");
+        assert_ne!(
+            a.verdict, "warn",
+            "practice runs must never hard-warn on header checks"
+        );
     }
 
     #[test]
     fn ghost_cursor_distance() {
-        let fa: Vec<Frame> = (0..100).map(|i| frame(i as f64 * 16.0, 0.0, 0.0, false)).collect();
-        let fb: Vec<Frame> = (0..100).map(|i| frame(i as f64 * 16.0, 1.0, 0.0, false)).collect();
+        let fa: Vec<Frame> = (0..100)
+            .map(|i| frame(i as f64 * 16.0, 0.0, 0.0, false))
+            .collect();
+        let fb: Vec<Frame> = (0..100)
+            .map(|i| frame(i as f64 * 16.0, 1.0, 0.0, false))
+            .collect();
         let s = cursor_distance(&test_replay(fa), &test_replay(fb));
         assert!(!s.v.is_empty());
         assert!(s.v.iter().all(|v| (v - 1.0).abs() < 0.01));

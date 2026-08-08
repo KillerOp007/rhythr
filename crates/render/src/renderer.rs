@@ -229,7 +229,11 @@ impl Renderer {
         self.height = height;
         self.color_tex = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("color-target"),
-            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -241,7 +245,11 @@ impl Renderer {
         });
         let depth_tex = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("depth"),
-            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -1010,7 +1018,11 @@ impl Renderer {
             bind_group,
             tex_flags,
             tex_flags2: [trail.is_some() as u32 as f32, 0.0, 0.0, 0.0],
-            bg_stream: if config.custom_bg_video { background } else { None },
+            bg_stream: if config.custom_bg_video {
+                background
+            } else {
+                None
+            },
         }
     }
 
@@ -1096,7 +1108,16 @@ impl Renderer {
         song_time_ms: f64,
         hud_state: Option<&crate::hud::HudState>,
     ) -> Result<Vec<u8>, Error> {
-        self.render_still_with_ghost(params, config, skin, replay, map, song_time_ms, hud_state, None)
+        self.render_still_with_ghost(
+            params,
+            config,
+            skin,
+            replay,
+            map,
+            song_time_ms,
+            hud_state,
+            None,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1676,17 +1697,11 @@ impl Renderer {
                             // rule as the verdict boxes.
                             let taken = r.hit_ms.unwrap_or(note_t).max(note_t);
                             if song_time_ms <= taken {
-                                depth_opacity =
-                                    Some((0.0, params.note_opacity(0.0)));
+                                depth_opacity = Some((0.0, params.note_opacity(0.0)));
                             }
                         }
-                        Some(r)
-                            if !r.hit
-                                && config.push_back
-                                && (-2.5..0.0).contains(&behind) =>
-                        {
-                            depth_opacity =
-                                Some((behind, (1.0 + behind / 2.5).max(0.0)));
+                        Some(r) if !r.hit && config.push_back && (-2.5..0.0).contains(&behind) => {
+                            depth_opacity = Some((behind, (1.0 + behind / 2.5).max(0.0)));
                         }
                         _ => {}
                     }
@@ -1765,14 +1780,7 @@ impl Renderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_viewport(
-                vp_x as f32,
-                0.0,
-                vp_w as f32,
-                self.height as f32,
-                0.0,
-                1.0,
-            );
+            pass.set_viewport(vp_x as f32, 0.0, vp_w as f32, self.height as f32, 0.0, 1.0);
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &self.bind_group, &[]);
             pass.set_bind_group(1, &skin.bind_group, &[]);
@@ -2005,18 +2013,23 @@ impl Renderer {
             None => sides.push((replay, final_stats(replay, hud_state), 0.0, w)),
             Some(g) => {
                 sides.push((replay, final_stats(replay, hud_state), 0.0, w * 0.5));
-                sides.push((&g.replay, final_stats(&g.replay, &g.state), w * 0.5, w * 0.5));
+                sides.push((
+                    &g.replay,
+                    final_stats(&g.replay, &g.state),
+                    w * 0.5,
+                    w * 0.5,
+                ));
             }
         }
 
         // Cover textures: full resolution + a tiny average-pooled copy that
         // linear sampling stretches into a cheap blur. A dark grey stands in
         // when the map has no cover.
-        let cover_rgba =
-            map.cover
-                .as_deref()
-                .and_then(decode_image_rgba)
-                .unwrap_or((vec![28, 28, 32, 255], 1, 1));
+        let cover_rgba = map.cover.as_deref().and_then(decode_image_rgba).unwrap_or((
+            vec![28, 28, 32, 255],
+            1,
+            1,
+        ));
         let (pixels, cw, ch) = cover_rgba;
         // Pooled down to about twice its on-screen size before upload. Covers
         // arrive at 1000 px and up but are drawn at roughly a third of the
@@ -2252,11 +2265,11 @@ impl Renderer {
         }
 
         // Cover texture (sharp only; the card background is a flat colour).
-        let cover_rgba = map
-            .cover
-            .as_deref()
-            .and_then(decode_image_rgba)
-            .unwrap_or((vec![28, 28, 32, 255], 1, 1));
+        let cover_rgba = map.cover.as_deref().and_then(decode_image_rgba).unwrap_or((
+            vec![28, 28, 32, 255],
+            1,
+            1,
+        ));
         let (pixels, cw, ch) = cover_rgba;
         // Same reason as the results screen: pooled to about twice the size
         // it is drawn at, so a bilinear sample is not minifying by 3x.
@@ -2333,7 +2346,15 @@ impl Renderer {
             crate::config::srgb8_to_linear([34, 197, 94], 1.0),
             0.0,
         );
-        quad(&mut verts, cx0, cy0, cx0 + size, cy0 + size, [1.0, 1.0, 1.0, 1.0], 2.0);
+        quad(
+            &mut verts,
+            cx0,
+            cy0,
+            cx0 + size,
+            cy0 + size,
+            [1.0, 1.0, 1.0, 1.0],
+            2.0,
+        );
         verts.extend(crate::hud::build_card(
             &self.hud_atlas,
             replay,
@@ -2435,7 +2456,11 @@ impl Renderer {
         hud_state: &crate::hud::HudState,
         half_width: bool,
     ) -> Vec<crate::hud::HudBox> {
-        let vp_w = if half_width { self.width / 2 } else { self.width };
+        let vp_w = if half_width {
+            self.width / 2
+        } else {
+            self.width
+        };
         let aspect = vp_w as f32 / self.height as f32;
         let cursor = params.clamp_cursor(replay.cursor_at(song_time_ms));
         let view_proj = params.view_proj(aspect, self.portrait_output(), cursor);
@@ -2533,8 +2558,9 @@ impl Renderer {
             let mut prev = params.clamp_cursor(replay.cursor_at(song_time_ms));
             'walk: for i in 1..=samples {
                 let frac = i as f32 / samples as f32; // 0 = head, 1 = oldest
-                let cur =
-                    params.clamp_cursor(replay.cursor_at(song_time_ms - span_ms * i as f64 / samples as f64));
+                let cur = params.clamp_cursor(
+                    replay.cursor_at(song_time_ms - span_ms * i as f64 / samples as f64),
+                );
                 let (dx, dy) = (cur.0 - prev.0, cur.1 - prev.1);
                 let seg = (dx * dx + dy * dy).sqrt();
                 let mut along = stamp_dist - carry;
@@ -2727,8 +2753,14 @@ fn compose_background(config: &SkinConfig, width: u32, height: u32) -> Option<(V
         let (sw_f, sh_f) = (sw as f32, sh as f32);
         // Destination rect.
         let (cx, cy, half_w, half_h) = if layer.placement == 1 {
-            let (x0, y0) = project(layer.space_x - layer.space_w * 0.5, layer.space_y + layer.space_h * 0.5);
-            let (x1, y1) = project(layer.space_x + layer.space_w * 0.5, layer.space_y - layer.space_h * 0.5);
+            let (x0, y0) = project(
+                layer.space_x - layer.space_w * 0.5,
+                layer.space_y + layer.space_h * 0.5,
+            );
+            let (x1, y1) = project(
+                layer.space_x + layer.space_w * 0.5,
+                layer.space_y - layer.space_h * 0.5,
+            );
             (
                 (x0 + x1) * 0.5,
                 (y0 + y1) * 0.5,
@@ -2766,13 +2798,24 @@ fn compose_background(config: &SkinConfig, width: u32, height: u32) -> Option<(V
                         fh,
                     );
             }
-            (cx, cy, base_w * 0.5 * layer.scale_x, base_h * 0.5 * layer.scale_y)
+            (
+                cx,
+                cy,
+                base_w * 0.5 * layer.scale_x,
+                base_h * 0.5 * layer.scale_y,
+            )
         };
         if half_w < 1.0 || half_h < 1.0 {
             continue;
         }
-        let (x_min, x_max) = ((cx - half_w).max(0.0) as u32, ((cx + half_w).min(fw)) as u32);
-        let (y_min, y_max) = ((cy - half_h).max(0.0) as u32, ((cy + half_h).min(fh)) as u32);
+        let (x_min, x_max) = (
+            (cx - half_w).max(0.0) as u32,
+            ((cx + half_w).min(fw)) as u32,
+        );
+        let (y_min, y_max) = (
+            (cy - half_h).max(0.0) as u32,
+            ((cy + half_h).min(fh)) as u32,
+        );
         for dy in y_min..y_max.min(height) {
             for dx in x_min..x_max.min(width) {
                 // Destination pixel → source uv (bilinear).
@@ -3069,23 +3112,40 @@ mod hitbox_tests {
     fn hit_note_box_freezes_and_lingers_past_the_recorded_hit() {
         let p = SceneParams::default();
         assert!(hitbox_depth(&p, 1000.0, 990.0, res(true, Some(1060.0)), L, W).unwrap() > 0.0);
-        assert_eq!(hitbox_depth(&p, 1000.0, 1055.0, res(true, Some(1060.0)), L, W), Some(0.0));
-        assert_eq!(hitbox_depth(&p, 1000.0, 1061.0, res(true, Some(1060.0)), L, W), Some(0.0));
-        assert!(hitbox_depth(&p, 1000.0, 1060.0 + L + 1.0, res(true, Some(1060.0)), L, W).is_none());
+        assert_eq!(
+            hitbox_depth(&p, 1000.0, 1055.0, res(true, Some(1060.0)), L, W),
+            Some(0.0)
+        );
+        assert_eq!(
+            hitbox_depth(&p, 1000.0, 1061.0, res(true, Some(1060.0)), L, W),
+            Some(0.0)
+        );
+        assert!(
+            hitbox_depth(&p, 1000.0, 1060.0 + L + 1.0, res(true, Some(1060.0)), L, W).is_none()
+        );
     }
 
     #[test]
     fn missed_note_box_survives_window_plus_linger() {
         let p = SceneParams::default();
-        assert_eq!(hitbox_depth(&p, 1000.0, 1079.0, res(false, None), L, W), Some(0.0));
-        assert_eq!(hitbox_depth(&p, 1000.0, 1081.0, res(false, None), L, W), Some(0.0));
+        assert_eq!(
+            hitbox_depth(&p, 1000.0, 1079.0, res(false, None), L, W),
+            Some(0.0)
+        );
+        assert_eq!(
+            hitbox_depth(&p, 1000.0, 1081.0, res(false, None), L, W),
+            Some(0.0)
+        );
         assert!(hitbox_depth(&p, 1000.0, 1080.0 + L + 1.0, res(false, None), L, W).is_none());
     }
 
     #[test]
     fn zero_linger_removes_the_box_at_resolution() {
         let p = SceneParams::default();
-        assert_eq!(hitbox_depth(&p, 1000.0, 1059.0, res(true, Some(1060.0)), 0.0, W), Some(0.0));
+        assert_eq!(
+            hitbox_depth(&p, 1000.0, 1059.0, res(true, Some(1060.0)), 0.0, W),
+            Some(0.0)
+        );
         assert!(hitbox_depth(&p, 1000.0, 1061.0, res(true, Some(1060.0)), 0.0, W).is_none());
     }
 
@@ -3093,8 +3153,14 @@ mod hitbox_tests {
     fn lifetimes_survive_high_effective_approach_rates() {
         let mut p = SceneParams::default();
         p.apply_speed(0.25);
-        assert_eq!(hitbox_depth(&p, 1000.0, 1052.0, res(true, Some(1070.0)), L, W), Some(0.0));
-        assert_eq!(hitbox_depth(&p, 1000.0, 1079.0, res(false, None), L, W), Some(0.0));
+        assert_eq!(
+            hitbox_depth(&p, 1000.0, 1052.0, res(true, Some(1070.0)), L, W),
+            Some(0.0)
+        );
+        assert_eq!(
+            hitbox_depth(&p, 1000.0, 1079.0, res(false, None), L, W),
+            Some(0.0)
+        );
     }
 
     #[test]
@@ -3140,4 +3206,66 @@ mod decode_tests {
         assert_eq!((w, h), (2, 2));
         assert_eq!(&rgba[..4], &[255, 0, 0, 255]);
     }
+}
+
+/// What the GPU looks like from here, for a diagnostics report.
+#[derive(Debug, Clone)]
+pub struct GpuInfo {
+    pub name: String,
+    pub backend: String,
+    pub device_type: String,
+    pub driver: String,
+    pub driver_info: String,
+}
+
+impl GpuInfo {
+    /// One line, in the order that matters when reading a bug report.
+    pub fn summary(&self) -> String {
+        let driver = match (self.driver.is_empty(), self.driver_info.is_empty()) {
+            (true, true) => "driver unknown".to_string(),
+            (false, true) => self.driver.clone(),
+            (true, false) => self.driver_info.clone(),
+            (false, false) => format!("{} {}", self.driver, self.driver_info),
+        };
+        format!(
+            "{} ({}, {}), {}",
+            self.name, self.backend, self.device_type, driver
+        )
+    }
+}
+
+/// Describes the adapter rhythr would render on, or says why there is none.
+///
+/// Deliberately does NOT build a [`Renderer`]: asking for an adapter is cheap
+/// and safe to do while something else is rendering, and the single most
+/// common cause of a render problem (no adapter at all, or a driver too old)
+/// is answered by exactly this call. It was also missing from the diagnostics
+/// report entirely, which made the most common cause the one fact a bug report
+/// never carried.
+///
+/// The error is worth reading per OS: on Windows no adapter almost always
+/// means a graphics driver too old for Vulkan or DX12; on Linux it usually
+/// means no Vulkan ICD is installed, or the session is headless, or the user
+/// is not in the `render`/`video` group.
+pub fn describe_gpu() -> Result<GpuInfo, String> {
+    pollster::block_on(async {
+        let instance = wgpu::Instance::default();
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                force_fallback_adapter: false,
+                compatible_surface: None,
+                ..Default::default()
+            })
+            .await
+            .map_err(|e| format!("no usable GPU adapter: {e}"))?;
+        let info = adapter.get_info();
+        Ok(GpuInfo {
+            name: info.name,
+            backend: format!("{:?}", info.backend),
+            device_type: format!("{:?}", info.device_type),
+            driver: info.driver,
+            driver_info: info.driver_info,
+        })
+    })
 }

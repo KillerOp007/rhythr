@@ -155,7 +155,12 @@ pub fn benchmark(ffmpeg: &str, width: u32, height: u32) -> Benchmark {
         .filter_map(|m| m.fps.map(|f| (m.transport, f)))
         .max_by(|a, b| a.1.total_cmp(&b.1))
         .map(|(t, _)| t);
-    Benchmark { width: w, height: h, results, best }
+    Benchmark {
+        width: w,
+        height: h,
+        results,
+        best,
+    }
 }
 
 fn measure(ffmpeg: &str, transport: Transport, w: u32, h: u32, frame: &[u8]) -> Option<f64> {
@@ -183,7 +188,11 @@ fn measure(ffmpeg: &str, transport: Transport, w: u32, h: u32, frame: &[u8]) -> 
     // `copy` is the point: nothing is encoded, so what is timed is the
     // transport and ffmpeg's willingness to read from it.
     cmd.args(["-c:v", "copy", "-f", "null", "-"]);
-    let mut child = cmd.stdout(Stdio::null()).stderr(Stdio::null()).spawn().ok()?;
+    let mut child = cmd
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
 
     let outcome = measure_into(&listener, &mut child, transport, frame);
 
@@ -293,7 +302,11 @@ mod tests {
     fn no_candidate_writes_a_socket_in_small_pieces() {
         for c in CANDIDATES {
             if let Transport::Socket(n) = c {
-                assert!(*n == 0 || *n >= 64 * 1024, "candidate {} is too small", c.label());
+                assert!(
+                    *n == 0 || *n >= 64 * 1024,
+                    "candidate {} is too small",
+                    c.label()
+                );
             }
         }
     }
@@ -304,8 +317,14 @@ mod tests {
             width: 3840,
             height: 2160,
             results: vec![
-                Measured { transport: Transport::Pipe, fps: Some(170.0) },
-                Measured { transport: Transport::Socket(256 * 1024), fps: Some(245.0) },
+                Measured {
+                    transport: Transport::Pipe,
+                    fps: Some(170.0),
+                },
+                Measured {
+                    transport: Transport::Socket(256 * 1024),
+                    fps: Some(245.0),
+                },
             ],
             best: Some(Transport::Socket(256 * 1024)),
         };
@@ -320,7 +339,10 @@ mod tests {
         let b = Benchmark {
             width: 1920,
             height: 1080,
-            results: vec![Measured { transport: Transport::Pipe, fps: None }],
+            results: vec![Measured {
+                transport: Transport::Pipe,
+                fps: None,
+            }],
             best: None,
         };
         assert!(b.summary().contains("leaving the setting alone"));

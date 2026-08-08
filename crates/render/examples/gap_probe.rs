@@ -19,6 +19,9 @@ fn main() {
         gaps.iter().filter(|g| g.1 > 500.0).count()
     );
     for (ms, dt, a, b) in gaps.iter().take(12) {
-        println!("  gap {:.0}ms at {:.0}ms: ({:.2},{:.2}) -> ({:.2},{:.2})", dt, ms, a.0, a.1, b.0, b.1);
+        println!(
+            "  gap {:.0}ms at {:.0}ms: ({:.2},{:.2}) -> ({:.2},{:.2})",
+            dt, ms, a.0, a.1, b.0, b.1
+        );
     }
 }

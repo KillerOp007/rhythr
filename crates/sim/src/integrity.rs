@@ -253,7 +253,12 @@ pub fn verify_replay(replay: &Replay, map: &Map) -> IntegrityReport {
 mod wrong_map_tests {
     use super::*;
 
-    fn report_with(checks: Vec<Check>, flagged: u32, derived_hits: u32, orphans: u32) -> IntegrityReport {
+    fn report_with(
+        checks: Vec<Check>,
+        flagged: u32,
+        derived_hits: u32,
+        orphans: u32,
+    ) -> IntegrityReport {
         IntegrityReport {
             flagged_frames: flagged,
             derived_hits,

@@ -77,7 +77,10 @@ pub fn synced_race(main: &RaceSide, ghost: &RaceSide, t_ms: f64) -> SyncedRace {
     };
     let mut combo = [0i64; 2];
     // Hardrock narrows the hit window, and only one side may be running it.
-    let windows = [hit_window_ms(sides[0].replay), hit_window_ms(sides[1].replay)];
+    let windows = [
+        hit_window_ms(sides[0].replay),
+        hit_window_ms(sides[1].replay),
+    ];
     for i in 0..n {
         // When is this note's outcome known on each side?
         let mut known = 0.0f64;
@@ -179,7 +182,9 @@ impl RaceSeries {
         for i in 0..n {
             let t = start_ms + (end_ms - start_ms) * i as f64 / (n - 1) as f64;
             let m = main.state.stats_at(main.map, main.replay, t.min(ends[0]));
-            let g = ghost.state.stats_at(ghost.map, ghost.replay, t.min(ends[1]));
+            let g = ghost
+                .state
+                .stats_at(ghost.map, ghost.replay, t.min(ends[1]));
             out.samples.push(RaceSample {
                 t_ms: t,
                 score_delta: m.score - g.score,
@@ -263,8 +268,16 @@ mod tests {
         let (mr, gr) = (replay_with(main_hits), replay_with(ghost_hits));
         let (ms, gs) = (HudState::new(&map, &mr), HudState::new(&map, &gr));
         let s = RaceSeries::build(
-            &RaceSide { map: &map, replay: &mr, state: &ms },
-            &RaceSide { map: &map, replay: &gr, state: &gs },
+            &RaceSide {
+                map: &map,
+                replay: &mr,
+                state: &ms,
+            },
+            &RaceSide {
+                map: &map,
+                replay: &gr,
+                state: &gs,
+            },
             0.0,
             5000.0,
             5,
@@ -276,10 +289,7 @@ mod tests {
     fn score_delta_matches_both_huds_at_every_sample() {
         // Main hits all four (100/300/600/1000); ghost misses note 2, so its
         // combo restarts: 100 / 100 / 200 / 400.
-        let (s, _, _) = series_for(
-            &[1005.0, 2005.0, 3005.0, 4005.0],
-            &[1005.0, 3005.0, 4005.0],
-        );
+        let (s, _, _) = series_for(&[1005.0, 2005.0, 3005.0, 4005.0], &[1005.0, 3005.0, 4005.0]);
         let deltas: Vec<i64> = s.samples.iter().map(|p| p.score_delta).collect();
         assert_eq!(deltas, vec![0, 0, 200, 400, 600]);
         let last = s.samples.last().unwrap();
@@ -293,10 +303,7 @@ mod tests {
         // Main misses note 1 (0/100/300/600); ghost hits note 1 and misses
         // 2+3 (100/100/100/200). Deltas: 0, -100, 0, +200, +400 — exactly
         // one lead change, at the sample where the sign turns positive.
-        let (s, _, _) = series_for(
-            &[2005.0, 3005.0, 4005.0],
-            &[1005.0, 4005.0],
-        );
+        let (s, _, _) = series_for(&[2005.0, 3005.0, 4005.0], &[1005.0, 4005.0]);
         let deltas: Vec<i64> = s.samples.iter().map(|p| p.score_delta).collect();
         assert_eq!(deltas, vec![0, -100, 0, 200, 400]);
         assert_eq!(s.lead_changes, vec![3750.0]);
@@ -313,8 +320,16 @@ mod tests {
         gr.passed = false;
         let (ms, gs) = (HudState::new(&map, &mr), HudState::new(&map, &gr));
         let s = RaceSeries::build(
-            &RaceSide { map: &map, replay: &mr, state: &ms },
-            &RaceSide { map: &map, replay: &gr, state: &gs },
+            &RaceSide {
+                map: &map,
+                replay: &mr,
+                state: &ms,
+            },
+            &RaceSide {
+                map: &map,
+                replay: &gr,
+                state: &gs,
+            },
             0.0,
             5000.0,
             5,
@@ -330,10 +345,21 @@ mod tests {
         // differ between those instants, but the synced walk waits for
         // both answers — an even race never shows a lead.
         let map = map_with(&[1000, 2000]);
-        let (mr, gr) = (replay_with(&[1005.0, 2005.0]), replay_with(&[1030.0, 2030.0]));
+        let (mr, gr) = (
+            replay_with(&[1005.0, 2005.0]),
+            replay_with(&[1030.0, 2030.0]),
+        );
         let (ms, gs) = (HudState::new(&map, &mr), HudState::new(&map, &gr));
-        let m = RaceSide { map: &map, replay: &mr, state: &ms };
-        let g = RaceSide { map: &map, replay: &gr, state: &gs };
+        let m = RaceSide {
+            map: &map,
+            replay: &mr,
+            state: &ms,
+        };
+        let g = RaceSide {
+            map: &map,
+            replay: &gr,
+            state: &gs,
+        };
         assert_eq!(synced_race(&m, &g, 1010.0).delta, 0);
         assert_eq!(synced_race(&m, &g, 1010.0).settled, 0);
         let at_1035 = synced_race(&m, &g, 1035.0);
@@ -351,8 +377,16 @@ mod tests {
         let map = map_with(&[1000, 2000]);
         let (mr, gr) = (replay_with(&[1005.0, 2005.0]), replay_with(&[1030.0]));
         let (ms, gs) = (HudState::new(&map, &mr), HudState::new(&map, &gr));
-        let m = RaceSide { map: &map, replay: &mr, state: &ms };
-        let g = RaceSide { map: &map, replay: &gr, state: &gs };
+        let m = RaceSide {
+            map: &map,
+            replay: &mr,
+            state: &ms,
+        };
+        let g = RaceSide {
+            map: &map,
+            replay: &gr,
+            state: &gs,
+        };
         assert_eq!(synced_race(&m, &g, 2050.0).delta, 0);
         let done = synced_race(&m, &g, 2085.0);
         assert_eq!((done.delta, done.settled), (200, 2));
@@ -369,8 +403,16 @@ mod tests {
         gr.fail_time_ms = 1500;
         gr.passed = false;
         let (ms, gs) = (HudState::new(&map, &mr), HudState::new(&map, &gr));
-        let m = RaceSide { map: &map, replay: &mr, state: &ms };
-        let g = RaceSide { map: &map, replay: &gr, state: &gs };
+        let m = RaceSide {
+            map: &map,
+            replay: &mr,
+            state: &ms,
+        };
+        let g = RaceSide {
+            map: &map,
+            replay: &gr,
+            state: &gs,
+        };
         let late = synced_race(&m, &g, 3500.0);
         assert_eq!((late.delta, late.settled), (500, 3));
         assert_eq!(late.scores, [600, 100]);
@@ -407,12 +449,19 @@ mod tests {
         );
         let (ms, gs) = (HudState::new(&map, &mr), HudState::new(&map, &gr));
         let s = RaceSeries::for_race(
-            &RaceSide { map: &map, replay: &mr, state: &ms },
-            &RaceSide { map: &map, replay: &gr, state: &gs },
+            &RaceSide {
+                map: &map,
+                replay: &mr,
+                state: &ms,
+            },
+            &RaceSide {
+                map: &map,
+                replay: &gr,
+                state: &gs,
+            },
         );
         assert_eq!(s.samples.len(), 240);
         assert_eq!(s.samples[0].t_ms, 0.0);
         assert_eq!(s.samples.last().unwrap().t_ms, 5000.0);
     }
-
 }

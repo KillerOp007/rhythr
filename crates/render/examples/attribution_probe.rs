@@ -58,7 +58,10 @@ fn main() {
                     let f = &replay.frames[k as usize];
                     in_area(f.x, f.y, n)
                 });
-                println!("  outside: note {} d={:.3} cells, neighbour_frame_inside={}", r.note_index, d, near_inside);
+                println!(
+                    "  outside: note {} d={:.3} cells, neighbour_frame_inside={}",
+                    r.note_index, d, near_inside
+                );
             }
         } else {
             misses += 1;

@@ -188,11 +188,28 @@ mod tests {
         assert_eq!(clip.samples.len(), 4); // mono → stereo
 
         let results = vec![
-            NoteResult { note_index: 0, hit: true, hit_ms: Some(100.0) },
-            NoteResult { note_index: 1, hit: false, hit_ms: None },
+            NoteResult {
+                note_index: 0,
+                hit: true,
+                hit_ms: Some(100.0),
+            },
+            NoteResult {
+                note_index: 1,
+                hit: false,
+                hit_ms: None,
+            },
         ];
-        let wav = build_hitsound_wav(&clip, None, &results, &[100.0, 200.0], 0.0, 1000.0, 1.0, 1.0)
-            .expect("has sound");
+        let wav = build_hitsound_wav(
+            &clip,
+            None,
+            &results,
+            &[100.0, 200.0],
+            0.0,
+            1000.0,
+            1.0,
+            1.0,
+        )
+        .expect("has sound");
         assert_eq!(&wav[0..4], b"RIFF");
         // Hit at 100 ms → non-zero samples at frame 4410.
         let off = 44 + 4410 * 2 * 2;
@@ -205,15 +222,36 @@ mod tests {
         let clip = Clip::from_wav(&tiny_wav(44_100, 1, &[16384])).unwrap();
         // 3-hit streak then a miss: below the threshold of 5 → silence.
         let mut results: Vec<NoteResult> = (0..3)
-            .map(|i| NoteResult { note_index: i, hit: true, hit_ms: Some(10.0 + i as f64) })
+            .map(|i| NoteResult {
+                note_index: i,
+                hit: true,
+                hit_ms: Some(10.0 + i as f64),
+            })
             .collect();
-        results.push(NoteResult { note_index: 3, hit: false, hit_ms: None });
+        results.push(NoteResult {
+            note_index: 3,
+            hit: false,
+            hit_ms: None,
+        });
         let times: Vec<f64> = (0..4).map(|i| 10.0 + i as f64).collect();
-        let wav = build_hitsound_wav(&clip, Some(&clip), &results, &times, 500.0, 1000.0, 1.0, 1.0);
+        let wav = build_hitsound_wav(
+            &clip,
+            Some(&clip),
+            &results,
+            &times,
+            500.0,
+            1000.0,
+            1.0,
+            1.0,
+        );
         assert!(wav.is_none(), "no hits in window and miss below threshold");
 
         // Speed mod: a hit at song time 400 lands at wall-clock 200 ms.
-        let results = vec![NoteResult { note_index: 0, hit: true, hit_ms: Some(400.0) }];
+        let results = vec![NoteResult {
+            note_index: 0,
+            hit: true,
+            hit_ms: Some(400.0),
+        }];
         let wav = build_hitsound_wav(&clip, None, &results, &[400.0], 0.0, 1000.0, 2.0, 1.0)
             .expect("has sound");
         let frame = |ms: f64| 44 + (ms / 1000.0 * 44_100.0) as usize * 2 * 2;

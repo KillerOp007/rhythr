@@ -27,7 +27,10 @@ pub enum LiveCmd {
     Speed(f64),
     /// Window inner size changed (physical px).
     Resize(u32, u32),
-    View { hide_cursor: bool, hide_notes: bool },
+    View {
+        hide_cursor: bool,
+        hide_notes: bool,
+    },
     /// How long resolved hit-area boxes linger (ms of song time).
     Linger(f64),
     /// Render the CURRENT clock position to PNG bytes — the overlay
@@ -108,7 +111,10 @@ fn fit_render_size(win_w: u32, win_h: u32, set_w: u32, set_h: u32) -> (u32, u32)
     };
     // Cap: a 4K window is fine on a strong GPU, but never explode past it.
     let scale = (2160.0 / h).min(1.0);
-    (((w * scale) as u32).max(64) & !1, ((h * scale) as u32).max(64) & !1)
+    (
+        ((w * scale) as u32).max(64) & !1,
+        ((h * scale) as u32).max(64) & !1,
+    )
 }
 
 /// Spawns the live thread. The surface MUST have been created on the
@@ -134,13 +140,18 @@ pub fn spawn(
         impl Drop for DoneGuard {
             fn drop(&mut self) {
                 if std::thread::panicking() {
-                    let _ = self.app.emit("live-error", "live engine crashed".to_string());
+                    let _ = self
+                        .app
+                        .emit("live-error", "live engine crashed".to_string());
                 }
                 self.running.store(false, Ordering::SeqCst);
                 let _ = self.app.emit("live-stopped", ());
             }
         }
-        let _done = DoneGuard { running: running.clone(), app: app_handle.clone() };
+        let _done = DoneGuard {
+            running: running.clone(),
+            app: app_handle.clone(),
+        };
         let emit_err = |msg: String| {
             let _ = app_handle.emit("live-error", msg);
         };
@@ -156,11 +167,12 @@ pub fn spawn(
             Err(e) => return emit_err(format!("live renderer: {e}")),
         };
         let mut renderer = renderer;
-        let mut presenter =
-            match rhythia_render::present::Presenter::new(&renderer, surface, init.win_w, init.win_h) {
-                Ok(p) => p,
-                Err(e) => return emit_err(format!("live presenter: {e}")),
-            };
+        let mut presenter = match rhythia_render::present::Presenter::new(
+            &renderer, surface, init.win_w, init.win_h,
+        ) {
+            Ok(p) => p,
+            Err(e) => return emit_err(format!("live presenter: {e}")),
+        };
 
         let mut cfg = init.cfg;
         // The value to restore a toggle TO is the skin's real opacity, so it
@@ -198,14 +210,24 @@ pub fn spawn(
         });
         if let Some(g) = ghost.as_mut() {
             g.race = Some(rhythia_render::race::RaceSeries::for_race(
-                &rhythia_render::race::RaceSide { map: &main_map, replay: &replay, state: &hud },
-                &rhythia_render::race::RaceSide { map: &g.map, replay: &g.replay, state: &g.state },
+                &rhythia_render::race::RaceSide {
+                    map: &main_map,
+                    replay: &replay,
+                    state: &hud,
+                },
+                &rhythia_render::race::RaceSide {
+                    map: &g.map,
+                    replay: &g.replay,
+                    state: &g.state,
+                },
             ));
         }
 
         // Visual verification on platforms whose webview hides the
         // surface (Linux test rigs): dump a frame every second.
-        let dump_dir = std::env::var("RHYTHR_LIVE_DUMP").ok().map(std::path::PathBuf::from);
+        let dump_dir = std::env::var("RHYTHR_LIVE_DUMP")
+            .ok()
+            .map(std::path::PathBuf::from);
         let mut dump_counter = 0u64;
 
         let mut linger_ms = init.linger_ms;
@@ -243,8 +265,15 @@ pub fn spawn(
                     }
                     Ok(LiveCmd::Speed(s)) => speed = s.clamp(0.01, 4.0),
                     Ok(LiveCmd::Resize(w, h)) => pending_resize = Some((w, h)),
-                    Ok(LiveCmd::View { hide_cursor, hide_notes }) => {
-                        cfg.cursor_opacity = if hide_cursor { 0.0 } else { base_cursor_opacity };
+                    Ok(LiveCmd::View {
+                        hide_cursor,
+                        hide_notes,
+                    }) => {
+                        cfg.cursor_opacity = if hide_cursor {
+                            0.0
+                        } else {
+                            base_cursor_opacity
+                        };
                         cfg.cursor_trail_enabled = !hide_cursor;
                         cfg.note_opacity = if hide_notes { 0.0 } else { base_note_opacity };
                         // Note opacity lives in SceneParams, built once at
@@ -262,7 +291,13 @@ pub fn spawn(
                     Ok(LiveCmd::Still(reply)) => {
                         let res = renderer
                             .render_still_with_ghost(
-                                &params, &cfg, &skin, &replay, &main_map, t, Some(&hud),
+                                &params,
+                                &cfg,
+                                &skin,
+                                &replay,
+                                &main_map,
+                                t,
+                                Some(&hud),
                                 ghost.as_ref(),
                             )
                             .map_err(|e| e.to_string())
@@ -303,7 +338,11 @@ pub fn spawn(
                 // was reset and would inject a ~1000 fps spike.
                 if dt >= 2.0 {
                     let sample = (1000.0 / dt) as f32;
-                    fps = if fps == 0.0 { sample } else { fps * 0.9 + sample * 0.1 };
+                    fps = if fps == 0.0 {
+                        sample
+                    } else {
+                        fps * 0.9 + sample * 0.1
+                    };
                 }
             }
 
@@ -337,7 +376,13 @@ pub fn spawn(
                     dump_counter += 1;
                     if dump_counter % 60 == 1 {
                         if let Ok(px) = renderer.render_still_with_ghost(
-                            &params, &cfg, &skin, &replay, &main_map, t, Some(&hud),
+                            &params,
+                            &cfg,
+                            &skin,
+                            &replay,
+                            &main_map,
+                            t,
+                            Some(&hud),
                             ghost.as_ref(),
                         ) {
                             let (w, h) = renderer.dimensions();
@@ -405,9 +450,14 @@ pub fn spawn(
                             .into_iter()
                             .map(|(i, pts, _)| TickNoteQuad { i: i as u32, pts })
                             .collect();
-                        let field =
-                            renderer.playfield_quad(&side_params, side_replay, t, (x, w));
-                        TickSide { x, w, m, notes, field }
+                        let field = renderer.playfield_quad(&side_params, side_replay, t, (x, w));
+                        TickSide {
+                            x,
+                            w,
+                            m,
+                            notes,
+                            field,
+                        }
                     })
                     .collect();
                 let _ = app_handle.emit(

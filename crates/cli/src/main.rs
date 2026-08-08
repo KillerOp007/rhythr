@@ -398,8 +398,9 @@ fn load_app_layout(use_app: bool, file: &Option<PathBuf>) -> anyhow::Result<Opti
         // A file the user named is a typo when it's missing; the app's own
         // is simply absent until the app has run once.
         Err(e) if named || e.kind() != std::io::ErrorKind::NotFound => {
-            return Err(anyhow::Error::new(e)
-                .context(format!("reading app layout {}", path.display())))
+            return Err(
+                anyhow::Error::new(e).context(format!("reading app layout {}", path.display()))
+            )
         }
         Err(_) => {
             eprintln!(
@@ -444,7 +445,11 @@ fn main() -> ExitCode {
 
 fn run() -> anyhow::Result<bool> {
     match Cli::parse().command {
-        Command::BenchTransport { width, height, ffmpeg } => {
+        Command::BenchTransport {
+            width,
+            height,
+            ffmpeg,
+        } => {
             // Distinguish "ffmpeg cannot run" from "every transport failed":
             // without this the whole table printed "failed" and the command
             // still exited 0, so a script could not tell a broken ffmpeg from
@@ -625,9 +630,8 @@ fn run() -> anyhow::Result<bool> {
                     start_secs: background_start.max(0.0),
                     sync_offset_secs: 0.0,
                 };
-                let kind =
-                    rhythia_render::background::apply_background(&mut cfg, bg, &bg_opts)
-                        .with_context(|| format!("reading background {}", bg.display()))?;
+                let kind = rhythia_render::background::apply_background(&mut cfg, bg, &bg_opts)
+                    .with_context(|| format!("reading background {}", bg.display()))?;
                 if kind == rhythia_render::background::BackgroundKind::Video {
                     background_video = Some(rhythia_render::video::BackgroundVideo {
                         path: bg.clone(),
@@ -747,7 +751,10 @@ fn run() -> anyhow::Result<bool> {
                 Some(p) => {
                     let g = Replay::from_path(p)
                         .with_context(|| format!("reading ghost replay {}", p.display()))?;
-                    if g.map_id != r.map_id && !g.beatmap_hash.is_empty() && g.beatmap_hash != r.beatmap_hash {
+                    if g.map_id != r.map_id
+                        && !g.beatmap_hash.is_empty()
+                        && g.beatmap_hash != r.beatmap_hash
+                    {
                         anyhow::bail!("ghost replay was played on a different map");
                     }
                     Some(rhythia_render::video::GhostOptions {
@@ -758,7 +765,7 @@ fn run() -> anyhow::Result<bool> {
                 None => None,
             };
             let opts = rhythia_render::video::VideoOptions {
-        extra_output_args: Vec::new(),
+                extra_output_args: Vec::new(),
                 fps,
                 start_ms,
                 end_ms,
@@ -785,10 +792,9 @@ fn run() -> anyhow::Result<bool> {
                         }
                         q
                     }
-                    None => quality.clamp(
-                        rhythia_render::quality::MIN,
-                        rhythia_render::quality::MAX,
-                    ),
+                    None => {
+                        quality.clamp(rhythia_render::quality::MIN, rhythia_render::quality::MAX)
+                    }
                 },
                 preset,
                 encoder,

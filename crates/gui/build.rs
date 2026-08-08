@@ -10,7 +10,10 @@ use std::path::Path;
 fn strip_comments(name: &str, text: &str) -> String {
     let mut out = text.to_string();
     let strip_blocks = |out: &mut String, open: &str, close: &str| {
-        while let (Some(a), Some(rel)) = (out.find(open), out.find(open).and_then(|a| out[a..].find(close))) {
+        while let (Some(a), Some(rel)) = (
+            out.find(open),
+            out.find(open).and_then(|a| out[a..].find(close)),
+        ) {
             out.replace_range(a..a + rel + close.len(), "");
         }
     };

@@ -152,11 +152,7 @@ mod tests {
     use rhythia_formats::rhr::Frame;
 
     fn note(t: i64, x: f32, y: f32) -> Note {
-        Note {
-            time_ms: t,
-            x,
-            y,
-        }
+        Note { time_ms: t, x, y }
     }
 
     fn replay_with(mods: &str, frames: Vec<Frame>) -> Replay {
@@ -216,10 +212,34 @@ mod tests {
             ..Default::default()
         };
         let frames = vec![
-            Frame { ms: 90.0, x: 1.0, y: 0.0, health: 1.0, hit: false },
-            Frame { ms: 100.0, x: 1.0, y: 0.0, health: 1.0, hit: true },
-            Frame { ms: 290.0, x: 1.0, y: 1.0, health: 1.0, hit: false },
-            Frame { ms: 300.0, x: 1.0, y: 1.0, health: 1.0, hit: true },
+            Frame {
+                ms: 90.0,
+                x: 1.0,
+                y: 0.0,
+                health: 1.0,
+                hit: false,
+            },
+            Frame {
+                ms: 100.0,
+                x: 1.0,
+                y: 0.0,
+                health: 1.0,
+                hit: true,
+            },
+            Frame {
+                ms: 290.0,
+                x: 1.0,
+                y: 1.0,
+                health: 1.0,
+                hit: false,
+            },
+            Frame {
+                ms: 300.0,
+                x: 1.0,
+                y: 1.0,
+                health: 1.0,
+                hit: true,
+            },
         ];
         let (m, r) = map_for_replay(&map, &replay_with("[\"mod_mirror\"]", frames));
         assert_eq!(r.flip, (true, false));

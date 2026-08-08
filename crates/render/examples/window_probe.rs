@@ -33,7 +33,10 @@ fn main() {
             .results
             .iter()
             .filter(|r| r.hit)
-            .filter_map(|r| r.hit_ms.map(|hm| hm - map.notes[r.note_index].time_ms as f64))
+            .filter_map(|r| {
+                r.hit_ms
+                    .map(|hm| hm - map.notes[r.note_index].time_ms as f64)
+            })
             .fold(f64::MIN, f64::max);
         (derived, out.orphan_flags, worst)
     };

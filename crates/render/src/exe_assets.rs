@@ -202,7 +202,8 @@ fn sane_component(s: &str) -> bool {
 /// `builtin_assets/<category>/`, colorsets merged into
 /// `builtin_colorsets.json`. Returns the number of assets written.
 pub fn extract_to_dir(exe_path: &Path, out_dir: &Path) -> Result<usize, String> {
-    let exe = std::fs::read(exe_path).map_err(|e| format!("reading {}: {e}", exe_path.display()))?;
+    let exe =
+        std::fs::read(exe_path).map_err(|e| format!("reading {}: {e}", exe_path.display()))?;
     let entries = scan_entries(&exe);
     if entries.is_empty() {
         return Err("no game resources found in this file — is it rhythia.exe?".into());
@@ -306,7 +307,10 @@ mod tests {
             assert_eq!((dec, used), (v, enc.len()), "value {v}");
         }
         // 3/4/5-byte forms decode too.
-        assert_eq!(decode_unsigned(&[0x03, 0x01, 0x01], 0).unwrap().0, (0x03u64 >> 3) | (1 << 5) | (1 << 13));
+        assert_eq!(
+            decode_unsigned(&[0x03, 0x01, 0x01], 0).unwrap().0,
+            (0x03u64 >> 3) | (1 << 5) | (1 << 13)
+        );
         assert_eq!(
             decode_unsigned(&[0x1F, 0xEF, 0xBE, 0xAD, 0xDE], 0).unwrap(),
             (0xDEADBEEF, 5)
@@ -321,7 +325,10 @@ mod tests {
             let mut enc = png::Encoder::new(std::io::Cursor::new(&mut b), 1, 1);
             enc.set_color(png::ColorType::Rgba);
             enc.set_depth(png::BitDepth::Eight);
-            enc.write_header().unwrap().write_image_data(&[9, 9, 9, 255]).unwrap();
+            enc.write_header()
+                .unwrap()
+                .write_image_data(&[9, 9, 9, 255])
+                .unwrap();
             b
         };
         let colorset = b"#ffffff\n#a2e0ff\n#a2e0ff\n".to_vec();
@@ -335,8 +342,16 @@ mod tests {
 
         let mut exe = vec![0xAAu8; 64]; // leading junk
         for (name, off, size) in [
-            ("Rhythia.Resources.Textures.Game.notes.square 3.png", png_off, png.len() as u64),
-            ("Rhythia.Resources.Textures.Game.colorsets.Arctic.txt", cs_off, colorset.len() as u64),
+            (
+                "Rhythia.Resources.Textures.Game.notes.square 3.png",
+                png_off,
+                png.len() as u64,
+            ),
+            (
+                "Rhythia.Resources.Textures.Game.colorsets.Arctic.txt",
+                cs_off,
+                colorset.len() as u64,
+            ),
         ] {
             exe.extend_from_slice(&encode_unsigned(name.len() as u64));
             exe.extend_from_slice(name.as_bytes());
@@ -379,7 +394,10 @@ mod tests {
                 let set_name = file.strip_suffix(".txt").unwrap();
                 colorsets.insert(
                     set_name.into(),
-                    String::from_utf8_lossy(bytes).lines().map(|l| l.trim().to_string()).collect(),
+                    String::from_utf8_lossy(bytes)
+                        .lines()
+                        .map(|l| l.trim().to_string())
+                        .collect(),
                 );
                 written += 1;
             } else {

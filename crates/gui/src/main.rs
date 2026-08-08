@@ -165,7 +165,10 @@ impl Default for Settings {
             aim_meter: MeterSettings::at(0.15, 0.32),
             // The race widget only ever shows in ghost races, which are
             // deliberate — unlike the meters it defaults to on.
-            race_delta: MeterSettings { enabled: true, ..MeterSettings::at(0.5, 0.095) },
+            race_delta: MeterSettings {
+                enabled: true,
+                ..MeterSettings::at(0.5, 0.095)
+            },
             background: None,
             background_dim: 60,
             background_zoom: 100,
@@ -447,7 +450,11 @@ impl FrameCache {
             // Drop whatever sits furthest from the playhead.
             let lo = *self.frames.keys().next().unwrap();
             let hi = *self.frames.keys().next_back().unwrap();
-            let drop_key = if (around - lo).abs() >= (hi - around).abs() { lo } else { hi };
+            let drop_key = if (around - lo).abs() >= (hi - around).abs() {
+                lo
+            } else {
+                hi
+            };
             if self.frames.len() <= 1 {
                 break;
             }
@@ -503,6 +510,10 @@ struct Shared {
     /// pipeline setup and cold file caches, which is a candidate for
     /// "slower right after a restart".
     renders_done: std::sync::atomic::AtomicU64,
+    /// Timings and job description of the most recent render, kept for the
+    /// diagnostics report. It used to be printed in the window after every
+    /// render; this is where it belongs.
+    last_render: Mutex<Option<String>>,
 }
 
 impl Shared {
@@ -887,9 +898,28 @@ fn sanitize_filename(name: &str) -> String {
     let stem = trimmed.split('.').next().unwrap_or("").to_ascii_uppercase();
     let reserved = matches!(
         stem.as_str(),
-        "CON" | "PRN" | "AUX" | "NUL"
-            | "COM1" | "COM2" | "COM3" | "COM4" | "COM5" | "COM6" | "COM7" | "COM8" | "COM9"
-            | "LPT1" | "LPT2" | "LPT3" | "LPT4" | "LPT5" | "LPT6" | "LPT7" | "LPT8" | "LPT9"
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
     );
     if reserved {
         trimmed.insert(0, '_');
@@ -960,11 +990,15 @@ fn resolve_ffmpeg(settings: &Settings) -> String {
             return f.clone();
         }
     }
-    let name = if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" };
+    let name = if cfg!(windows) {
+        "ffmpeg.exe"
+    } else {
+        "ffmpeg"
+    };
     let in_path = || {
-        std::env::var_os("PATH").into_iter().any(|paths| {
-            std::env::split_paths(&paths).any(|d| d.join(name).is_file())
-        })
+        std::env::var_os("PATH")
+            .into_iter()
+            .any(|paths| std::env::split_paths(&paths).any(|d| d.join(name).is_file()))
     };
     let mut candidates: Vec<PathBuf> = Vec::new();
     if let Ok(exe) = std::env::current_exe() {
@@ -1019,9 +1053,10 @@ fn update_channel() -> String {
 #[tauri::command]
 fn open_releases_page(app: tauri::AppHandle) {
     use tauri_plugin_opener::OpenerExt;
-    let _ = app
-        .opener()
-        .open_url("https://github.com/KillerOp007/rhythr/releases/latest", None::<&str>);
+    let _ = app.opener().open_url(
+        "https://github.com/KillerOp007/rhythr/releases/latest",
+        None::<&str>,
+    );
 }
 
 /// Whether a remembered window origin still lands on a connected monitor.
@@ -1039,44 +1074,120 @@ fn window_pos_visible(window: &tauri::WebviewWindow, x: i32, y: i32) -> bool {
     monitors.iter().any(|m| {
         let p = m.position();
         let s = m.size();
-        x >= p.x - 32
-            && y >= p.y - 32
-            && x < p.x + s.width as i32
-            && y < p.y + s.height as i32
+        x >= p.x - 32 && y >= p.y - 32 && x < p.x + s.width as i32 && y < p.y + s.height as i32
     })
 }
 
-/// A plain-text description of this build and what it is working with, for
-/// attaching to a bug report. Nothing here leaves the machine on its own —
-/// the user picks where it is written and reads it first.
+/// A bit more than "linux" or "windows", where it is cheap to get.
 ///
-/// Deliberately excluded: the replay's player name and any absolute path
-/// outside what the user already sees in the window, so sharing it does not
-/// leak more than the screenshot they would have sent anyway.
-#[tauri::command]
-fn write_diagnostics(state: tauri::State<'_, App>, path: String) -> Result<String, String> {
+/// The distribution matters on Linux far more than the kernel version does:
+/// which ffmpeg build, which Mesa, whether VAAPI works at all. On Windows the
+/// graphics driver version (reported next to the GPU) says more than the
+/// build number would, so the architecture is enough here.
+fn os_detail() -> String {
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(text) = std::fs::read_to_string("/etc/os-release") {
+            for line in text.lines() {
+                if let Some(v) = line.strip_prefix("PRETTY_NAME=") {
+                    return format!("{} ({})", v.trim_matches('"'), std::env::consts::ARCH);
+                }
+            }
+        }
+    }
+    std::env::consts::ARCH.to_string()
+}
+
+/// ffmpeg's own first line, which names the build and its origin. A build
+/// without the encoder someone needs is a common and otherwise invisible
+/// cause.
+fn ffmpeg_version(ffmpeg: &str) -> Option<String> {
+    let mut cmd = std::process::Command::new(ffmpeg);
+    rhythia_render::video::hide_console_window(&mut cmd);
+    let out = cmd
+        .arg("-version")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    text.lines().next().map(|l| l.trim().to_string())
+}
+
+/// Replaces the user's home directory with `~` so a shared diagnostics file
+/// cannot carry their account name.
+///
+/// This is not cosmetic. Every absolute path on Windows starts
+/// `C:\Users\<their real name>\`, and the report is meant to be sent to a
+/// stranger for help. The path stays useful for diagnosis (what matters is
+/// `~\Videos\clip.mp4`, not who owns the folder) and the name is gone.
+fn redact_path(p: &str) -> String {
+    let Some(home) = dirs::home_dir() else {
+        return p.to_string();
+    };
+    let home = home.to_string_lossy();
+    if home.is_empty() {
+        return p.to_string();
+    }
+    // Windows paths compare case-insensitively; doing it on both is harmless
+    // and catches a drive letter written differently.
+    if p.to_lowercase().starts_with(&home.to_lowercase()) {
+        let sep = if home.contains('\\') { "\\" } else { "/" };
+        let rest = p[home.len()..].trim_start_matches(['/', '\\']);
+        if rest.is_empty() {
+            return "~".to_string();
+        }
+        return format!("~{sep}{rest}");
+    }
+    p.to_string()
+}
+
+/// A plain-text description of this build and what it is working with, for
+/// attaching to a bug report. Nothing here leaves the machine on its own: the
+/// user picks where it goes and can read it first.
+///
+/// Paths are written through [`redact_path`], so the file names folders
+/// without naming the person who owns them.
+fn diagnostics_report(app: &App) -> String {
     use std::fmt::Write as _;
-    let app = state.inner();
     let inner = app.lock();
     let mut s = String::new();
     let _ = writeln!(s, "rhythr {}", env!("CARGO_PKG_VERSION"));
-    let _ = writeln!(s, "os: {} {}", std::env::consts::OS, std::env::consts::ARCH);
+    let _ = writeln!(s, "os: {} {}", std::env::consts::OS, os_detail());
+    let _ = writeln!(
+        s,
+        "cpu: {} logical cores",
+        std::thread::available_parallelism().map_or(0, |n| n.get())
+    );
+    // The single most common cause of a render problem, and it used to be the
+    // one fact a bug report never carried.
+    let _ = writeln!(s, "\ngpu");
+    match rhythia_render::renderer::describe_gpu() {
+        Ok(g) => {
+            let _ = writeln!(s, "  {}", g.summary());
+        }
+        Err(e) => {
+            let _ = writeln!(s, "  UNAVAILABLE: {e}");
+        }
+    }
+    if let Ok(v) = std::env::var("WGPU_BACKEND") {
+        let _ = writeln!(s, "  WGPU_BACKEND={v}");
+    }
 
     let ffmpeg = resolve_ffmpeg(&inner.settings);
     let _ = writeln!(s, "\nffmpeg");
-    let _ = writeln!(s, "  resolved: {ffmpeg}");
-    let _ = writeln!(
-        s,
-        "  runs: {}",
-        rhythia_render::video::ffmpeg_runs(&ffmpeg)
-    );
+    let _ = writeln!(s, "  resolved: {}", redact_path(&ffmpeg));
+    let _ = writeln!(s, "  runs: {}", rhythia_render::video::ffmpeg_runs(&ffmpeg));
+    if let Some(v) = ffmpeg_version(&ffmpeg) {
+        let _ = writeln!(s, "  version: {v}");
+    }
     for e in rhythia_render::video::hardware_encoders() {
         match rhythia_render::video::encoder_error(&ffmpeg, e) {
             None => {
                 let _ = writeln!(s, "  {e}: available");
             }
             Some(why) => {
-                let _ = writeln!(s, "  {e}: unavailable — {why}");
+                let _ = writeln!(s, "  {e}: unavailable ({why})");
             }
         }
     }
@@ -1134,16 +1245,123 @@ fn write_diagnostics(state: tauri::State<'_, App>, path: String) -> Result<Strin
     let _ = writeln!(
         s,
         "  skin config: {}",
-        if cfg.last_config.is_some() { "loaded" } else { "defaults" }
+        if cfg.last_config.is_some() {
+            "loaded"
+        } else {
+            "defaults"
+        }
     );
     let _ = writeln!(
         s,
         "  game assets: {}",
-        if cfg.game_assets.is_some() { "connected" } else { "none" }
+        if cfg.game_assets.is_some() {
+            "connected"
+        } else {
+            "none"
+        }
     );
+    let _ = writeln!(
+        s,
+        "  transport: {}{}",
+        if cfg.tcp_feed { "socket" } else { "pipe" },
+        if cfg.socket_chunk_kib == 0 {
+            ", whole frame".to_string()
+        } else {
+            format!(", {} KiB writes", cfg.socket_chunk_kib)
+        }
+    );
+    if !cfg.transport_note.is_empty() {
+        let _ = writeln!(s, "  last measured: {}", cfg.transport_note);
+    }
+    if let Some(dir) = &cfg.output_dir {
+        let _ = writeln!(s, "  output folder: {}", redact_path(dir));
+    }
 
-    std::fs::write(&path, s).map_err(err_str)?;
+    // What the last render actually did, which is usually the question. This
+    // used to be printed in the window after every render, which was
+    // instrumentation in front of people who only wanted their video; it
+    // belongs here instead.
+    let _ = writeln!(s, "\nlast render");
+    match app.last_render.lock().ok().and_then(|g| g.clone()) {
+        Some(line) => {
+            for l in line.lines() {
+                let _ = writeln!(s, "  {}", redact_path(l.trim()));
+            }
+        }
+        None => {
+            let _ = writeln!(s, "  none this session");
+        }
+    }
+
+    // Settings that differ from a fresh install. Three lines here beat
+    // re-reading the whole block above looking for the one odd value.
+    let d = Settings::default();
+    let mut odd: Vec<String> = Vec::new();
+    let mut note = |name: &str, differs: bool, value: String| {
+        if differs {
+            odd.push(format!("{name} = {value}"));
+        }
+    };
+    note("width", cfg.width != d.width, cfg.width.to_string());
+    note("height", cfg.height != d.height, cfg.height.to_string());
+    note("fps", cfg.fps != d.fps, cfg.fps.to_string());
+    note("quality", cfg.quality != d.quality, cfg.quality.to_string());
+    note("encoder", cfg.encoder != d.encoder, cfg.encoder.clone());
+    note("preset", cfg.preset != d.preset, cfg.preset.clone());
+    note(
+        "motion_blur",
+        cfg.motion_blur != d.motion_blur,
+        cfg.motion_blur.to_string(),
+    );
+    note(
+        "tcp_feed",
+        cfg.tcp_feed != d.tcp_feed,
+        cfg.tcp_feed.to_string(),
+    );
+    note(
+        "socket_chunk_kib",
+        cfg.socket_chunk_kib != d.socket_chunk_kib,
+        cfg.socket_chunk_kib.to_string(),
+    );
+    note(
+        "music_volume",
+        cfg.music_volume != d.music_volume,
+        cfg.music_volume.to_string(),
+    );
+    note(
+        "hitsound_volume",
+        cfg.hitsound_volume != d.hitsound_volume,
+        cfg.hitsound_volume.to_string(),
+    );
+    note(
+        "results_secs",
+        cfg.results_secs != d.results_secs,
+        cfg.results_secs.to_string(),
+    );
+    note("ffmpeg path", cfg.ffmpeg.is_some(), "set by hand".into());
+    let _ = writeln!(s, "\nsettings differing from a fresh install");
+    if odd.is_empty() {
+        let _ = writeln!(s, "  none");
+    } else {
+        for o in odd {
+            let _ = writeln!(s, "  {o}");
+        }
+    }
+
+    s
+}
+
+#[tauri::command]
+fn write_diagnostics(state: tauri::State<'_, App>, path: String) -> Result<String, String> {
+    std::fs::write(&path, diagnostics_report(state.inner())).map_err(err_str)?;
     Ok(path)
+}
+
+/// The same report as text, for the "Copy" button. Some people would rather
+/// paste it into a chat than find a file and attach it.
+#[tauri::command]
+fn diagnostics_text(state: tauri::State<'_, App>) -> String {
+    diagnostics_report(state.inner())
 }
 
 fn verify_dto(replay: &Replay, map: &Map, hash_mismatch: bool) -> VerifyDto {
@@ -1259,7 +1477,11 @@ fn assemble_status(inner: &Inner, rendering: bool) -> StatusDto {
         game_ok,
         bg_video_duration: inner.bg_duration,
         clip: inner.clip,
-        preview_height: if inner.preview_height >= 240 { inner.preview_height } else { PREVIEW_H },
+        preview_height: if inner.preview_height >= 240 {
+            inner.preview_height
+        } else {
+            PREVIEW_H
+        },
         light_background: is_light_background(&inner.base_config),
         build: env!("RHYTHR_BUILD").to_string(),
         can_undo: !inner.undo_stack.is_empty(),
@@ -1279,7 +1501,6 @@ fn png_bytes(rgba: &[u8], w: u32, h: u32) -> Result<Vec<u8>, String> {
     Ok(buf)
 }
 
-
 /// Keeps the map cache below ~2 GiB by deleting the oldest downloads
 /// (there is no other eviction; maps are ~10-50 MB each).
 fn evict_map_cache(keep_id: i32) {
@@ -1292,11 +1513,7 @@ fn evict_map_cache(keep_id: i32) {
         .flatten()
         .filter_map(|e| {
             let meta = e.metadata().ok()?;
-            Some((
-                meta.modified().ok()?,
-                meta.len(),
-                e.path(),
-            ))
+            Some((meta.modified().ok()?, meta.len(), e.path()))
         })
         .collect();
     let mut total: u64 = files.iter().map(|(_, len, _)| len).sum();
@@ -1369,8 +1586,7 @@ fn try_cached_map(replay: &Replay) -> Option<(PathBuf, Map, bool)> {
 /// since the replay was recorded could never satisfy it and was downloaded
 /// again on every single launch.
 fn cache_decision(replay_hash: &str, cached_hash: &str, fetched_for: Option<&str>) -> Option<bool> {
-    let mismatch =
-        !replay_hash.is_empty() && !cached_hash.is_empty() && cached_hash != replay_hash;
+    let mismatch = !replay_hash.is_empty() && !cached_hash.is_empty() && cached_hash != replay_hash;
     if !mismatch {
         return Some(false);
     }
@@ -1428,7 +1644,11 @@ fn notify_sources_changed(app_handle: &tauri::AppHandle) {
 }
 
 #[tauri::command]
-fn load_replay(state: tauri::State<'_, App>, path: String, app_handle: tauri::AppHandle) -> Result<StatusDto, String> {
+fn load_replay(
+    state: tauri::State<'_, App>,
+    path: String,
+    app_handle: tauri::AppHandle,
+) -> Result<StatusDto, String> {
     let app = state.inner();
     let replay = Replay::from_path(&path).map_err(err_str)?;
     let mut inner = app.lock();
@@ -1469,8 +1689,9 @@ fn load_replay(state: tauri::State<'_, App>, path: String, app_handle: tauri::Ap
     // A loaded ghost belongs to the previous replay; drop it when it no
     // longer fits the new one (other map, or a speed it cannot race).
     if let Some((_, g)) = &inner.ghost {
-        let other_map =
-            g.map_id != replay.map_id && !g.beatmap_hash.is_empty() && g.beatmap_hash != replay.beatmap_hash;
+        let other_map = g.map_id != replay.map_id
+            && !g.beatmap_hash.is_empty()
+            && g.beatmap_hash != replay.beatmap_hash;
         if other_map || (g.speed - replay.speed).abs() > 0.005 {
             inner.ghost = None;
         }
@@ -1489,11 +1710,18 @@ fn load_replay(state: tauri::State<'_, App>, path: String, app_handle: tauri::Ap
     normalize_time_bases(&mut inner);
     invalidate_preview(&mut inner);
     notify_sources_changed(&app_handle);
-    Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
+    Ok(assemble_status(
+        &inner,
+        app.rendering.load(Ordering::SeqCst),
+    ))
 }
 
 #[tauri::command]
-fn load_map(state: tauri::State<'_, App>, path: String, app_handle: tauri::AppHandle) -> Result<StatusDto, String> {
+fn load_map(
+    state: tauri::State<'_, App>,
+    path: String,
+    app_handle: tauri::AppHandle,
+) -> Result<StatusDto, String> {
     let app = state.inner();
     let map = Map::from_path(&path).map_err(err_str)?;
     let mut inner = app.lock();
@@ -1503,7 +1731,10 @@ fn load_map(state: tauri::State<'_, App>, path: String, app_handle: tauri::AppHa
     normalize_time_bases(&mut inner);
     invalidate_preview(&mut inner);
     notify_sources_changed(&app_handle);
-    Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
+    Ok(assemble_status(
+        &inner,
+        app.rendering.load(Ordering::SeqCst),
+    ))
 }
 
 #[tauri::command]
@@ -1626,7 +1857,10 @@ fn load_config(
     // The analyze window renders with this config baked in (live engine,
     // cached geometry, overlay palette) — it must rebuild.
     notify_sources_changed(&app_handle);
-    Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
+    Ok(assemble_status(
+        &inner,
+        app.rendering.load(Ordering::SeqCst),
+    ))
 }
 
 #[tauri::command]
@@ -1642,7 +1876,10 @@ fn clear_config(
     inner.settings.save();
     invalidate_preview(&mut inner);
     notify_sources_changed(&app_handle);
-    Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
+    Ok(assemble_status(
+        &inner,
+        app.rendering.load(Ordering::SeqCst),
+    ))
 }
 
 /// Where exe-extracted assets live. One fixed location: re-extracting
@@ -1702,7 +1939,10 @@ async fn set_game_assets(
         inner.base_config = cfg;
         inner.settings.save();
         invalidate_preview(&mut inner);
-        Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
+        Ok(assemble_status(
+            &inner,
+            app.rendering.load(Ordering::SeqCst),
+        ))
     })
     .await
     .map_err(err_str)?
@@ -1750,10 +1990,7 @@ fn detect_game_scan() -> Option<String> {
         if let Some(p) = windows_steam_path() {
             roots.push(p);
         }
-        for base in [
-            "C:\\Program Files (x86)\\Steam",
-            "C:\\Program Files\\Steam",
-        ] {
+        for base in ["C:\\Program Files (x86)\\Steam", "C:\\Program Files\\Steam"] {
             roots.push(PathBuf::from(base));
         }
     } else if let Some(home) = dirs::home_dir() {
@@ -1795,7 +2032,10 @@ fn detect_game_scan() -> Option<String> {
         };
         for e in entries.flatten() {
             let dir_name = e.file_name().to_string_lossy().to_lowercase();
-            if !(dir_name.contains("rhythia") || dir_name.contains("sound space") || dir_name.contains("soundspace")) {
+            if !(dir_name.contains("rhythia")
+                || dir_name.contains("sound space")
+                || dir_name.contains("soundspace"))
+            {
                 continue;
             }
             if let Some((size, p)) = game_binary_in(&e.path()) {
@@ -1819,14 +2059,18 @@ fn game_binary_in(dir: &Path) -> Option<(u64, PathBuf)> {
             continue;
         }
         let name = e.file_name().to_string_lossy().to_lowercase();
-        let looks_like = name.starts_with("rhythia") || name.starts_with("sound space") || name.starts_with("soundspace");
+        let looks_like = name.starts_with("rhythia")
+            || name.starts_with("sound space")
+            || name.starts_with("soundspace");
         let ext_ok = name.ends_with(".exe") || name.ends_with(".x86_64") || !name.contains('.');
         if !looks_like || !ext_ok {
             continue;
         }
         // fs::metadata (not DirEntry::metadata) so symlinked game files —
         // common in hand-built Steam libraries — report their real size.
-        let Ok(meta) = std::fs::metadata(&path) else { continue };
+        let Ok(meta) = std::fs::metadata(&path) else {
+            continue;
+        };
         if meta.len() < 20_000_000 {
             continue;
         }
@@ -1860,16 +2104,26 @@ fn set_hud_override(
     }
     inner.settings.save();
     touch_frames(&mut inner);
-    Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
+    Ok(assemble_status(
+        &inner,
+        app.rendering.load(Ordering::SeqCst),
+    ))
 }
 
 #[tauri::command]
-fn load_ghost(state: tauri::State<'_, App>, path: String, app_handle: tauri::AppHandle) -> Result<StatusDto, String> {
+fn load_ghost(
+    state: tauri::State<'_, App>,
+    path: String,
+    app_handle: tauri::AppHandle,
+) -> Result<StatusDto, String> {
     let app = state.inner();
     let ghost = Replay::from_path(&path).map_err(err_str)?;
     let mut inner = app.lock();
     if let Some((_, r)) = &inner.replay {
-        if ghost.map_id != r.map_id && !ghost.beatmap_hash.is_empty() && ghost.beatmap_hash != r.beatmap_hash {
+        if ghost.map_id != r.map_id
+            && !ghost.beatmap_hash.is_empty()
+            && ghost.beatmap_hash != r.beatmap_hash
+        {
             return Err("that replay was played on a different map".into());
         }
         // Both runs share one timeline and one audio track, so the speed
@@ -1885,17 +2139,26 @@ fn load_ghost(state: tauri::State<'_, App>, path: String, app_handle: tauri::App
     normalize_time_bases(&mut inner);
     invalidate_preview(&mut inner);
     notify_sources_changed(&app_handle);
-    Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
+    Ok(assemble_status(
+        &inner,
+        app.rendering.load(Ordering::SeqCst),
+    ))
 }
 
 #[tauri::command]
-fn clear_ghost(state: tauri::State<'_, App>, app_handle: tauri::AppHandle) -> Result<StatusDto, String> {
+fn clear_ghost(
+    state: tauri::State<'_, App>,
+    app_handle: tauri::AppHandle,
+) -> Result<StatusDto, String> {
     let app = state.inner();
     let mut inner = app.lock();
     inner.ghost = None;
     invalidate_preview(&mut inner);
     notify_sources_changed(&app_handle);
-    Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
+    Ok(assemble_status(
+        &inner,
+        app.rendering.load(Ordering::SeqCst),
+    ))
 }
 
 /// Stores a dragged HUD element's new centre (normalised to the frame —
@@ -1919,7 +2182,10 @@ fn set_hud_position(
         inner.settings.save();
     }
     touch_frames(&mut inner);
-    Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
+    Ok(assemble_status(
+        &inner,
+        app.rendering.load(Ordering::SeqCst),
+    ))
 }
 
 /// The drag editor's corner-handle resize. A scale close to 1 removes the
@@ -1943,7 +2209,10 @@ fn set_hud_scale(
         inner.settings.save();
     }
     touch_frames(&mut inner);
-    Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
+    Ok(assemble_status(
+        &inner,
+        app.rendering.load(Ordering::SeqCst),
+    ))
 }
 
 #[derive(Serialize, Clone)]
@@ -1964,7 +2233,12 @@ async fn hud_layout(state: tauri::State<'_, App>, time_ms: f64) -> Result<Vec<Hu
     tauri::async_runtime::spawn_blocking(move || {
         let mut inner = app.lock();
         {
-            let Inner { preview, settings, base_config, .. } = &mut *inner;
+            let Inner {
+                preview,
+                settings,
+                base_config,
+                ..
+            } = &mut *inner;
             if let Some(ctx) = preview.as_mut() {
                 apply_hud_settings(&mut ctx.cfg, base_config, settings);
             }
@@ -2048,7 +2322,10 @@ fn set_meter(
         inner.settings.save();
     }
     touch_frames(&mut inner);
-    Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
+    Ok(assemble_status(
+        &inner,
+        app.rendering.load(Ordering::SeqCst),
+    ))
 }
 
 /// Puts every draggable HUD element back where the game/config puts it:
@@ -2069,12 +2346,21 @@ fn reset_hud_layout(state: tauri::State<'_, App>) -> Result<StatusDto, String> {
         m.ghost_x = None;
         m.ghost_y = None;
     }
-    park(&mut inner.settings.error_meter, MeterSettings::at(0.5, 0.88));
+    park(
+        &mut inner.settings.error_meter,
+        MeterSettings::at(0.5, 0.88),
+    );
     park(&mut inner.settings.aim_meter, MeterSettings::at(0.15, 0.32));
-    park(&mut inner.settings.race_delta, MeterSettings::at(0.5, 0.095));
+    park(
+        &mut inner.settings.race_delta,
+        MeterSettings::at(0.5, 0.095),
+    );
     inner.settings.save();
     touch_frames(&mut inner);
-    Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
+    Ok(assemble_status(
+        &inner,
+        app.rendering.load(Ordering::SeqCst),
+    ))
 }
 
 /// Sets (or clears, with None) the custom playfield background. Validates
@@ -2091,7 +2377,8 @@ fn set_background(state: tauri::State<'_, App>, path: Option<String>) -> Result<
         let kind = bg::classify_file(&pb).map_err(|e| format!("could not read background: {e}"))?;
         match kind {
             bg::BackgroundKind::Image => {
-                let bytes = std::fs::read(&pb).map_err(|e| format!("could not read background: {e}"))?;
+                let bytes =
+                    std::fs::read(&pb).map_err(|e| format!("could not read background: {e}"))?;
                 if !bg::image_decodes(&bytes) {
                     return Err("could not decode this image".into());
                 }
@@ -2100,9 +2387,7 @@ fn set_background(state: tauri::State<'_, App>, path: Option<String>) -> Result<
                 let ffmpeg = resolve_ffmpeg(&inner.settings);
                 duration = bg::probe_duration(&ffmpeg, &pb);
                 if duration.is_none() {
-                    return Err(
-                        "ffmpeg could not read this file — unsupported or corrupt".into()
-                    );
+                    return Err("ffmpeg could not read this file — unsupported or corrupt".into());
                 }
             }
         }
@@ -2115,7 +2400,10 @@ fn set_background(state: tauri::State<'_, App>, path: Option<String>) -> Result<
     inner.settings.background = path;
     inner.settings.save();
     invalidate_preview(&mut inner);
-    Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
+    Ok(assemble_status(
+        &inner,
+        app.rendering.load(Ordering::SeqCst),
+    ))
 }
 
 /// The user's zoom/shift/start placement of the custom background. All
@@ -2159,7 +2447,10 @@ fn set_background_transform(
     if inner.bg_duration.is_none() {
         invalidate_preview(&mut inner);
     }
-    Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
+    Ok(assemble_status(
+        &inner,
+        app.rendering.load(Ordering::SeqCst),
+    ))
 }
 
 #[tauri::command]
@@ -2176,7 +2467,10 @@ fn save_preset(state: tauri::State<'_, App>, name: String) -> Result<StatusDto, 
     let snap = preset_snapshot(&inner);
     inner.settings.presets.insert(name, snap);
     inner.settings.save();
-    Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
+    Ok(assemble_status(
+        &inner,
+        app.rendering.load(Ordering::SeqCst),
+    ))
 }
 
 #[tauri::command]
@@ -2202,9 +2496,7 @@ fn apply_preset(state: tauri::State<'_, App>, name: String) -> Result<StatusDto,
         let pb = PathBuf::from(b);
         (rhythia_render::background::classify_file(&pb).ok()
             == Some(rhythia_render::background::BackgroundKind::Video))
-        .then(|| {
-            rhythia_render::background::probe_duration(&resolve_ffmpeg(&inner.settings), &pb)
-        })
+        .then(|| rhythia_render::background::probe_duration(&resolve_ffmpeg(&inner.settings), &pb))
         .flatten()
     });
     // The preset's skin config — falls back to defaults when it had none
@@ -2220,7 +2512,10 @@ fn apply_preset(state: tauri::State<'_, App>, name: String) -> Result<StatusDto,
     }
     inner.settings.save();
     invalidate_preview(&mut inner);
-    Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
+    Ok(assemble_status(
+        &inner,
+        app.rendering.load(Ordering::SeqCst),
+    ))
 }
 
 #[tauri::command]
@@ -2229,7 +2524,10 @@ fn delete_preset(state: tauri::State<'_, App>, name: String) -> Result<StatusDto
     let mut inner = app.lock();
     inner.settings.presets.remove(&name);
     inner.settings.save();
-    Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
+    Ok(assemble_status(
+        &inner,
+        app.rendering.load(Ordering::SeqCst),
+    ))
 }
 
 #[tauri::command]
@@ -2244,7 +2542,10 @@ fn undo_layout(state: tauri::State<'_, App>) -> Result<StatusDto, String> {
     apply_layout_only(&mut inner.settings, &p);
     inner.settings.save();
     touch_frames(&mut inner);
-    Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
+    Ok(assemble_status(
+        &inner,
+        app.rendering.load(Ordering::SeqCst),
+    ))
 }
 
 #[tauri::command]
@@ -2262,7 +2563,10 @@ fn redo_layout(state: tauri::State<'_, App>) -> Result<StatusDto, String> {
     apply_layout_only(&mut inner.settings, &p);
     inner.settings.save();
     touch_frames(&mut inner);
-    Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
+    Ok(assemble_status(
+        &inner,
+        app.rendering.load(Ordering::SeqCst),
+    ))
 }
 
 /// One undo snapshot per drag gesture: the frontend calls this on
@@ -2284,7 +2588,10 @@ fn set_clip(state: tauri::State<'_, App>, start_ms: f64, end_ms: f64) -> Result<
         return Err("clip is too short — give it at least half a second".into());
     }
     inner.clip = Some((start_ms.max(0.0), end_ms));
-    Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
+    Ok(assemble_status(
+        &inner,
+        app.rendering.load(Ordering::SeqCst),
+    ))
 }
 
 #[tauri::command]
@@ -2292,7 +2599,10 @@ fn clear_clip(state: tauri::State<'_, App>) -> Result<StatusDto, String> {
     let app = state.inner();
     let mut inner = app.lock();
     inner.clip = None;
-    Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
+    Ok(assemble_status(
+        &inner,
+        app.rendering.load(Ordering::SeqCst),
+    ))
 }
 
 #[tauri::command]
@@ -2302,7 +2612,10 @@ fn set_background_dim(state: tauri::State<'_, App>, pct: u32) -> Result<StatusDt
     inner.settings.background_dim = pct.min(100);
     inner.settings.save();
     touch_frames(&mut inner);
-    Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
+    Ok(assemble_status(
+        &inner,
+        app.rendering.load(Ordering::SeqCst),
+    ))
 }
 
 #[tauri::command]
@@ -2317,7 +2630,10 @@ fn reset_hud_overrides(state: tauri::State<'_, App>) -> Result<StatusDto, String
     inner.settings.hud_scales.clear();
     inner.settings.save();
     touch_frames(&mut inner);
-    Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
+    Ok(assemble_status(
+        &inner,
+        app.rendering.load(Ordering::SeqCst),
+    ))
 }
 
 #[derive(Deserialize, Default)]
@@ -2400,7 +2716,10 @@ fn set_output(state: tauri::State<'_, App>, update: OutputUpdate) -> Result<Stat
     if (inner.settings.height > inner.settings.width) != was_portrait {
         invalidate_preview(&mut inner);
     }
-    Ok(assemble_status(&inner, app.rendering.load(Ordering::SeqCst)))
+    Ok(assemble_status(
+        &inner,
+        app.rendering.load(Ordering::SeqCst),
+    ))
 }
 
 #[tauri::command]
@@ -2591,7 +2910,10 @@ fn prepare_segment(
         // segment-ready or segment-error, so a silent death hangs it forever.
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
             let emit_err = |msg: String| {
-                let _ = app_handle.emit("segment-error", serde_json::json!({"token": token, "message": msg}));
+                let _ = app_handle.emit(
+                    "segment-error",
+                    serde_json::json!({"token": token, "message": msg}),
+                );
             };
             let renderer = match rhythia_render::Renderer::new(w, h, cfg.hud_font.as_deref()) {
                 Ok(r) => r,
@@ -2811,9 +3133,12 @@ async fn start_live_session(
             // Built from the environment, not `default()`: WGPU_BACKEND is
             // the only escape hatch a user has when the picked backend is
             // the broken one, and wgpu reads it only when asked to.
-            let instance =
-                wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-            let surface = instance.create_surface(win2.clone()).map_err(|e| e.to_string());
+            let instance = wgpu::Instance::new(
+                wgpu::InstanceDescriptor::new_without_display_handle_from_env(),
+            );
+            let surface = instance
+                .create_surface(win2.clone())
+                .map_err(|e| e.to_string());
             let _ = stx.send(surface.map(|s| (instance, s)));
         })
         .map_err(err_str)?;
@@ -3126,9 +3451,16 @@ fn ensure_preview_ctx(app: &App, _time_ms: f64) -> Result<(), String> {
             // The preview mirrors the OUTPUT's orientation: editing a
             // vertical (Shorts) render needs a vertical live preview.
             // (0 only if a future Default sneaks past the initializer)
-            let base_h = if inner.preview_height >= 240 { inner.preview_height } else { PREVIEW_H };
+            let base_h = if inner.preview_height >= 240 {
+                inner.preview_height
+            } else {
+                PREVIEW_H
+            };
             let (pw, ph) = if inner.settings.height > inner.settings.width {
-                (base_h * inner.settings.width / inner.settings.height, base_h)
+                (
+                    base_h * inner.settings.width / inner.settings.height,
+                    base_h,
+                )
             } else {
                 (base_h * PREVIEW_W / PREVIEW_H, base_h)
             };
@@ -3157,8 +3489,16 @@ fn ensure_preview_ctx(app: &App, _time_ms: f64) -> Result<(), String> {
             let hud = rhythia_render::hud::HudState::new(&main_map, r);
             if let Some(g) = ghost.as_mut() {
                 g.race = Some(rhythia_render::race::RaceSeries::for_race(
-                    &rhythia_render::race::RaceSide { map: &main_map, replay: r, state: &hud },
-                    &rhythia_render::race::RaceSide { map: &g.map, replay: &g.replay, state: &g.state },
+                    &rhythia_render::race::RaceSide {
+                        map: &main_map,
+                        replay: r,
+                        state: &hud,
+                    },
+                    &rhythia_render::race::RaceSide {
+                        map: &g.map,
+                        replay: &g.replay,
+                        state: &g.state,
+                    },
                 ));
             }
             // A video background needs live frame extraction per scrub;
@@ -3189,7 +3529,12 @@ fn ensure_preview_ctx(app: &App, _time_ms: f64) -> Result<(), String> {
         {
             // Live editing: the cached pipeline stays, only the cheap
             // layout part of the config is refreshed per frame.
-            let Inner { preview, settings, base_config, .. } = &mut *inner;
+            let Inner {
+                preview,
+                settings,
+                base_config,
+                ..
+            } = &mut *inner;
             if let Some(ctx) = preview.as_mut() {
                 apply_hud_settings(&mut ctx.cfg, base_config, settings);
             }
@@ -3292,23 +3637,32 @@ fn frame_sides_locked(inner: &Inner, time_ms: f64) -> Result<PreviewFrameDto, St
                 };
                 let notes = ctx
                     .renderer
-                    .note_screen_quads(
-                        &params,
-                        map,
-                        replay,
-                        time_ms,
-                        (x, w),
-                        Some(hud),
-                        ctx_linger,
-                    )
+                    .note_screen_quads(&params, map, replay, time_ms, (x, w), Some(hud), ctx_linger)
                     .into_iter()
-                    .map(|(i, pts, depth)| NoteQuadDto { i: i as u32, pts, depth })
+                    .map(|(i, pts, depth)| NoteQuadDto {
+                        i: i as u32,
+                        pts,
+                        depth,
+                    })
                     .collect();
-                let field = ctx.renderer.playfield_quad(&params, replay, time_ms, (x, w));
-                SideProjDto { x, w, m, notes, field }
+                let field = ctx
+                    .renderer
+                    .playfield_quad(&params, replay, time_ms, (x, w));
+                SideProjDto {
+                    x,
+                    w,
+                    m,
+                    notes,
+                    field,
+                }
             })
             .collect();
-        Ok(PreviewFrameDto { img, w: pw, h: ph, sides })
+        Ok(PreviewFrameDto {
+            img,
+            w: pw,
+            h: ph,
+            sides,
+        })
     }
 }
 
@@ -3340,11 +3694,9 @@ async fn analysis_data(state: tauri::State<'_, App>) -> Result<AnalysisDto, Stri
         // Analyze against the map as this player saw it (mirror/hardrock).
         let (main_map, main_mods) = rhythia_render::mods::map_for_replay(m, r);
         let main = rhythia_render::analysis::analyze(&main_map, r);
-        let bound_of = |grid_scale: f32| {
-            grid_scale + (0.5 - rhythia_sim::hitreg::CURSOR_EDGE_INSET)
-        };
-        let (ghost, ghost_distance, ghost_player, ghost_cursor_bound) = match inner.ghost.as_ref()
-        {
+        let bound_of =
+            |grid_scale: f32| grid_scale + (0.5 - rhythia_sim::hitreg::CURSOR_EDGE_INSET);
+        let (ghost, ghost_distance, ghost_player, ghost_cursor_bound) = match inner.ghost.as_ref() {
             Some((_, g)) => {
                 let (gmap, gmods) = rhythia_render::mods::map_for_replay(m, g);
                 (
@@ -3418,15 +3770,19 @@ async fn open_analyze_window(app_handle: tauri::AppHandle) -> Result<(), String>
     }
     let native_capable =
         cfg!(target_os = "windows") || std::env::var("RHYTHR_NATIVE_ANALYZE").is_ok();
-    let win = WebviewWindowBuilder::new(&app_handle, "analyze", WebviewUrl::App("analyze.html".into()))
-        .title("rhythr — Analyze")
-        .inner_size(1280.0, 800.0)
-        .min_inner_size(760.0, 520.0)
-        // Live mode paints BEHIND the webview; the page body goes
-        // transparent so the wgpu frame shows through.
-        .transparent(native_capable)
-        .build()
-        .map_err(err_str)?;
+    let win = WebviewWindowBuilder::new(
+        &app_handle,
+        "analyze",
+        WebviewUrl::App("analyze.html".into()),
+    )
+    .title("rhythr — Analyze")
+    .inner_size(1280.0, 800.0)
+    .min_inner_size(760.0, 520.0)
+    // Live mode paints BEHIND the webview; the page body goes
+    // transparent so the wgpu frame shows through.
+    .transparent(native_capable)
+    .build()
+    .map_err(err_str)?;
     // Closing it drops the preview back to its normal size.
     let handle = app_handle.clone();
     let win_for_close = win.clone();
@@ -3603,8 +3959,8 @@ async fn export_frame(
         let cfg = render_config(&inner);
         let (w, h) = (inner.settings.width, inner.settings.height);
         let mut params = SceneParams::from(&cfg);
-        let renderer =
-            rhythia_render::Renderer::new(w, h, cfg.hud_font.as_deref()).map_err(|e| gpu_err(&e))?;
+        let renderer = rhythia_render::Renderer::new(w, h, cfg.hud_font.as_deref())
+            .map_err(|e| gpu_err(&e))?;
         let skin = renderer.prepare_skin(&cfg);
         let (m, mods) = rhythia_render::mods::map_for_replay(m, r);
         params.apply_mods(&mods);
@@ -3638,8 +3994,8 @@ async fn export_card(
         let (_, r) = inner.replay.as_ref().ok_or("no replay loaded")?;
         let (_, m) = inner.map.as_ref().ok_or("no map loaded")?;
         let cfg = render_config(&inner);
-        let renderer =
-            rhythia_render::Renderer::new(w, h, cfg.hud_font.as_deref()).map_err(|e| gpu_err(&e))?;
+        let renderer = rhythia_render::Renderer::new(w, h, cfg.hud_font.as_deref())
+            .map_err(|e| gpu_err(&e))?;
         let hud = rhythia_render::hud::HudState::new(m, r);
         let pixels = renderer.render_card(r, m, &hud, &cfg).map_err(err_str)?;
         rhythia_render::write_png(Path::new(&path), &pixels, w, h).map_err(err_str)
@@ -3695,8 +4051,14 @@ fn planned_output(inner: &Inner) -> Result<PathBuf, String> {
 /// The first free "name (2).mp4", "name (3).mp4"… next to a taken path.
 fn next_free_path(path: &Path) -> PathBuf {
     let dir = path.parent().unwrap_or(Path::new("."));
-    let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-    let ext = path.extension().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "mp4".into());
+    let stem = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let ext = path
+        .extension()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "mp4".into());
     for n in 2..10_000 {
         let candidate = dir.join(format!("{stem} ({n}).{ext}"));
         if !candidate.exists() {
@@ -3761,12 +4123,13 @@ fn start_render(
             motion_blur: s.motion_blur,
             music_volume: s.music_volume.min(150) as f32 / 100.0,
             hitsounds: load_hitsounds(s),
-            ghost: inner.ghost.as_ref().map(|(_, g)| {
-                rhythia_render::video::GhostOptions {
+            ghost: inner
+                .ghost
+                .as_ref()
+                .map(|(_, g)| rhythia_render::video::GhostOptions {
                     replay: g.clone(),
                     color: GHOST_COLOR,
-                }
-            }),
+                }),
             background_video: s.background.as_ref().and_then(|p| {
                 let pb = PathBuf::from(p);
                 (rhythia_render::background::classify_file(&pb).ok()
@@ -3811,6 +4174,17 @@ fn start_render(
         thread_app.rendering.store(false, Ordering::SeqCst);
         match outcome {
             Ok(Ok((path, stats, detail))) => {
+                // Kept for "Save diagnostics": this is what someone needs when
+                // they report a render that was slow or came out wrong, and
+                // asking them to reproduce it is a poor substitute.
+                if let Ok(mut slot) = thread_app.last_render.lock() {
+                    *slot = Some(format!(
+                        "{}\n{}\nwrote {}",
+                        stats.summary(),
+                        detail,
+                        path.display()
+                    ));
+                }
                 let _ = app_handle.emit(
                     "render-done",
                     RenderDone {
@@ -3905,7 +4279,11 @@ fn render_detail(app: &App, job: &RenderJob, encoder: &str, nth: u64) -> String 
         "{}{}x{} @{} fps · quality {} (x264 {} / hw {}) · {} · {}
          {} · frame write {} · ghost {} · blur {} · background {} · hitsounds {}
          replay {} · map {}{} · render #{} since start",
-        if job.dry_run { "DIAGNOSTIC — nothing encoded, no file written\n" } else { "" },
+        if job.dry_run {
+            "DIAGNOSTIC — nothing encoded, no file written\n"
+        } else {
+            ""
+        },
         job.width,
         job.height,
         job.fps,
@@ -3914,7 +4292,11 @@ fn render_detail(app: &App, job: &RenderJob, encoder: &str, nth: u64) -> String 
         rhythia_render::quality::hardware_q(q),
         encoder,
         job.preset,
-        if job.tcp_feed { "socket requested" } else { "pipe requested" },
+        if job.tcp_feed {
+            "socket requested"
+        } else {
+            "pipe requested"
+        },
         if job.socket_chunk_kib == 0 {
             "whole frame".to_string()
         } else {
@@ -3924,7 +4306,11 @@ fn render_detail(app: &App, job: &RenderJob, encoder: &str, nth: u64) -> String 
         job.motion_blur,
         bg,
         if job.hitsounds.is_some() { "on" } else { "off" },
-        if restored { "restored at startup" } else { "opened by hand" },
+        if restored {
+            "restored at startup"
+        } else {
+            "opened by hand"
+        },
         map_source,
         if mismatch { " (HASH MISMATCH)" } else { "" },
         nth,
@@ -4023,7 +4409,11 @@ fn run_render_job(
             if last_emit.elapsed().as_millis() >= 200 || done == total {
                 last_emit = std::time::Instant::now();
                 let elapsed = started.elapsed().as_secs_f64();
-                let fps = if elapsed > 0.0 { done as f64 / elapsed } else { 0.0 };
+                let fps = if elapsed > 0.0 {
+                    done as f64 / elapsed
+                } else {
+                    0.0
+                };
                 final_fps = fps;
                 let eta = if fps > 0.0 {
                     (total - done) as f64 / fps
@@ -4095,7 +4485,9 @@ fn probe_cache() -> &'static std::sync::Mutex<
     std::collections::HashMap<String, (Vec<String>, BTreeMap<String, String>)>,
 > {
     static CACHE: std::sync::OnceLock<
-        std::sync::Mutex<std::collections::HashMap<String, (Vec<String>, BTreeMap<String, String>)>>,
+        std::sync::Mutex<
+            std::collections::HashMap<String, (Vec<String>, BTreeMap<String, String>)>,
+        >,
     > = std::sync::OnceLock::new();
     CACHE.get_or_init(Default::default)
 }
@@ -4184,7 +4576,10 @@ async fn probe_encoders(state: tauri::State<'_, App>) -> Result<EncoderProbe, St
         };
         let mut unavailable = BTreeMap::new();
         if !missing {
-            let cached = probe_cache().lock().ok().and_then(|c| c.get(&ffmpeg).cloned());
+            let cached = probe_cache()
+                .lock()
+                .ok()
+                .and_then(|c| c.get(&ffmpeg).cloned());
             match cached {
                 Some((hw, why)) => {
                     available.extend(hw);
@@ -4300,6 +4695,7 @@ fn main() {
         segment_gen: std::sync::atomic::AtomicU64::new(0),
         render_thread: Mutex::new(None),
         renders_done: std::sync::atomic::AtomicU64::new(0),
+        last_render: Mutex::new(None),
     });
 
     // Restore the last config; load a replay passed as CLI arg (file
@@ -4373,7 +4769,11 @@ fn main() {
                     serve_frame(&app_handle, req.uri().query().unwrap_or(""))
                 }));
                 match work {
-                    Ok(Ok(png)) => answer(tauri::http::StatusCode::OK, "image/png", png.as_ref().clone()),
+                    Ok(Ok(png)) => answer(
+                        tauri::http::StatusCode::OK,
+                        "image/png",
+                        png.as_ref().clone(),
+                    ),
                     Ok(Err(e)) => answer(
                         tauri::http::StatusCode::INTERNAL_SERVER_ERROR,
                         "text/plain",
@@ -4483,7 +4883,10 @@ fn main() {
                             .filter(|v| !v.is_empty())
                             .and_then(|v| v.parse::<u64>().ok())
                             .unwrap_or(total.saturating_sub(1));
-                        (s.min(total.saturating_sub(1)), e.min(total.saturating_sub(1)))
+                        (
+                            s.min(total.saturating_sub(1)),
+                            e.min(total.saturating_sub(1)),
+                        )
                     }) {
                     Some((s, e)) if total > 0 => {
                         let slice = bytes[s as usize..=e as usize].to_vec();
@@ -4635,6 +5038,7 @@ fn main() {
             start_render,
             planned_output_path,
             write_diagnostics,
+            diagnostics_text,
             cancel_render,
             probe_encoders,
             benchmark_transport,
@@ -4644,10 +5048,7 @@ fn main() {
         .run(|app_handle, event| {
             if let tauri::RunEvent::ExitRequested { .. } = event {
                 // Persist the window geometry once, on the way out.
-                let rect = LAST_WINDOW_RECT
-                    .lock()
-                    .ok()
-                    .and_then(|slot| *slot);
+                let rect = LAST_WINDOW_RECT.lock().ok().and_then(|slot| *slot);
                 if let Some(rect) = rect {
                     let shared = app_handle.state::<App>();
                     let mut inner = shared.lock();
@@ -4716,7 +5117,11 @@ mod settings_migration_tests {
     /// runs the same clamp at load so a file cannot carry a harmful value.
     #[test]
     fn a_harmful_socket_chunk_from_an_old_settings_file_is_normalised() {
-        assert_eq!(clamp_socket_chunk_kib(16), 256, "16 KiB must be lifted, not kept");
+        assert_eq!(
+            clamp_socket_chunk_kib(16),
+            256,
+            "16 KiB must be lifted, not kept"
+        );
         assert_eq!(clamp_socket_chunk_kib(1), 256);
         assert_eq!(clamp_socket_chunk_kib(0), 0, "whole frame stays valid");
         assert_eq!(clamp_socket_chunk_kib(64), 64);
@@ -4765,12 +5170,21 @@ mod settings_migration_tests {
         inner.analyze_hide_cursor = true;
 
         let looking = effective_config(&inner);
-        assert_eq!(looking.note_opacity, 0.0, "the preview stopped honouring the toggle");
+        assert_eq!(
+            looking.note_opacity, 0.0,
+            "the preview stopped honouring the toggle"
+        );
         assert_eq!(looking.cursor_opacity, 0.0);
 
         let keeping = render_config(&inner);
-        assert!(keeping.note_opacity > 0.0, "a render would come out with no notes");
-        assert!(keeping.cursor_opacity > 0.0, "a render would come out with no cursor");
+        assert!(
+            keeping.note_opacity > 0.0,
+            "a render would come out with no notes"
+        );
+        assert!(
+            keeping.cursor_opacity > 0.0,
+            "a render would come out with no cursor"
+        );
     }
 
     use super::*;

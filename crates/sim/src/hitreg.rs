@@ -450,10 +450,24 @@ mod tests {
     #[test]
     fn cursor_reattributes_swapped_double_note() {
         let notes = [
-            Note { time_ms: 1000, x: 0.0, y: 2.0 }, // world (-1, -1)
-            Note { time_ms: 1005, x: 1.0, y: 2.0 }, // world (0, -1)
+            Note {
+                time_ms: 1000,
+                x: 0.0,
+                y: 2.0,
+            }, // world (-1, -1)
+            Note {
+                time_ms: 1005,
+                x: 1.0,
+                y: 2.0,
+            }, // world (0, -1)
         ];
-        let frames = [Frame { ms: 1004.0, x: 0.0, y: -1.0, health: 1.0, hit: true }];
+        let frames = [Frame {
+            ms: 1004.0,
+            x: 0.0,
+            y: -1.0,
+            health: 1.0,
+            hit: true,
+        }];
         let out = match_hits(&notes, &frames, TEST_WINDOW_MS);
         assert!(!out.results[0].hit, "cursor never covered note 0");
         assert!(out.results[1].hit, "cursor sat on note 1");
@@ -466,11 +480,25 @@ mod tests {
     #[test]
     fn ambiguous_cursor_keeps_earliest_attribution() {
         let notes = [
-            Note { time_ms: 1000, x: 0.0, y: 2.0 }, // world (-1, -1)
-            Note { time_ms: 1005, x: 1.0, y: 2.0 }, // world (0, -1)
+            Note {
+                time_ms: 1000,
+                x: 0.0,
+                y: 2.0,
+            }, // world (-1, -1)
+            Note {
+                time_ms: 1005,
+                x: 1.0,
+                y: 2.0,
+            }, // world (0, -1)
         ];
         // Cursor midway: covers both areas.
-        let frames = [Frame { ms: 1004.0, x: -0.5, y: -1.0, health: 1.0, hit: true }];
+        let frames = [Frame {
+            ms: 1004.0,
+            x: -0.5,
+            y: -1.0,
+            health: 1.0,
+            hit: true,
+        }];
         let out = match_hits(&notes, &frames, TEST_WINDOW_MS);
         assert!(out.results[0].hit);
         assert!(!out.results[1].hit);
@@ -481,15 +509,32 @@ mod tests {
     #[test]
     fn future_note_cannot_steal_a_flag() {
         let notes = [
-            Note { time_ms: 1000, x: 0.0, y: 0.0 }, // world (-1, 1)
-            Note { time_ms: 1075, x: 2.0, y: 0.0 }, // world (1, 1)
+            Note {
+                time_ms: 1000,
+                x: 0.0,
+                y: 0.0,
+            }, // world (-1, 1)
+            Note {
+                time_ms: 1075,
+                x: 2.0,
+                y: 0.0,
+            }, // world (1, 1)
         ];
         // Flag at 1000 for note 0, but the cursor already left toward
         // note 1's cell (fast jump + frame quantization).
-        let frames = [Frame { ms: 1000.0, x: 1.0, y: 1.0, health: 1.0, hit: true }];
+        let frames = [Frame {
+            ms: 1000.0,
+            x: 1.0,
+            y: 1.0,
+            health: 1.0,
+            hit: true,
+        }];
         let out = match_hits(&notes, &frames, TEST_WINDOW_MS);
         assert!(out.results[0].hit, "note 0 keeps its flag");
-        assert!(!out.results[1].hit, "a note 75 ms in the future must not steal it");
+        assert!(
+            !out.results[1].hit,
+            "a note 75 ms in the future must not steal it"
+        );
     }
 
     /// Three simultaneous notes taken in the order B, C, A: the crossed
@@ -499,14 +544,44 @@ mod tests {
     #[test]
     fn three_note_cluster_rotates_without_duplicates() {
         let notes = [
-            Note { time_ms: 1000, x: 0.0, y: 1.0 }, // world (-1, 0)
-            Note { time_ms: 1000, x: 1.0, y: 1.0 }, // world (0, 0)
-            Note { time_ms: 1000, x: 2.0, y: 1.0 }, // world (1, 0)
+            Note {
+                time_ms: 1000,
+                x: 0.0,
+                y: 1.0,
+            }, // world (-1, 0)
+            Note {
+                time_ms: 1000,
+                x: 1.0,
+                y: 1.0,
+            }, // world (0, 0)
+            Note {
+                time_ms: 1000,
+                x: 2.0,
+                y: 1.0,
+            }, // world (1, 0)
         ];
         let frames = [
-            Frame { ms: 1000.0, x: 0.0, y: 0.0, health: 1.0, hit: true },  // on note 1
-            Frame { ms: 1005.0, x: 1.0, y: 0.0, health: 1.0, hit: true },  // on note 2
-            Frame { ms: 1010.0, x: -1.0, y: 0.0, health: 1.0, hit: true }, // on note 0
+            Frame {
+                ms: 1000.0,
+                x: 0.0,
+                y: 0.0,
+                health: 1.0,
+                hit: true,
+            }, // on note 1
+            Frame {
+                ms: 1005.0,
+                x: 1.0,
+                y: 0.0,
+                health: 1.0,
+                hit: true,
+            }, // on note 2
+            Frame {
+                ms: 1010.0,
+                x: -1.0,
+                y: 0.0,
+                health: 1.0,
+                hit: true,
+            }, // on note 0
         ];
         let out = match_hits(&notes, &frames, TEST_WINDOW_MS);
         let ms: Vec<f64> = out.results.iter().map(|r| r.hit_ms.unwrap()).collect();
@@ -522,13 +597,37 @@ mod tests {
     #[test]
     fn reattribution_never_changes_totals() {
         let notes = [
-            Note { time_ms: 1000, x: 0.0, y: 0.0 },
-            Note { time_ms: 1010, x: 2.0, y: 0.0 },
-            Note { time_ms: 1020, x: 1.0, y: 1.0 },
+            Note {
+                time_ms: 1000,
+                x: 0.0,
+                y: 0.0,
+            },
+            Note {
+                time_ms: 1010,
+                x: 2.0,
+                y: 0.0,
+            },
+            Note {
+                time_ms: 1020,
+                x: 1.0,
+                y: 1.0,
+            },
         ];
         let frames = [
-            Frame { ms: 1008.0, x: 1.0, y: 1.0, health: 1.0, hit: true }, // on note 1
-            Frame { ms: 1022.0, x: 0.0, y: 0.0, health: 1.0, hit: true }, // on note 2
+            Frame {
+                ms: 1008.0,
+                x: 1.0,
+                y: 1.0,
+                health: 1.0,
+                hit: true,
+            }, // on note 1
+            Frame {
+                ms: 1022.0,
+                x: 0.0,
+                y: 0.0,
+                health: 1.0,
+                hit: true,
+            }, // on note 2
         ];
         let out = match_hits(&notes, &frames, TEST_WINDOW_MS);
         assert_eq!(out.derived_hits(), 2);

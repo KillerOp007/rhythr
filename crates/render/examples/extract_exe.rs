@@ -2,7 +2,10 @@
 //! Usage: extract_exe <rhythia.exe> <out-dir>
 fn main() {
     let mut args = std::env::args().skip(1);
-    let (exe, out) = (args.next().expect("exe path"), args.next().expect("out dir"));
+    let (exe, out) = (
+        args.next().expect("exe path"),
+        args.next().expect("out dir"),
+    );
     match rhythia_render::exe_assets::extract_to_dir(
         std::path::Path::new(&exe),
         std::path::Path::new(&out),

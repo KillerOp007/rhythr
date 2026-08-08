@@ -161,7 +161,11 @@ impl Nv12Path {
     }
 
     pub fn upload_dims(&self, queue: &wgpu::Queue, width: u32, height: u32) {
-        queue.write_buffer(&self.dims_buf, 0, bytemuck::bytes_of(&[width, height, 0, 0]));
+        queue.write_buffer(
+            &self.dims_buf,
+            0,
+            bytemuck::bytes_of(&[width, height, 0, 0]),
+        );
     }
 
     /// Appends the conversion and the copy into the mappable readback buffer
@@ -221,7 +225,11 @@ mod tests {
             // reads exactly the bytes written here.
             let tex = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("nv12-test-src"),
-                size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
@@ -242,7 +250,11 @@ mod tests {
                     bytes_per_row: Some(width * 4),
                     rows_per_image: Some(height),
                 },
-                wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+                wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
             );
 
             let view = tex.create_view(&Default::default());
@@ -254,8 +266,8 @@ mod tests {
                 usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
-            let mut encoder = device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+            let mut encoder =
+                device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
             path.encode(&mut encoder, 0, &readback, width, height);
             let idx = queue.submit(Some(encoder.finish()));
 
@@ -292,7 +304,11 @@ mod tests {
                     3 => [255, 255, 255],
                     4 => [0, 0, 0],
                     5 => [128, 128, 128],
-                    6 => [(x * 7 % 256) as u8, (y * 5 % 256) as u8, (i * 3 % 256) as u8],
+                    6 => [
+                        (x * 7 % 256) as u8,
+                        (y * 5 % 256) as u8,
+                        (i * 3 % 256) as u8,
+                    ],
                     _ => [(i % 251) as u8, (i * 13 % 241) as u8, (i * 29 % 239) as u8],
                 };
                 v.extend_from_slice(&[px[0], px[1], px[2], 255]);

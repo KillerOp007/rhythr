@@ -212,7 +212,10 @@ pub fn render_video(
     let mut ghost_input = opts.ghost.as_ref().map(|g| {
         let mut greplay = g.replay.clone();
         rhythia_sim::timebase::normalize(&mut greplay, map);
-        let g = crate::video::GhostOptions { replay: greplay, color: g.color };
+        let g = crate::video::GhostOptions {
+            replay: greplay,
+            color: g.color,
+        };
         let g = &g;
         let (gmap, gmods) = crate::mods::map_for_replay(map, &g.replay);
         crate::hud::GhostInput {
@@ -236,8 +239,16 @@ pub fn render_video(
     // graph) is fixed — build it once.
     if let Some(g) = ghost_input.as_mut() {
         g.race = Some(crate::race::RaceSeries::for_race(
-            &crate::race::RaceSide { map, replay, state: &hud_state },
-            &crate::race::RaceSide { map: &g.map, replay: &g.replay, state: &g.state },
+            &crate::race::RaceSide {
+                map,
+                replay,
+                state: &hud_state,
+            },
+            &crate::race::RaceSide {
+                map: &g.map,
+                replay: &g.replay,
+                state: &g.state,
+            },
         ));
     }
     let ghost_input = ghost_input;
@@ -321,7 +332,10 @@ pub fn render_video(
     let mut _hits_tmp: Option<tempfile::NamedTempFile> = None;
     if let (Some(hs), true) = (&opts.hitsounds, opts.audio.is_some()) {
         let track = crate::audio::Clip::from_wav(&hs.hit_wav).and_then(|hit| {
-            let miss = hs.miss_wav.as_deref().and_then(crate::audio::Clip::from_wav);
+            let miss = hs
+                .miss_wav
+                .as_deref()
+                .and_then(crate::audio::Clip::from_wav);
             let note_times: Vec<f64> = map.notes.iter().map(|n| n.time_ms as f64).collect();
             crate::audio::build_hitsound_wav(
                 &hit,
@@ -394,7 +408,10 @@ pub fn render_video(
         // higher-pitched) — resample to a known rate first so asetrate
         // scales from a fixed base.
         let rate = if (speed - 1.0).abs() > 0.001 {
-            format!("aresample=48000,asetrate={:.0},aresample=48000,", 48000.0 * speed)
+            format!(
+                "aresample=48000,asetrate={:.0},aresample=48000,",
+                48000.0 * speed
+            )
         } else {
             String::new()
         };
@@ -410,7 +427,10 @@ pub fn render_video(
                 "[aout]",
             ]);
         } else if (mv - 1.0).abs() > 0.001 || !rate.is_empty() {
-            cmd.args(["-af", &format!("{rate}volume={mv:.3},atrim=duration={play_secs:.3},apad")]);
+            cmd.args([
+                "-af",
+                &format!("{rate}volume={mv:.3},atrim=duration={play_secs:.3},apad"),
+            ]);
         } else {
             cmd.args(["-af", &format!("atrim=duration={play_secs:.3},apad")]);
         }
@@ -422,7 +442,11 @@ pub fn render_video(
     // finished downloading. Only the Analyze window's own segments used to
     // ask for this; the video the user actually keeps and uploads did not.
     // It costs one rewrite of the finished file.
-    if !opts.extra_output_args.iter().any(|a| a.contains("faststart")) {
+    if !opts
+        .extra_output_args
+        .iter()
+        .any(|a| a.contains("faststart"))
+    {
         cmd.args(["-movflags", "+faststart"]);
     }
     for a in &opts.extra_output_args {
@@ -436,7 +460,11 @@ pub fn render_video(
     // container from the extension, and "video.mp4.rhythr-part" made it give
     // up with "Error initializing the muxer".
     let part = {
-        let name = out.file_name().unwrap_or_default().to_string_lossy().into_owned();
+        let name = out
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
         let renamed = match name.rsplit_once('.') {
             Some((stem, ext)) if !stem.is_empty() => format!("{stem}.rhythr-part.{ext}"),
             _ => format!("{name}.rhythr-part"),
@@ -480,7 +508,6 @@ pub fn render_video(
     let mut guard = EncodeGuard {
         child,
         part: part.clone(),
-        out,
         done: false,
     };
     let log = FfmpegLog::drain(stderr);
@@ -520,40 +547,38 @@ pub fn render_video(
     // apart from our own colour conversion and from ffmpeg's backpressure.
     let t_conv = std::cell::Cell::new(0.0f64);
     let t_pipe = std::cell::Cell::new(0.0f64);
-    let mut write_frame = |pixels: &[u8],
-                           i: u64,
-                           already_nv12: bool,
-                           child: &mut std::process::Child| {
-        let mark = std::time::Instant::now();
-        let payload: &[u8] = if already_nv12 {
-            pixels
-        } else if feed_nv12
-            && crate::nv12::rgba_to_nv12(pixels, width as usize, height as usize, &mut nv12_buf)
-        {
-            &nv12_buf
-        } else {
-            pixels
+    let mut write_frame =
+        |pixels: &[u8], i: u64, already_nv12: bool, child: &mut std::process::Child| {
+            let mark = std::time::Instant::now();
+            let payload: &[u8] = if already_nv12 {
+                pixels
+            } else if feed_nv12
+                && crate::nv12::rgba_to_nv12(pixels, width as usize, height as usize, &mut nv12_buf)
+            {
+                &nv12_buf
+            } else {
+                pixels
+            };
+            if timing {
+                t_conv.set(t_conv.get() + mark.elapsed().as_secs_f64());
+            }
+            let mark = std::time::Instant::now();
+            let wrote = stdin.write_frame(payload);
+            if timing {
+                t_pipe.set(t_pipe.get() + mark.elapsed().as_secs_f64());
+            }
+            if let Err(e) = wrote {
+                // A broken pipe here means ffmpeg died; its own last words say
+                // why far better than the errno does.
+                let status = child.wait();
+                return Err(Error::Ffmpeg(format!(
+                    "writing frame {i} failed: {e} ({}){}",
+                    describe_exit(&status),
+                    explain_silence(&log)
+                )));
+            }
+            Ok(())
         };
-        if timing {
-            t_conv.set(t_conv.get() + mark.elapsed().as_secs_f64());
-        }
-        let mark = std::time::Instant::now();
-        let wrote = stdin.write_frame(payload);
-        if timing {
-            t_pipe.set(t_pipe.get() + mark.elapsed().as_secs_f64());
-        }
-        if let Err(e) = wrote {
-            // A broken pipe here means ffmpeg died; its own last words say
-            // why far better than the errno does.
-            let status = child.wait();
-            return Err(Error::Ffmpeg(format!(
-                "writing frame {i} failed: {e} ({}){}",
-                describe_exit(&status),
-                explain_silence(&log)
-            )));
-        }
-        Ok(())
-    };
     // Pipelined: submit frame i to the GPU, then read out frame i-1 while
     // the GPU is busy — overlapping rendering with readback and encoding
     // roughly doubles throughput over the strictly serial loop.
@@ -668,14 +693,16 @@ pub fn render_video(
         }
     };
     for j in play_frames.saturating_sub(DEPTH.min(play_frames))..play_frames {
-        renderer.with_slot_pixels(slot(j), |px| write_frame(px, j, gpu_nv12, &mut guard.child))??;
+        renderer
+            .with_slot_pixels(slot(j), |px| write_frame(px, j, gpu_nv12, &mut guard.child))??;
         if !progress(j + 1, total_frames) {
             return Err(Error::Cancelled);
         }
     }
     if results_frames > 0 {
         // The results screen is static: render once, repeat.
-        let pixels = renderer.render_results(replay, map, &hud_state, config, ghost_input.as_ref())?;
+        let pixels =
+            renderer.render_results(replay, map, &hud_state, config, ghost_input.as_ref())?;
         for i in 0..results_frames {
             write_frame(&pixels, play_frames + i, false, &mut guard.child)?;
             if !progress(play_frames + i + 1, total_frames) {
@@ -828,22 +855,21 @@ impl FfmpegLog {
 
 /// Owns the ffmpeg child during encoding; unless defused (`done = true`),
 /// dropping it kills/reaps the process and deletes the partial output file.
-struct EncodeGuard<'a> {
+struct EncodeGuard {
     child: std::process::Child,
     /// Where ffmpeg is actually writing: a sibling of the real output, never
     /// the real output itself. This used to BE the real output, and the drop
-    /// below deleted it on every unhappy exit — so a render that failed, was
+    /// below deleted it on every unhappy exit (so a render that failed, was
     /// cancelled, or was still running when the app closed took the previous
     /// video at that path with it, and ffmpeg's own `-y` had already
-    /// truncated it anyway. Answering "Replace" in the overwrite prompt was
-    /// enough to lose the file being replaced.
+    /// truncated it anyway). Answering "Replace" in the overwrite prompt was
+    /// enough to lose the file being replaced. The finished file is moved
+    /// into place by the caller, after this guard has been defused.
     part: PathBuf,
-    /// Where it belongs once ffmpeg has exited cleanly.
-    out: &'a Path,
     done: bool,
 }
 
-impl Drop for EncodeGuard<'_> {
+impl Drop for EncodeGuard {
     fn drop(&mut self) {
         if !self.done {
             let _ = self.child.kill();
@@ -888,9 +914,9 @@ pub fn encoder_works(ffmpeg: &str, encoder: &str) -> bool {
 
 /// The hardware encoders worth trying, best first, for this platform.
 ///
-/// AMF is AMD's Windows encoder — AMD dropped it on Linux and points at
-/// VA-API instead — so the two never compete for the same machine and each
-/// list is ordered for the platform it runs on. Both the auto-selection and
+/// AMF is AMD's Windows encoder (AMD dropped it on Linux and points at VA-API
+/// instead), so the two never compete for the same machine and each list is
+/// ordered for the platform it runs on. Both the auto-selection and
 /// the UI's availability probe walk this, so they cannot disagree about what
 /// exists or in what order.
 pub fn hardware_encoders() -> &'static [&'static str] {
@@ -933,7 +959,9 @@ fn probe_tcp_feed(ffmpeg: &str) -> bool {
     let mut cmd = Command::new(ffmpeg);
     hide_console_window(&mut cmd);
     cmd.args(["-hide_banner", "-loglevel", "error"]);
-    cmd.args(["-f", "rawvideo", "-pix_fmt", "nv12", "-s", "64x64", "-r", "30"]);
+    cmd.args([
+        "-f", "rawvideo", "-pix_fmt", "nv12", "-s", "64x64", "-r", "30",
+    ]);
     cmd.args(["-i", &format!("tcp://127.0.0.1:{port}")]);
     cmd.args(["-f", "null", "-"]);
     let Ok(mut child) = cmd.stdout(Stdio::null()).stderr(Stdio::null()).spawn() else {
@@ -1032,7 +1060,10 @@ impl FrameSink {
                     std::thread::sleep(std::time::Duration::from_millis(5));
                 }
                 Err(e) => {
-                    return Err(Error::Ffmpeg(format!("frame socket failed: {e}{}", log.tail())))
+                    return Err(Error::Ffmpeg(format!(
+                        "frame socket failed: {e}{}",
+                        log.tail()
+                    )))
                 }
             }
         }
@@ -1099,7 +1130,6 @@ impl FrameSink {
     }
 }
 
-
 impl std::io::Write for FrameSink {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         match self {
@@ -1146,7 +1176,12 @@ fn video_encoder_args(
     match encoder {
         "vaapi" => {
             // Already NV12 on the way in: no swscale pass to pay for.
-            filter = if feed_nv12 { "hwupload" } else { "format=nv12,hwupload" }.into();
+            filter = if feed_nv12 {
+                "hwupload"
+            } else {
+                "format=nv12,hwupload"
+            }
+            .into();
             add(&["-c:v", "h264_vaapi", "-profile:v", "high"]);
             if vaapi_icq {
                 // Intelligent constant quality: the driver varies the
@@ -1188,7 +1223,14 @@ fn video_encoder_args(
             add(&["-rc", "cqp", "-qp_i", &hw, "-qp_p", &hw, "-qp_b", &hw]);
         }
         _ => {
-            add(&["-c:v", "libx264", "-pix_fmt", "yuv420p", "-profile:v", "high"]);
+            add(&[
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-profile:v",
+                "high",
+            ]);
             let crf = crate::quality::x264_crf(quality).to_string();
             add(&["-crf", &crf, "-preset", preset]);
         }
@@ -1254,7 +1296,12 @@ fn vaapi_probe(ffmpeg: &str, device: &str, icq: bool) -> Result<(), String> {
     hide_console_window(&mut cmd);
     cmd.args(["-hide_banner", "-loglevel", "error"]);
     cmd.args(["-vaapi_device", device]);
-    cmd.args(["-f", "lavfi", "-i", "color=black:size=256x256:rate=30:duration=0.1"]);
+    cmd.args([
+        "-f",
+        "lavfi",
+        "-i",
+        "color=black:size=256x256:rate=30:duration=0.1",
+    ]);
     cmd.args(["-vf", "format=nv12,hwupload", "-c:v", "h264_vaapi"]);
     if icq {
         cmd.args(["-rc_mode", "ICQ", "-global_quality", "23"]);

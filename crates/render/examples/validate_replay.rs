@@ -57,7 +57,10 @@ fn main() {
     if std::env::var("VALIDATE_VERBOSE").is_ok() {
         let rep = rhythia_sim::integrity::verify_replay(&replay, &map);
         for c in rep.failed_checks() {
-            println!("  failed-check: {} expected={} actual={}", c.name, c.expected, c.actual);
+            println!(
+                "  failed-check: {} expected={} actual={}",
+                c.name, c.expected, c.actual
+            );
         }
         // err_ms range
         let a0 = rhythia_render::analysis::analyze(&map, &replay);

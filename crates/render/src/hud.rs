@@ -694,7 +694,13 @@ fn finish_element(
             (x0, y0, x1, y1) = scale_element(&mut b.verts[start..], (x0, y0, x1, y1), s);
         }
     }
-    boxes.push(HudBox { key, x0, y0, x1, y1 });
+    boxes.push(HudBox {
+        key,
+        x0,
+        y0,
+        x1,
+        y1,
+    });
 }
 
 /// Playfield geometry the HUD anchors to, in pixels.
@@ -852,9 +858,8 @@ pub fn build_hud(
         .iter()
         .filter(|&&e| e)
         .count();
-    let row_spread = |i: usize, n: usize| -> f32 {
-        w * 0.5 + (i as f32 - (n as f32 - 1.0) * 0.5) * w * 0.22
-    };
+    let row_spread =
+        |i: usize, n: usize| -> f32 { w * 0.5 + (i as f32 - (n as f32 - 1.0) * 0.5) * w * 0.22 };
     let bottom_row_y = field.cy + field.half + refd * 0.135;
     let top_row_y = field.cy - field.half - refd * 0.135;
     let mut li = 0usize;
@@ -960,7 +965,11 @@ pub fn build_hud(
         right_cells.push(("misses", "MISSES", stats.misses.to_string()));
     }
     if hud.notes {
-        right_cells.push(("notes", "NOTES", format!("{}/{}", stats.hits, stats.resolved)));
+        right_cells.push((
+            "notes",
+            "NOTES",
+            format!("{}/{}", stats.hits, stats.resolved),
+        ));
     }
     for (key, label, value) in right_cells {
         let el = b.verts.len();
@@ -1014,7 +1023,11 @@ pub fn build_hud(
             bh,
             srgb8_to_linear([225, 225, 230], hud.song_progress_alpha),
         );
-        let time = format!("{} / {}", clock(song_time_ms), clock(dur.max(replay.length_ms())));
+        let time = format!(
+            "{} / {}",
+            clock(song_time_ms),
+            clock(dur.max(replay.length_ms()))
+        );
         b.text(
             &time,
             field.cx,
@@ -1099,7 +1112,11 @@ mod tests {
     /// A run with one note and a cursor nowhere near it, at `speed`.
     fn missed_note_at(speed: f32) -> (Map, Replay) {
         let mut map = Map::default();
-        map.notes.push(rhythia_formats::map::Note { time_ms: 1000, x: 0.0, y: 0.0 });
+        map.notes.push(rhythia_formats::map::Note {
+            time_ms: 1000,
+            x: 0.0,
+            y: 0.0,
+        });
         let replay = Replay {
             version: 5,
             timestamp_ticks: 0,
@@ -1120,7 +1137,13 @@ mod tests {
             fail_time_ms: -1,
             beatmap_hash: String::new(),
             // Far from the note, so it can only be a miss.
-            frames: vec![rhythia_formats::rhr::Frame { ms: 0.0, x: 9.0, y: 9.0, health: 1.0, hit: false }],
+            frames: vec![rhythia_formats::rhr::Frame {
+                ms: 0.0,
+                x: 9.0,
+                y: 9.0,
+                health: 1.0,
+                hit: false,
+            }],
             trailing_bytes: 0,
         };
         (map, replay)
@@ -1369,7 +1392,10 @@ pub struct RingState {
 
 impl RingState {
     fn new() -> RingState {
-        RingState { floor: 3, streak: 0 }
+        RingState {
+            floor: 3,
+            streak: 0,
+        }
     }
 
     fn on_hit(&mut self, _now_ms: f64) {
@@ -1582,7 +1608,14 @@ pub fn build_results(
         let title_y = if portrait { h * 0.075 } else { h * 0.082 };
         let title_px = fr * 0.037;
         let fit = ((w * 0.95 - tx) / atlas.measure(&map.meta.song_name, title_px)).min(1.0);
-        b.text(&map.meta.song_name, tx, title_y, title_px * fit, Align::Left, white);
+        b.text(
+            &map.meta.song_name,
+            tx,
+            title_y,
+            title_px * fit,
+            Align::Left,
+            white,
+        );
         // The green line under the song is the DIFFICULTY, not the title:
         // the map's custom name when set, else the standard tier name.
         let diff = if !map.meta.custom_difficulty_name.is_empty() {
@@ -1733,7 +1766,14 @@ pub fn build_results(
         replay.length_ms()
     }
     .max(1.0);
-    b.text("00:00", gx0, gy0 - fr * 0.014, fr * 0.02, Align::Left, white);
+    b.text(
+        "00:00",
+        gx0,
+        gy0 - fr * 0.014,
+        fr * 0.02,
+        Align::Left,
+        white,
+    );
     b.text(
         &clock(end_ms),
         gx1,
@@ -1765,7 +1805,14 @@ pub fn build_results(
     // --- Mods box -----------------------------------------------------------
     let mods_title_y = if portrait { h * 0.52 } else { h * 0.70 };
     let my = if portrait { h * 0.565 } else { h * 0.775 };
-    b.text("Mods", w * 0.515, mods_title_y, fr * 0.028, Align::Left, white);
+    b.text(
+        "Mods",
+        w * 0.515,
+        mods_title_y,
+        fr * 0.028,
+        Align::Left,
+        white,
+    );
     // The results screen shows the speed letter even at 1.0x.
     if (replay.speed - 1.0).abs() < 0.005 {
         b.text("S", w * 0.545, my, fr * 0.032, Align::Center, white);
@@ -1781,7 +1828,11 @@ pub fn build_results(
             .replace(',', "  ")
             .to_uppercase();
         // At half width the speed notation reaches further into the box.
-        let mx = if part == ResultsPart::Side { w * 0.63 } else { w * 0.58 };
+        let mx = if part == ResultsPart::Side {
+            w * 0.63
+        } else {
+            w * 0.58
+        };
         b.text(&mods, mx, my, fr * 0.026, Align::Left, white);
     }
 
@@ -1865,8 +1916,22 @@ pub fn build_card(
         let tx = w * 0.25;
         let title_px = h * 0.073;
         let fit = (w * 0.53 / atlas.measure(&map.meta.song_name, title_px)).min(1.0);
-        b.text(&map.meta.song_name, tx, h * 0.155, title_px * fit, Align::Left, ink);
-        b.text(&format!("< {diff} >"), tx, h * 0.235, h * 0.045, Align::Left, green);
+        b.text(
+            &map.meta.song_name,
+            tx,
+            h * 0.155,
+            title_px * fit,
+            Align::Left,
+            ink,
+        );
+        b.text(
+            &format!("< {diff} >"),
+            tx,
+            h * 0.235,
+            h * 0.045,
+            Align::Left,
+            green,
+        );
         if !map.meta.mappers.is_empty() {
             b.text(
                 &format!("by {}", map.meta.mappers.join(", ")),
@@ -1877,13 +1942,41 @@ pub fn build_card(
                 muted,
             );
         }
-        b.text(&replay.player_name, tx, h * 0.40, h * 0.055, Align::Left, ink);
-        b.text(glabel, w * 0.90, h * 0.33, h * 0.27, Align::Center, grade_col);
+        b.text(
+            &replay.player_name,
+            tx,
+            h * 0.40,
+            h * 0.055,
+            Align::Left,
+            ink,
+        );
+        b.text(
+            glabel,
+            w * 0.90,
+            h * 0.33,
+            h * 0.27,
+            Align::Center,
+            grade_col,
+        );
 
-        b.text("ACCURACY", w * 0.06, h * 0.60, h * 0.034, Align::Left, muted);
+        b.text(
+            "ACCURACY",
+            w * 0.06,
+            h * 0.60,
+            h * 0.034,
+            Align::Left,
+            muted,
+        );
         b.text(&acc, w * 0.06, h * 0.725, h * 0.115, Align::Left, ink);
         b.text("SCORE", w * 0.52, h * 0.60, h * 0.034, Align::Left, muted);
-        b.text(&thousands(stats.score), w * 0.52, h * 0.725, h * 0.115, Align::Left, ink);
+        b.text(
+            &thousands(stats.score),
+            w * 0.52,
+            h * 0.725,
+            h * 0.115,
+            Align::Left,
+            ink,
+        );
 
         let (left, right) = (w * 0.06, w * 0.80);
         for (i, (label, value)) in cells.iter().enumerate() {
@@ -1905,8 +1998,22 @@ pub fn build_card(
         let tx = cx0 + csize + w * 0.05;
         let title_px = w * 0.045;
         let fit = ((w * 0.95 - tx) / atlas.measure(&map.meta.song_name, title_px)).min(1.0);
-        b.text(&map.meta.song_name, tx, h * 0.115, title_px * fit, Align::Left, ink);
-        b.text(&format!("< {diff} >"), tx, h * 0.175, w * 0.032, Align::Left, green);
+        b.text(
+            &map.meta.song_name,
+            tx,
+            h * 0.115,
+            title_px * fit,
+            Align::Left,
+            ink,
+        );
+        b.text(
+            &format!("< {diff} >"),
+            tx,
+            h * 0.175,
+            w * 0.032,
+            Align::Left,
+            green,
+        );
         if !map.meta.mappers.is_empty() {
             b.text(
                 &format!("by {}", map.meta.mappers.join(", ")),
@@ -1917,13 +2024,48 @@ pub fn build_card(
                 muted,
             );
         }
-        b.text(&replay.player_name, tx, h * 0.29, w * 0.038, Align::Left, ink);
+        b.text(
+            &replay.player_name,
+            tx,
+            h * 0.29,
+            w * 0.038,
+            Align::Left,
+            ink,
+        );
 
-        b.text(glabel, w * 0.5, h * 0.545, w * 0.20, Align::Center, grade_col);
-        b.text("ACCURACY", w * 0.28, h * 0.655, w * 0.026, Align::Center, muted);
-        b.text("SCORE", w * 0.72, h * 0.655, w * 0.026, Align::Center, muted);
+        b.text(
+            glabel,
+            w * 0.5,
+            h * 0.545,
+            w * 0.20,
+            Align::Center,
+            grade_col,
+        );
+        b.text(
+            "ACCURACY",
+            w * 0.28,
+            h * 0.655,
+            w * 0.026,
+            Align::Center,
+            muted,
+        );
+        b.text(
+            "SCORE",
+            w * 0.72,
+            h * 0.655,
+            w * 0.026,
+            Align::Center,
+            muted,
+        );
         b.text(&acc, w * 0.28, h * 0.735, w * 0.062, Align::Center, ink);
-        b.text(&thousands(stats.score), w * 0.72, h * 0.735, w * 0.062, Align::Center, ink);
+        b.text(
+            &thousands(stats.score),
+            w * 0.72,
+            h * 0.735,
+            w * 0.062,
+            Align::Center,
+            ink,
+        );
         for (i, (label, value)) in cells.iter().enumerate() {
             let x = w * (0.5 + (i as f32 - (cells.len() - 1) as f32 * 0.5) * 0.26);
             b.text(label, x, h * 0.845, w * 0.022, Align::Center, muted);
@@ -1946,9 +2088,23 @@ pub fn build_card(
         let mut y = cy0 + csize + w * 0.10;
         let title_px = w * 0.062;
         let fit = (w * 0.9 / atlas.measure(&map.meta.song_name, title_px)).min(1.0);
-        b.text(&map.meta.song_name, cx, y, title_px * fit, Align::Center, ink);
+        b.text(
+            &map.meta.song_name,
+            cx,
+            y,
+            title_px * fit,
+            Align::Center,
+            ink,
+        );
         y += w * 0.055;
-        b.text(&format!("< {diff} >"), cx, y, w * 0.036, Align::Center, green);
+        b.text(
+            &format!("< {diff} >"),
+            cx,
+            y,
+            w * 0.036,
+            Align::Center,
+            green,
+        );
         if !map.meta.mappers.is_empty() {
             y += w * 0.045;
             b.text(
@@ -1965,13 +2121,27 @@ pub fn build_card(
 
         // Grade centred, then the headline pair side by side.
         y += if portrait { w * 0.30 } else { w * 0.21 };
-        b.text(glabel, cx, y, if portrait { w * 0.22 } else { w * 0.17 }, Align::Center, grade_col);
+        b.text(
+            glabel,
+            cx,
+            y,
+            if portrait { w * 0.22 } else { w * 0.17 },
+            Align::Center,
+            grade_col,
+        );
         y += if portrait { w * 0.17 } else { w * 0.12 };
         b.text("ACCURACY", w * 0.28, y, w * 0.026, Align::Center, muted);
         b.text("SCORE", w * 0.72, y, w * 0.026, Align::Center, muted);
         y += w * 0.075;
         b.text(&acc, w * 0.28, y, w * 0.068, Align::Center, ink);
-        b.text(&thousands(stats.score), w * 0.72, y, w * 0.068, Align::Center, ink);
+        b.text(
+            &thousands(stats.score),
+            w * 0.72,
+            y,
+            w * 0.068,
+            Align::Center,
+            ink,
+        );
 
         // Secondary cells as a centred row (or 2x2 on portrait).
         y += w * 0.115;
@@ -2022,7 +2192,11 @@ fn meter_color(frac: f32, alpha: f32) -> [f32; 4] {
     let f = frac.clamp(0.0, 1.0);
     let (r, g, b) = if f < 0.5 {
         let k = f / 0.5;
-        (80.0 + (240.0 - 80.0) * k, 230.0 - 20.0 * k, 120.0 - 40.0 * k)
+        (
+            80.0 + (240.0 - 80.0) * k,
+            230.0 - 20.0 * k,
+            120.0 - 40.0 * k,
+        )
     } else {
         let k = (f - 0.5) / 0.5;
         (240.0, 210.0 - 130.0 * k, 80.0)
@@ -2069,7 +2243,11 @@ fn draw_error_meters(
     // strong opacity when the background is bright.
     let bg = cfg.background_color;
     let light_bg = 0.299 * bg[0] + 0.587 * bg[1] + 0.114 * bg[2] > 0.55;
-    let chrome: [u8; 3] = if light_bg { [12, 13, 16] } else { [225, 228, 235] };
+    let chrome: [u8; 3] = if light_bg {
+        [12, 13, 16]
+    } else {
+        [225, 228, 235]
+    };
     let chrome_boost = if light_bg { 4.0f32 } else { 1.0 };
     if em.enabled {
         // One-sided: hits can only ever be late (the hitbox arms at the
@@ -2109,11 +2287,15 @@ fn draw_error_meters(
         // Rolling average marker (last 20 hits), gliding to each new value
         // instead of snapping when a hit lands.
         let window_avg = |skip: usize| -> Option<f32> {
-            let vals: Vec<f64> = hits.iter().rev().skip(skip).take(20).map(|d| d.err_ms).collect();
-            (!vals.is_empty()).then(|| {
-                (vals.iter().sum::<f64>() / vals.len() as f64
-                    / state.window_ms) as f32
-            })
+            let vals: Vec<f64> = hits
+                .iter()
+                .rev()
+                .skip(skip)
+                .take(20)
+                .map(|d| d.err_ms)
+                .collect();
+            (!vals.is_empty())
+                .then(|| (vals.iter().sum::<f64>() / vals.len() as f64 / state.window_ms) as f32)
         };
         if let Some(now_avg) = window_avg(0) {
             let prev_avg = window_avg(1).unwrap_or(now_avg);
@@ -2349,7 +2531,14 @@ pub fn build_race_delta(
     let sub_px = refd * 0.0155 * em.scale;
 
     // Grey uppercase label, exactly like the game's panel captions.
-    b.text("SCORE LEAD", cx, cy - value_px * 0.95, label_px, Align::Center, label_col);
+    b.text(
+        "SCORE LEAD",
+        cx,
+        cy - value_px * 0.95,
+        label_px,
+        Align::Center,
+        label_col,
+    );
     b.text(&text, cx, cy, value_px, Align::Center, value_col);
 
     // Accuracy gap as the quiet second line.
@@ -2502,8 +2691,18 @@ pub fn build_race_graph(
     let span_t = (series.samples[n - 1].t_ms - t0).max(1.0);
     let x_of = |t: f64| gx0 + (((t - t0) / span_t) as f32) * (gx1 - gx0);
 
-    let pos_max = series.samples.iter().map(|p| p.score_delta.max(0)).max().unwrap_or(0);
-    let neg_max = series.samples.iter().map(|p| (-p.score_delta).max(0)).max().unwrap_or(0);
+    let pos_max = series
+        .samples
+        .iter()
+        .map(|p| p.score_delta.max(0))
+        .max()
+        .unwrap_or(0);
+    let neg_max = series
+        .samples
+        .iter()
+        .map(|p| (-p.score_delta).max(0))
+        .max()
+        .unwrap_or(0);
     let zy = gy0 + (gy1 - gy0) * crate::race::graph_zero_share(pos_max, neg_max);
     let scale_pos = (zy - gy0) / pos_max.max(1) as f32;
     let scale_neg = (gy1 - zy) / neg_max.max(1) as f32;
@@ -2516,7 +2715,12 @@ pub fn build_race_graph(
     };
 
     // Zero line across the band.
-    b.line([gx0, zy], [gx1, zy], (fr * 0.0012).max(1.0), srgb8_to_linear([70, 72, 80], 0.9));
+    b.line(
+        [gx0, zy],
+        [gx1, zy],
+        (fr * 0.0012).max(1.0),
+        srgb8_to_linear([70, 72, 80], 0.9),
+    );
 
     // Area fill between curve and zero line, tinted by whoever leads that
     // segment (raw triangles — the band is not axis-aligned).
@@ -2556,7 +2760,13 @@ pub fn build_race_graph(
     // Lead changes as dots on the zero line.
     let dot = (fr * 0.004).max(2.5);
     for &t in &series.lead_changes {
-        b.rect(x_of(t) - dot * 0.5, zy - dot * 0.5, dot, dot, [1.0, 1.0, 1.0, 0.95]);
+        b.rect(
+            x_of(t) - dot * 0.5,
+            zy - dot * 0.5,
+            dot,
+            dot,
+            [1.0, 1.0, 1.0, 0.95],
+        );
     }
 
     // Peak lead, annotated in the leader's colour and kept inside the band.

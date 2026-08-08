@@ -313,8 +313,16 @@
             </div>
             <span class="sub" id="bench-note">rhythr picks a sensible default. Measuring takes a few seconds and keeps the result, including across updates. Worth doing once if you render at 4K.</span>
           </div>
-          <button class="btn small wide" id="btn-diagnostics"
-                  title="Write a text file describing this build, your ffmpeg and encoders, and what is loaded — everything a bug report needs">Save diagnostics…</button>
+          <div class="field">
+            <span>Diagnostics</span>
+            <div class="row">
+              <button class="btn small" id="btn-diagnostics"
+                      title="Write a text file describing this build, your ffmpeg and encoders, your GPU and what is loaded (everything a bug report needs)">Save to file…</button>
+              <button class="btn small" id="btn-diagnostics-copy"
+                      title="Put the same report on the clipboard, ready to paste into a bug report">Copy</button>
+            </div>
+            <span class="sub" id="diagnostics-note">No personal data: home folders are shortened to ~ and only file names are listed.</span>
+          </div>
         </details>
       </div>
 

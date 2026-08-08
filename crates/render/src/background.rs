@@ -55,7 +55,8 @@ pub fn apply_background(
     cfg.custom_bg_dim = Some(opts.dim.clamp(0.0, 1.0));
     match kind {
         BackgroundKind::Image => {
-            cfg.background_images.push(cover_layer(std::fs::read(path)?, opts));
+            cfg.background_images
+                .push(cover_layer(std::fs::read(path)?, opts));
             cfg.custom_bg_video = false;
         }
         BackgroundKind::Video => cfg.custom_bg_video = true,
@@ -189,7 +190,16 @@ pub struct VideoDecoder {
     child: Child,
     stdout: ChildStdout,
     /// Everything needed to respawn for the next loop.
-    spec: (String, std::path::PathBuf, u32, u32, u32, f64, f32, [f32; 2]),
+    spec: (
+        String,
+        std::path::PathBuf,
+        u32,
+        u32,
+        u32,
+        f64,
+        f32,
+        [f32; 2],
+    ),
     /// Frames delivered by the current child — a child that dies without
     /// producing any is broken (or the start point is past the end), and
     /// respawning it would loop forever.
@@ -559,7 +569,11 @@ pub fn extract_frame(
         .args(["-loglevel", "error", "-ss", &format!("{t:.3}"), "-an", "-i"])
         .arg(path)
         .args(["-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgba"])
-        .args(["-vf", &cover_vf(width, height, opts.zoom, opts.offset), "pipe:1"])
+        .args([
+            "-vf",
+            &cover_vf(width, height, opts.zoom, opts.offset),
+            "pipe:1",
+        ])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -608,10 +622,22 @@ mod tests {
     #[test]
     fn images_are_recognised_by_content_not_extension() {
         // PNG / JPEG / WebP / BMP magic bytes → image.
-        assert_eq!(classify_bytes(b"\x89PNG\r\n\x1a\n........"), BackgroundKind::Image);
-        assert_eq!(classify_bytes(b"\xff\xd8\xff\xe0....JFIF"), BackgroundKind::Image);
-        assert_eq!(classify_bytes(b"RIFF\x00\x00\x00\x00WEBPVP8 "), BackgroundKind::Image);
-        assert_eq!(classify_bytes(b"BM\x00\x00\x00\x00\x00\x00\x00\x00"), BackgroundKind::Image);
+        assert_eq!(
+            classify_bytes(b"\x89PNG\r\n\x1a\n........"),
+            BackgroundKind::Image
+        );
+        assert_eq!(
+            classify_bytes(b"\xff\xd8\xff\xe0....JFIF"),
+            BackgroundKind::Image
+        );
+        assert_eq!(
+            classify_bytes(b"RIFF\x00\x00\x00\x00WEBPVP8 "),
+            BackgroundKind::Image
+        );
+        assert_eq!(
+            classify_bytes(b"BM\x00\x00\x00\x00\x00\x00\x00\x00"),
+            BackgroundKind::Image
+        );
     }
 
     #[test]
@@ -619,10 +645,22 @@ mod tests {
         // Animated GIFs must PLAY, so they are video; mp4/webm/mkv are
         // never image formats; garbage falls through to ffmpeg, which
         // will produce the real error message.
-        assert_eq!(classify_bytes(b"GIF89a\x00\x00\x00\x00"), BackgroundKind::Video);
-        assert_eq!(classify_bytes(b"\x00\x00\x00\x20ftypisom...."), BackgroundKind::Video);
-        assert_eq!(classify_bytes(b"\x1a\x45\xdf\xa3............"), BackgroundKind::Video);
-        assert_eq!(classify_bytes(b"not a media file at all....."), BackgroundKind::Video);
+        assert_eq!(
+            classify_bytes(b"GIF89a\x00\x00\x00\x00"),
+            BackgroundKind::Video
+        );
+        assert_eq!(
+            classify_bytes(b"\x00\x00\x00\x20ftypisom...."),
+            BackgroundKind::Video
+        );
+        assert_eq!(
+            classify_bytes(b"\x1a\x45\xdf\xa3............"),
+            BackgroundKind::Video
+        );
+        assert_eq!(
+            classify_bytes(b"not a media file at all....."),
+            BackgroundKind::Video
+        );
     }
 
     #[test]
@@ -656,7 +694,10 @@ mod tests {
         let kind = apply_background(
             &mut cfg,
             &vid,
-            &BackgroundOptions { dim: 1.5, ..Default::default() },
+            &BackgroundOptions {
+                dim: 1.5,
+                ..Default::default()
+            },
         )
         .unwrap();
         assert_eq!(kind, BackgroundKind::Video);
@@ -685,7 +726,9 @@ mod tests {
         // zoom 1.5, shifted a quarter frame right: scale grows, the crop
         // window moves left by 480 px, clamped inside the source.
         let f = cover_vf(1920, 1080, 1.5, [0.25, -0.1]);
-        assert!(f.starts_with("scale=2880:1620:force_original_aspect_ratio=increase,crop=1920:1080:"));
+        assert!(
+            f.starts_with("scale=2880:1620:force_original_aspect_ratio=increase,crop=1920:1080:")
+        );
         assert!(f.contains("x='clip((iw-1920)/2-(480),0,iw-1920)'"));
         assert!(f.contains("y='clip((ih-1080)/2-(-108),0,ih-1080)'"));
     }

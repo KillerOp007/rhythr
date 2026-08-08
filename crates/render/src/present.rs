@@ -185,9 +185,11 @@ impl Presenter {
             mapped_at_creation: false,
         });
         let linearize = if format.is_srgb() { 1.0f32 } else { 0.0 };
-        renderer
-            .queue()
-            .write_buffer(&params_buf, 0, bytemuck::bytes_of(&[linearize, 0.0, 0.0, 0.0f32]));
+        renderer.queue().write_buffer(
+            &params_buf,
+            0,
+            bytemuck::bytes_of(&[linearize, 0.0, 0.0, 0.0f32]),
+        );
         let bind = Self::make_bind(device, &layout, renderer, &sampler, &params_buf);
         Ok(Presenter {
             surface,
@@ -282,7 +284,9 @@ impl Presenter {
 
         let mut enc = renderer
             .device()
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("blit") });
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("blit"),
+            });
         {
             let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("blit-pass"),

@@ -32,7 +32,10 @@ fn main() {
         }
     };
 
-    println!("mods: grid_scale={} bound=±{:.5} hitbox_half={half}", mods.grid_scale, bound);
+    println!(
+        "mods: grid_scale={} bound=±{:.5} hitbox_half={half}",
+        mods.grid_scale, bound
+    );
     for r in &out.results {
         let n = &map.notes[r.note_index];
         let nt = n.time_ms as f64;

@@ -2269,6 +2269,48 @@ function initControls() {
     }
   });
 
+  // Clipboard access differs per webview (WebKitGTK on Linux, WebView2 on
+  // Windows, WKWebView on macOS), so try the modern API and fall back to a
+  // hidden textarea. If both are refused, say so instead of pretending.
+  async function copyText(text) {
+    try {
+      if (navigator.clipboard && window.isSecureContext !== false) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      }
+    } catch (e) {
+      /* fall through to the textarea */
+    }
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.setAttribute("readonly", "");
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      ta.setSelectionRange(0, text.length);
+      const ok = document.execCommand("copy");
+      document.body.removeChild(ta);
+      return ok;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  $("btn-diagnostics-copy").addEventListener("click", async () => {
+    const note = $("diagnostics-note");
+    try {
+      const text = await invoke("diagnostics_text");
+      const ok = await copyText(text);
+      note.textContent = ok
+        ? "Copied. Paste it into your bug report."
+        : "This system would not let rhythr use the clipboard. Use Save to file instead.";
+    } catch (e) {
+      note.textContent = String(e);
+    }
+  });
+
   $("btn-render").addEventListener("click", startRender);
   $("btn-cancel").addEventListener("click", () => invoke("cancel_render"));
   $("btn-open-out").addEventListener("click", () => {
