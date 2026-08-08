@@ -170,6 +170,25 @@ one, because the old one wrote several times what an upload needs.
 
 ### Fixed
 
+- **"Measure fastest" stopped deciding by coin toss.** It measured each way of
+  handing frames over once, for 700 ms, and kept whichever came out highest.
+  Two runs on the same machine reported 64 KiB at 407 frames/s and 1 MiB at
+  422, which is a 4% spread and therefore noise, and the setting moved each
+  time. Now every candidate is measured three times with the rounds
+  interleaved, the median counts, and anything within 6% of the fastest is
+  treated as a tie and left at 256 KiB. A real difference still wins.
+
+  Two related things: the number it reports is the transport alone, with
+  nothing rendered and nothing encoded, so it is far above real render speed
+  and now says so; and when it can carry more than twice what your last
+  render managed, it tells you outright that this setting is not what is
+  holding your renders back.
+
+- **The write size is a control again**, next to that button, with the four
+  sizes the benchmark tries. It was taken out when the measurement was
+  trusted to answer the question, and on a machine where the transport is no
+  longer the bottleneck the measurement cannot.
+
 - **`WGPU_BACKEND` now does what both GPU errors tell you it does.** They end
   with "or start rhythr with WGPU_BACKEND=gl", which is the only escape hatch
   there is when the picked graphics backend is the broken one, and the
