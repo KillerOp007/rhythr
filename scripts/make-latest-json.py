@@ -37,11 +37,11 @@ for key, artifact, name in [
     platforms[key] = {"signature": sig.read_text().strip(), "url": f"{base}/{name}"}
 
 if not platforms:
-    sys.exit("no signed artifacts found — build with TAURI_SIGNING_PRIVATE_KEY set")
+    sys.exit("no signed artifacts found: build with TAURI_SIGNING_PRIVATE_KEY set")
 
 manifest = {
     "version": version,
-    "notes": f"rhythr {version} — see the GitHub release page for details.",
+    "notes": f"rhythr {version}: see the GitHub release page for details.",
     "pub_date": datetime.datetime.now(datetime.timezone.utc)
         .isoformat(timespec="seconds").replace("+00:00", "Z"),
     "platforms": platforms,

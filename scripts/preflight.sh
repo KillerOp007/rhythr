@@ -175,7 +175,7 @@ DASH_PAT=$(printf '\u2014\\|\u2013')
 DASHES=$(grep -rln "$DASH_PAT" \
   --include="*.rs" --include="*.js" --include="*.html" --include="*.css" \
   --include="*.wgsl" --include="*.sh" --include="*.md" --include="*.toml" \
-  --include="*.json" . 2>/dev/null \
+  --include="*.json" --include="*.py" . 2>/dev/null \
   | grep -v "^./target/" | grep -v "^./notes/" \
   | grep -v "^./crates/gui/ui-dist/" \
   | grep -v "THIRD-PARTY" | sort)
