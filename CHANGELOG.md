@@ -170,6 +170,43 @@ one, because the old one wrote several times what an upload needs.
 
 ### Fixed
 
+- **`WGPU_BACKEND` now does what both GPU errors tell you it does.** They end
+  with "or start rhythr with WGPU_BACKEND=gl", which is the only escape hatch
+  there is when the picked graphics backend is the broken one, and the
+  variable was read by exactly one window nobody opens for that. Every render
+  path honours it now, and the diagnostics report names the adapter a render
+  would really use.
+
+- **ffmpeg's reason is no longer thrown away.** Its output ends with the
+  conclusion, not the cause, and rhythr kept the end: "Error while opening
+  encoder, maybe incorrect parameters such as bit_rate, rate, width or height"
+  was what you saw for a missing driver library, an encoder that is not in
+  your ffmpeg build, and a resolution your hardware cannot take alike. The
+  line that actually says what happened is kept now, in render errors and in
+  the per-encoder notes in the diagnostics file.
+
+- **A custom width cost you up to ten times the colour conversion.** The GPU
+  does that conversion only when the width divides by four, and the window
+  rounded to even, so 1366 quietly fell back to the processor. Widths round to
+  four now (in the window, in saved settings and in the CLI, which says so).
+
+- **Several replays dropped at once no longer fire several downloads.** One
+  request per uncached map is the rule this feature exists under, and a
+  multi-file drop, an impatient click on Download, or switching replays back
+  and forth could each break it.
+
+- **A replay with damaged timestamps is refused instead of rendering for
+  days.** One corrupted frame stamp can claim a run is a fortnight long, which
+  passes every integrity check and starts a render that fills the disk.
+
+- **The first render of a session no longer stalls for five seconds** when the
+  configured ffmpeg cannot run at all: the frame-socket probe now notices that
+  it already exited instead of waiting out its deadline.
+
+- **"No output folder set" on a system where nothing is wrong.** On a minimal
+  Linux setup without `xdg-user-dirs` neither Videos nor Downloads resolves;
+  the home folder is now the last resort.
+
 - **The hit window is no longer a constant.** The game misses a note once
   `ms > note_t + hit_window`, and that window is 55 ms scaled by the speed
   multiplier. Its own settings screen documents it ("[def. 55ms] … 1.5x =
