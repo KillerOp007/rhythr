@@ -4709,8 +4709,17 @@ async fn benchmark_transport(state: tauri::State<'_, App>) -> Result<String, Str
             return Err(format!("ffmpeg could not be run ({ffmpeg})"));
         }
         let bench = rhythia_render::transport::benchmark(&ffmpeg, w, h);
-        let line = bench.summary();
+        let mut line = bench.summary();
         let mut inner = app.lock();
+        // The transport is only worth tuning while it is the slow part. Once
+        // the machine renders slower than the transport can carry, every
+        // candidate is above the ceiling and the button cannot make anything
+        // faster, which is worth saying rather than leaving someone to press
+        // it again and wonder why the number does not show up in a render.
+        if let Some(note) = bench.headroom_note(inner.settings.last_render_fps) {
+            line.push(' ');
+            line.push_str(&note);
+        }
         match bench.best {
             Some(rhythia_render::transport::Transport::Pipe) => {
                 inner.settings.tcp_feed = false;

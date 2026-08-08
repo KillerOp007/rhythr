@@ -25,6 +25,18 @@
 //! managed. What it deliberately does NOT do is include the encoder: the
 //! question is which transport moves bytes fastest, and an encoder in the way
 //! would just measure the encoder on every candidate equally.
+//!
+//! Which is also the trap. The number that comes out is what the transport
+//! can carry with nothing rendered and nothing encoded, so it is far above
+//! any real render, and on a fast machine the socket sizes all land on top of
+//! each other well above what the machine can render anyway. Two consecutive
+//! runs on the owner's box reported 64 KiB at 407 frames/s and 1 MiB at 422,
+//! a 4% spread, and moved the setting each time while the actual render sat
+//! at 200 either way. So: every candidate is measured [`ROUNDS`] times with
+//! the rounds interleaved, the median is taken, and anything inside
+//! [`NOISE_BAND`] of the fastest counts as tied and resolves to
+//! [`PREFERRED`]. A setting that persists across restarts must not be decided
+//! by a coin toss.
 
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -58,7 +70,8 @@ impl Transport {
 #[derive(Debug, Clone)]
 pub struct Measured {
     pub transport: Transport,
-    /// Frames per second this transport sustained, or None if it failed.
+    /// Frames per second this transport sustained (the median of the rounds),
+    /// or None if it failed in every one of them.
     pub fps: Option<f64>,
 }
 
@@ -70,6 +83,11 @@ pub struct Benchmark {
     pub results: Vec<Measured>,
     /// The winner, or None when nothing worked and the pipe is all there is.
     pub best: Option<Transport>,
+    /// Every candidate that finished within [`NOISE_BAND`] of the fastest,
+    /// including the fastest itself. More than one entry here means the
+    /// measurement could not tell them apart, which is the normal outcome on
+    /// a fast machine and the reason the winner is not simply the maximum.
+    pub tied: Vec<Transport>,
 }
 
 impl Benchmark {
@@ -89,24 +107,70 @@ impl Benchmark {
             .iter()
             .find(|m| m.transport == Transport::Pipe)
             .and_then(|m| m.fps);
+        // Said out loud when the field could not be separated, because the
+        // alternative is a button that answers differently every time it is
+        // pressed and no way to tell that from a real change.
+        let tie = if self.tied.len() > 1 {
+            let others: Vec<String> = self
+                .tied
+                .iter()
+                .filter(|t| **t != best)
+                .map(|t| t.label())
+                .collect();
+            format!(
+                " (too close to call against {}, so the safe default was kept)",
+                others.join(" and ")
+            )
+        } else {
+            String::new()
+        };
+        // "moves ... frames/s" rather than "wins at ... frames/s": this
+        // number is the transport carrying frames into an ffmpeg that throws
+        // them away, with nothing rendered and nothing encoded. A real render
+        // is slower, often much slower, and reading it as a promise of render
+        // speed is the obvious mistake to make.
         match pipe_fps {
             Some(p) if p > 0.0 && best != Transport::Pipe => format!(
-                "{}x{}: {} wins at {:.0} frames/s, against {:.0} on the pipe ({:+.0}%)",
+                "{}x{}: {} moves {:.0} frames/s, against {:.0} on the pipe ({:+.0}%){}. \
+                 Transport only, so a real render is slower.",
                 self.width,
                 self.height,
                 best.label(),
                 best_fps,
                 p,
-                100.0 * (best_fps / p - 1.0)
+                100.0 * (best_fps / p - 1.0),
+                tie
             ),
             _ => format!(
-                "{}x{}: {} at {:.0} frames/s",
+                "{}x{}: {} moves {:.0} frames/s{}. Transport only, so a real render is slower.",
                 self.width,
                 self.height,
                 best.label(),
-                best_fps
+                best_fps,
+                tie
             ),
         }
+    }
+
+    /// Whether the transport is even the thing worth tuning here.
+    ///
+    /// A render only ever goes as fast as its slowest stage, so once the
+    /// transport can carry twice what the machine renders, every candidate
+    /// is above the ceiling and the differences between them stop reaching
+    /// the output at all. Saying so is more useful than another number.
+    pub fn headroom_note(&self, render_fps: f64) -> Option<String> {
+        let best_fps = self
+            .best
+            .and_then(|b| self.results.iter().find(|m| m.transport == b))
+            .and_then(|m| m.fps)?;
+        if render_fps <= 0.0 || best_fps < render_fps * 2.0 {
+            return None;
+        }
+        Some(format!(
+            "Your last render ran at {render_fps:.0} frames/s, and the transport can carry \
+             {best_fps:.0}, so it is not what is holding the render back: the GPU and the \
+             encoder are. Changing this setting will not make renders faster."
+        ))
     }
 }
 
@@ -123,9 +187,24 @@ const CANDIDATES: &[Transport] = &[
     Transport::Socket(0),
 ];
 
-/// How long to spend on each candidate. Long enough to get past the first few
-/// frames, short enough that the whole run is a few seconds.
-const PER_CANDIDATE: Duration = Duration::from_millis(700);
+/// How long to spend on each candidate in each round.
+const PER_CANDIDATE: Duration = Duration::from_millis(500);
+/// How often the whole candidate list is walked. Rounds are interleaved
+/// (A B C, A B C, A B C) rather than repeated per candidate, so a machine
+/// that gets busier or hotter part way through spreads that across all of
+/// them instead of punishing whoever went last.
+const ROUNDS: usize = 3;
+/// How close two candidates have to be before this refuses to call a winner.
+///
+/// On a fast machine the socket sizes land on top of each other: the owner's
+/// box measured 64 KiB at 407 frames/s and 1 MiB at 422 in two consecutive
+/// runs, a 4% spread, and picked a different "winner" each time. Anything
+/// inside this band is noise, and the setting must not move for noise.
+const NOISE_BAND: f64 = 0.06;
+/// What a tie resolves to. 256 KiB is the value that was at or near the top
+/// at every output size measured, which makes it the answer least likely to
+/// be wrong on a machine or a resolution nobody has measured.
+const PREFERRED: Transport = Transport::Socket(256 * 1024);
 /// A frame cap that only bites if the clock never advances. It is set well
 /// above what PER_CANDIDATE reaches even on a very fast machine (the owner's
 /// manages ~1900 frames/s at 720p, so ~1330 in the window), so TIME is the
@@ -144,24 +223,64 @@ const WARMUP_FRAMES: usize = 8;
 pub fn benchmark(ffmpeg: &str, width: u32, height: u32) -> Benchmark {
     let (w, h) = (width.max(2) & !1, height.max(2) & !1);
     let frame = vec![0x40u8; crate::nv12::nv12_len(w as usize, h as usize)];
+    let mut samples: Vec<Vec<f64>> = vec![Vec::new(); CANDIDATES.len()];
+    for _ in 0..ROUNDS {
+        for (i, &t) in CANDIDATES.iter().enumerate() {
+            if let Some(fps) = measure(ffmpeg, t, w, h, &frame) {
+                samples[i].push(fps);
+            }
+        }
+    }
     let results: Vec<Measured> = CANDIDATES
         .iter()
-        .map(|&t| Measured {
-            transport: t,
-            fps: measure(ffmpeg, t, w, h, &frame),
+        .zip(samples)
+        .map(|(&transport, mut runs)| {
+            runs.sort_by(f64::total_cmp);
+            Measured {
+                transport,
+                // Median, not mean and not best: one round that landed while
+                // something else on the machine woke up should not decide a
+                // setting that then persists across restarts.
+                fps: (!runs.is_empty()).then(|| runs[runs.len() / 2]),
+            }
         })
         .collect();
-    let best = results
-        .iter()
-        .filter_map(|m| m.fps.map(|f| (m.transport, f)))
-        .max_by(|a, b| a.1.total_cmp(&b.1))
-        .map(|(t, _)| t);
+    let (best, tied) = pick_winner(&results);
     Benchmark {
         width: w,
         height: h,
         results,
         best,
+        tied,
     }
+}
+
+/// Turns measurements into a decision.
+///
+/// Pure, so the rule can be tested against the numbers that produced the
+/// problem rather than by pressing a button and hoping.
+fn pick_winner(results: &[Measured]) -> (Option<Transport>, Vec<Transport>) {
+    let Some(top) = results.iter().filter_map(|m| m.fps).max_by(f64::total_cmp) else {
+        return (None, Vec::new());
+    };
+    let tied: Vec<Transport> = results
+        .iter()
+        .filter(|m| m.fps.is_some_and(|f| f >= top * (1.0 - NOISE_BAND)))
+        .map(|m| m.transport)
+        .collect();
+    // Inside the band nothing was actually measured to be better, so the
+    // stable answer wins over the nominal one. Outside it, the measurement
+    // means something and is followed.
+    let winner = if tied.contains(&PREFERRED) {
+        Some(PREFERRED)
+    } else {
+        results
+            .iter()
+            .filter_map(|m| m.fps.map(|f| (m.transport, f)))
+            .max_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(t, _)| t)
+    };
+    (winner, tied)
 }
 
 fn measure(ffmpeg: &str, transport: Transport, w: u32, h: u32, frame: &[u8]) -> Option<f64> {
@@ -328,11 +447,16 @@ mod tests {
                 },
             ],
             best: Some(Transport::Socket(256 * 1024)),
+            tied: vec![Transport::Socket(256 * 1024)],
         };
         let s = b.summary();
         assert!(s.contains("256 KiB"), "{s}");
         assert!(s.contains("245"), "{s}");
         assert!(s.contains("+44%"), "{s}");
+        assert!(
+            s.contains("Transport only"),
+            "the number must not read as render speed: {s}"
+        );
     }
 
     #[test]
@@ -345,7 +469,83 @@ mod tests {
                 fps: None,
             }],
             best: None,
+            tied: Vec::new(),
         };
         assert!(b.summary().contains("leaving the setting alone"));
+    }
+
+    fn measured(pairs: &[(Transport, f64)]) -> Vec<Measured> {
+        pairs
+            .iter()
+            .map(|(t, f)| Measured {
+                transport: *t,
+                fps: Some(*f),
+            })
+            .collect()
+    }
+
+    /// The bug this rule exists for, with the numbers that produced it: two
+    /// consecutive runs on the same machine reported 64 KiB at 407 and 1 MiB
+    /// at 422, a 4% spread, and the setting moved each time. Neither run
+    /// measured anything real, so neither may move it.
+    #[test]
+    fn a_four_percent_spread_does_not_move_the_setting() {
+        let first = measured(&[
+            (Transport::Pipe, 176.0),
+            (Transport::Socket(64 * 1024), 407.0),
+            (Transport::Socket(256 * 1024), 399.0),
+            (Transport::Socket(1024 * 1024), 396.0),
+            (Transport::Socket(0), 380.0),
+        ]);
+        let second = measured(&[
+            (Transport::Pipe, 179.0),
+            (Transport::Socket(64 * 1024), 402.0),
+            (Transport::Socket(256 * 1024), 405.0),
+            (Transport::Socket(1024 * 1024), 422.0),
+            (Transport::Socket(0), 390.0),
+        ]);
+        let (a, tied_a) = pick_winner(&first);
+        let (b, _) = pick_winner(&second);
+        assert_eq!(a, Some(PREFERRED), "run one moved off the safe default");
+        assert_eq!(b, Some(PREFERRED), "run two moved off the safe default");
+        assert_eq!(a, b, "two runs of the same machine disagreed");
+        assert!(tied_a.len() > 1, "the tie has to be visible to the summary");
+    }
+
+    /// The rule must not become "always 256 KiB". A candidate that is really
+    /// faster, by more than the measurement can be wrong by, still wins.
+    #[test]
+    fn a_real_difference_still_wins() {
+        let results = measured(&[
+            (Transport::Pipe, 900.0),
+            (Transport::Socket(64 * 1024), 700.0),
+            (Transport::Socket(256 * 1024), 710.0),
+            (Transport::Socket(1024 * 1024), 705.0),
+            (Transport::Socket(0), 690.0),
+        ]);
+        let (best, tied) = pick_winner(&results);
+        assert_eq!(best, Some(Transport::Pipe), "the pipe was 27% faster");
+        assert_eq!(tied, vec![Transport::Pipe]);
+    }
+
+    /// The transport stops mattering once it can carry more than the machine
+    /// renders, and pressing the button again cannot change that.
+    #[test]
+    fn a_transport_with_headroom_says_it_is_not_the_bottleneck() {
+        let b = Benchmark {
+            width: 3840,
+            height: 2160,
+            results: measured(&[(Transport::Socket(256 * 1024), 422.0)]),
+            best: Some(Transport::Socket(256 * 1024)),
+            tied: vec![Transport::Socket(256 * 1024)],
+        };
+        let note = b.headroom_note(200.0).expect("422 is more than twice 200");
+        assert!(
+            note.contains("not what is holding the render back"),
+            "{note}"
+        );
+        // With the transport close to the render speed it IS worth tuning.
+        assert!(b.headroom_note(390.0).is_none());
+        assert!(b.headroom_note(0.0).is_none(), "no render yet, no claim");
     }
 }
