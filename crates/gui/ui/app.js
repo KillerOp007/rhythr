@@ -25,7 +25,15 @@ let lastOutPath = null;
 let rendering = false;
 /// ffmpeg could not be executed at the last probe: nothing will encode.
 let ffmpegMissing = false;
-let autoDownloadTried = 0;  // map id of the last automatic download attempt
+// Map ids already fetched automatically this session, and whether one of
+// those fetches is still running. This was a single number (the last id
+// tried), which meant switching from replay A to B and back asked
+// rhythia.com for A's map a second time, and dropping several replays at
+// once fired one request per replay. Both are bulk fetching, which the terms
+// this feature exists under forbid. The backend refuses a second concurrent
+// fetch as well; this half keeps the window from asking in the first place.
+const autoDownloadTried = new Set();
+let autoDownloadRunning = false;
 
 // ------------------------------------------------------------ formatting
 
@@ -1754,8 +1762,17 @@ async function applyStatus(st) {
   // A replay without its map: fetch it from rhythia.com right away, but
   // only once per map id, so a failure (offline, unpublished map) falls back
   // to the manual Download/Browse buttons instead of looping.
-  if (st.replay && !st.map && st.replay.map_id > 0 && autoDownloadTried !== st.replay.map_id) {
-    autoDownloadTried = st.replay.map_id;
+  if (
+    st.replay &&
+    !st.map &&
+    st.replay.map_id > 0 &&
+    !autoDownloadRunning &&
+    !autoDownloadTried.has(st.replay.map_id)
+  ) {
+    autoDownloadTried.add(st.replay.map_id);
+    autoDownloadRunning = true;
+    // The button invites a second request for the map already being fetched.
+    $("btn-map-dl").disabled = true;
     $("map-body").innerHTML = `<p class="hint">Downloading map from rhythia.com…</p>`;
     invoke("download_map")
       .then(async (st2) => { await applyStatus(st2); loadNote("Map downloaded."); })
@@ -1763,6 +1780,10 @@ async function applyStatus(st) {
         $("map-body").innerHTML =
           `<p class="hint">Automatic download failed: ${esc(String(e))}. Try Download again or Browse a local file.</p>`;
         $("btn-map-dl").hidden = false;
+      })
+      .finally(() => {
+        autoDownloadRunning = false;
+        $("btn-map-dl").disabled = false;
       });
   }
 

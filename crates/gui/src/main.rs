@@ -908,6 +908,16 @@ fn clamp_socket_chunk_kib(v: u32) -> u32 {
     }
 }
 
+/// Clears a flag however its scope is left, including the many `?` returns in
+/// the middle of a download.
+struct ReleaseOnDrop(&'static AtomicBool);
+
+impl Drop for ReleaseOnDrop {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
+
 /// Normalises a frame size to one the whole pipeline is happy with.
 ///
 /// h.264 in yuv420p cannot encode an odd side at all, and the GPU colour
@@ -1882,6 +1892,18 @@ async fn download_map(
         if map_id <= 0 {
             return Err("replay has no online map id".to_string());
         }
+        // One fetch at a time, whatever the window does. The Download button
+        // stays enabled while the automatic fetch runs, dropping five replays
+        // in one gesture calls this five times, and each of those is a
+        // separate request to rhythia.com. The terms this feature exists
+        // under allow one request per uncached map and no bulk fetching, so
+        // the guard belongs here rather than in a frontend variable that a
+        // second window or a fast click can walk past.
+        static FETCHING: AtomicBool = AtomicBool::new(false);
+        if FETCHING.swap(true, Ordering::SeqCst) {
+            return Err("a map download is already running".to_string());
+        }
+        let _release = ReleaseOnDrop(&FETCHING);
         // Timeouts so a stalled server cannot pin "Downloading map…" open
         // forever with no way out. This bounds the wait, not the request
         // scope: still one request per uncached map.
@@ -4158,8 +4180,15 @@ fn planned_output(inner: &Inner) -> Result<PathBuf, String> {
         .output_dir
         .clone()
         .or_else(|| {
+            // The home directory is the last resort rather than an error.
+            // dirs reads ~/.config/user-dirs.dirs for the first two, and a
+            // machine without xdg-user-dirs (a minimal window manager, a
+            // fresh Arch install, a container) has neither, which turned
+            // pressing Render into "no output folder set" on a system where
+            // nothing was wrong.
             dirs::video_dir()
                 .or_else(dirs::download_dir)
+                .or_else(dirs::home_dir)
                 .map(|p| p.to_string_lossy().into_owned())
         })
         .ok_or("no output folder set")?;

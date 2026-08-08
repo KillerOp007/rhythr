@@ -278,6 +278,22 @@ pub fn render_video(
         0
     };
     let total_frames = play_frames + results_frames;
+    // A replay's length is the timestamp of its last frame, taken as read.
+    // One damaged stamp is enough to make that a fortnight: a frame patched
+    // to 2e9 ms passes every integrity check (the header agrees with the
+    // frames) and asks for something like 1.2e11 frames, which is a progress
+    // bar that never moves, an ETA in years and an output file that grows
+    // until the disk is full. No run is four hours long, so say so instead
+    // of starting.
+    const MAX_MINUTES: f64 = 240.0;
+    let max_frames = (MAX_MINUTES * 60.0 * opts.fps as f64) as u64;
+    if total_frames > max_frames {
+        return Err(Error::Ffmpeg(format!(
+            "this replay claims to be {:.0} minutes long, which no run is. Its frame timestamps \
+             are damaged; re-export it from the game. (Clip a shorter range to render it anyway.)",
+            span_real_ms / 60_000.0
+        )));
+    }
     // Song time advanced per output frame: at 1.45x each real frame covers
     // 1.45 frames' worth of song.
     let song_dt_ms = 1000.0 / opts.fps as f64 * speed;
@@ -1023,6 +1039,15 @@ fn probe_tcp_feed(ffmpeg: &str) -> bool {
             match listener.accept() {
                 Ok((s, _)) => break s,
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    // An ffmpeg that died on startup is never going to
+                    // connect, and waiting out the full five seconds for it
+                    // froze the first render of every session on a machine
+                    // where the binary is broken or blocked. The same check
+                    // is why the transport benchmark answers in 0.03 s
+                    // instead of 25 s.
+                    if matches!(child.try_wait(), Ok(Some(_))) {
+                        return None;
+                    }
                     if std::time::Instant::now() >= deadline {
                         return None;
                     }
