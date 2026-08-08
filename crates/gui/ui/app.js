@@ -1590,18 +1590,14 @@ function initRenderEvents() {
     setRenderingUi(false);
     updateRenderButton();
     lastOutPath = e.payload.path;
-    // The timing stays on screen after the render rather than scrolling past
-    // during it: "why was that one slower than the last" is a question you
-    // only think to ask once it is over.
     $("render-text").classList.add("done");
     // Clear any error tooltip left from a previous failed render; a Done line
     // carrying the last error's hover text is worse than none.
     $("render-text").title = "";
-    // Everything that could explain the speed, on screen: with no console on
-    // Windows, two finished renders side by side is the only way to see what
-    // differed between them.
-    $("render-text").textContent =
-      `Done — ${e.payload.path}\n${e.payload.timing}\n${e.payload.detail}`;
+    // Just where the file went. The stage timings and the job description
+    // were on screen while the transport was being tuned; they belong in
+    // "Save diagnostics", not in front of someone who only wants their video.
+    $("render-text").textContent = `Done: ${e.payload.path}`;
     $("btn-open-out").hidden = false;
     setWindowNotice("Render finished");
   });
