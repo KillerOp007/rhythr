@@ -126,8 +126,14 @@ const CANDIDATES: &[Transport] = &[
 /// How long to spend on each candidate. Long enough to get past the first few
 /// frames, short enough that the whole run is a few seconds.
 const PER_CANDIDATE: Duration = Duration::from_millis(700);
-/// Never spend longer than this on one candidate even if it is very slow.
-const MAX_FRAMES: usize = 400;
+/// A frame cap that only bites if the clock never advances — set well above
+/// what PER_CANDIDATE reaches even on a very fast machine (the owner's manages
+/// ~1900 frames/s at 720p, so ~1330 in the window), so TIME is the limit and
+/// a fast box is not measured over an unrepresentatively short slice.
+const MAX_FRAMES: usize = 20_000;
+/// Frames pushed before the clock starts, so ffmpeg is already up and reading
+/// on every candidate rather than only on the sockets (which wait for accept).
+const WARMUP_FRAMES: usize = 8;
 
 /// Measures every candidate at the given output size and picks a winner.
 ///
@@ -179,58 +185,92 @@ fn measure(ffmpeg: &str, transport: Transport, w: u32, h: u32, frame: &[u8]) -> 
     cmd.args(["-c:v", "copy", "-f", "null", "-"]);
     let mut child = cmd.stdout(Stdio::null()).stderr(Stdio::null()).spawn().ok()?;
 
-    // Anything that goes wrong past this point has a child to clean up.
-    let outcome = (|| -> Option<f64> {
-        let mut sink: Box<dyn Write> = match &listener {
-            Some(l) => {
-                l.set_nonblocking(true).ok()?;
-                let deadline = Instant::now() + Duration::from_secs(5);
-                let sock = loop {
-                    match l.accept() {
-                        Ok((s, _)) => break s,
-                        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                            if Instant::now() >= deadline {
-                                return None;
-                            }
-                            std::thread::sleep(Duration::from_millis(5));
-                        }
-                        Err(_) => return None,
-                    }
-                };
-                sock.set_nonblocking(false).ok()?;
-                let _ = sock.set_nodelay(true);
-                Box::new(sock)
-            }
-            None => Box::new(child.stdin.take()?),
-        };
-        let chunk = match transport {
-            // A pipe is fastest fed in small pieces; that is not the variable
-            // under test here, so it gets the value it is known to want.
-            Transport::Pipe => 16 * 1024,
-            Transport::Socket(n) => n,
-        };
-        let start = Instant::now();
-        let mut frames = 0usize;
-        while frames < MAX_FRAMES && start.elapsed() < PER_CANDIDATE {
-            if chunk == 0 {
-                sink.write_all(frame).ok()?;
-            } else {
-                for part in frame.chunks(chunk) {
-                    sink.write_all(part).ok()?;
-                }
-            }
-            frames += 1;
-        }
-        let secs = start.elapsed().as_secs_f64();
-        drop(sink);
-        if frames == 0 || secs <= 0.0 {
-            return None;
-        }
-        Some(frames as f64 / secs)
-    })();
+    let outcome = measure_into(&listener, &mut child, transport, frame);
 
+    // ALWAYS kill before reaping, on every path. If the accept loop gave up
+    // but ffmpeg then connected to the still-listening backlog, it is blocked
+    // reading frames that will never come, and a bare wait() would hang the
+    // whole benchmark forever — which is exactly what the sibling probe in
+    // video.rs already guards against and this did not.
+    let _ = child.kill();
     let _ = child.wait();
     outcome
+}
+
+/// The timed part, split out so the caller can guarantee the child is killed
+/// however this returns.
+fn measure_into(
+    listener: &Option<std::net::TcpListener>,
+    child: &mut std::process::Child,
+    transport: Transport,
+    frame: &[u8],
+) -> Option<f64> {
+    let mut sink: Box<dyn Write> = match listener {
+        Some(l) => {
+            l.set_nonblocking(true).ok()?;
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let sock = loop {
+                match l.accept() {
+                    Ok((s, _)) => break s,
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        // Give up early if ffmpeg has already exited (bad args,
+                        // no such device): waiting out the full deadline for a
+                        // process that is gone just wastes five seconds per
+                        // socket candidate.
+                        if matches!(child.try_wait(), Ok(Some(_))) {
+                            return None;
+                        }
+                        if Instant::now() >= deadline {
+                            return None;
+                        }
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(_) => return None,
+                }
+            };
+            sock.set_nonblocking(false).ok()?;
+            let _ = sock.set_nodelay(true);
+            Box::new(sock)
+        }
+        None => Box::new(child.stdin.take()?),
+    };
+    let chunk = match transport {
+        // A pipe is fastest fed in small pieces; that is not the variable
+        // under test here, so it gets the value it is known to want.
+        Transport::Pipe => 16 * 1024,
+        Transport::Socket(n) => n,
+    };
+    let write_frame = |sink: &mut Box<dyn Write>| -> std::io::Result<()> {
+        if chunk == 0 {
+            sink.write_all(frame)
+        } else {
+            for part in frame.chunks(chunk) {
+                sink.write_all(part)?;
+            }
+            Ok(())
+        }
+    };
+    // Warm up BEFORE starting the clock, for every candidate. A socket only
+    // starts timing after accept() — i.e. after ffmpeg is up — while a pipe
+    // has no such barrier, so timing a pipe from the first write charged it
+    // for ffmpeg's whole startup and biased the winner away from the pipe.
+    // A few warm-up frames put both on the same footing: ffmpeg is reading by
+    // the time the clock starts.
+    for _ in 0..WARMUP_FRAMES {
+        write_frame(&mut sink).ok()?;
+    }
+    let start = Instant::now();
+    let mut frames = 0usize;
+    while frames < MAX_FRAMES && start.elapsed() < PER_CANDIDATE {
+        write_frame(&mut sink).ok()?;
+        frames += 1;
+    }
+    let secs = start.elapsed().as_secs_f64();
+    drop(sink);
+    if frames == 0 || secs <= 0.0 {
+        return None;
+    }
+    Some(frames as f64 / secs)
 }
 
 #[cfg(test)]

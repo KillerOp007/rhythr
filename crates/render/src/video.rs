@@ -331,7 +331,11 @@ pub fn render_video(
                 opts.start_ms,
                 end_ms,
                 speed,
-                hs.volume.clamp(0.0, 1.0),
+                // 1.5 like the music, not 1.0: both front ends offer up to
+                // 150% and the mixer soft-clips (audio.rs), so clamping
+                // hitsounds at 1.0 made the top third of that slider dead
+                // while the identical music slider worked over its whole range.
+                hs.volume.clamp(0.0, 1.5),
             )
         });
         if let Some(wav) = track {
@@ -688,24 +692,33 @@ pub fn render_video(
         .wait()
         .map_err(|e| Error::Ffmpeg(format!("waiting for ffmpeg: {e}")))?;
     if !status.success() {
-        // Guard drop removes the unusable partial file.
+        // Guard drop removes the unusable partial file. describe_exit already
+        // starts with "ffmpeg", so no prefix here — a "ffmpeg {}" wrapper
+        // produced "ffmpeg ffmpeg exited with status 1".
         return Err(Error::Ffmpeg(format!(
-            "ffmpeg {}{}",
+            "{}{}",
             describe_exit(&Ok(status)),
             explain_silence(&log)
         )));
     }
-    // Only now does the finished video take the name it was asked for. Up to
-    // this line nothing has touched whatever was already there.
+    // The encode succeeded, so from here the part file IS the finished video
+    // and must never be deleted. Defuse the guard BEFORE the rename, not
+    // after: if the rename fails (on Windows the destination can be held open
+    // by a media player, giving a sharing violation), an armed guard would
+    // run remove_file(part) on drop and destroy the only copy of the render
+    // that just took minutes to make.
+    guard.done = true;
     if !opts.discard_output {
         std::fs::rename(&part, out).map_err(|e| {
             Error::Ffmpeg(format!(
-                "could not move the finished render into place ({}): {e}",
+                "the render finished but could not be moved into place ({e}). \
+                 It is saved at {} — rename it yourself, or close whatever is \
+                 holding {} open and it will move next time.",
+                part.display(),
                 out.display()
             ))
         })?;
     }
-    guard.done = true;
     Ok(stats)
 }
 
