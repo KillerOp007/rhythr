@@ -65,6 +65,12 @@ impl<'a> Reader<'a> {
         Ok(String::from_utf8_lossy(self.take(n)?).into_owned())
     }
 
+    /// The same, with a 32-bit length (type 0x0b). Custom fields use either.
+    fn string32(&mut self) -> Result<String> {
+        let n = self.u32()? as usize;
+        Ok(String::from_utf8_lossy(self.take(n)?).into_owned())
+    }
+
     /// v1 newline-terminated string.
     fn line(&mut self) -> Result<String> {
         let rest = &self.data[self.pos..];
@@ -246,20 +252,39 @@ fn parse_v2(data: &[u8], r: &mut Reader) -> Result<Map> {
         mappers.push(r.string16()?);
     }
 
-    let mut custom_difficulty_name = String::new();
-    if custom_len > 0 {
+    // Best effort, deliberately: this block carries an optional display name
+    // and nothing the map needs. It also sits in its own addressed region, so
+    // failing to walk it says nothing about the notes, the audio or the
+    // cover, which are each reached by their own pointer.
+    //
+    // Measured against the published ranked catalogue (899 maps): six of them
+    // have a custom block this walk cannot follow (it reads a field length of
+    // 256 out of a 13-byte block), and every one of those six is otherwise
+    // perfect, full note count, playable audio, valid cover. Refusing the
+    // whole map over a difficulty label was the wrong trade.
+    //
+    // The name itself comes in two shapes in the wild: a u16-length string
+    // (0x09, 528 of those maps) and a u32-length one (0x0b, 16 of them). Only
+    // the first was read before, so those 16 lost their name for no reason.
+    let custom_difficulty_name = (|| -> Result<String> {
+        if custom_len == 0 {
+            return Ok(String::new());
+        }
         let mut c = Reader::new(slice_at(data, custom_off, custom_len)?);
         let fields = c.u16()?;
+        let mut found = String::new();
         for _ in 0..fields {
             let name = c.string16()?;
             let type_id = c.u8()?;
-            if name == "difficulty_name" && type_id == 0x09 {
-                custom_difficulty_name = c.string16()?;
-            } else {
-                c.skip_value(type_id)?;
+            match (name.as_str(), type_id) {
+                ("difficulty_name", 0x09) => found = c.string16()?,
+                ("difficulty_name", 0x0b) => found = c.string32()?,
+                _ => c.skip_value(type_id)?,
             }
         }
-    }
+        Ok(found)
+    })()
+    .unwrap_or_default();
 
     // Marker definitions: which value types each marker kind carries.
     let mut d = Reader::new(slice_at(data, defs_off, defs_len)?);
@@ -349,6 +374,112 @@ pub fn parse(data: &[u8]) -> Result<Map> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A minimal but complete v2 file, built here rather than taken from a
+    /// real map: header, one note, and whatever custom block the caller wants
+    /// to put in front of it.
+    fn v2_file(custom: &[u8]) -> Vec<u8> {
+        let mut head = Vec::new();
+        head.extend_from_slice(b"SS+m");
+        head.extend_from_slice(&2u16.to_le_bytes());
+        head.extend_from_slice(&[0; 4]); // reserved
+        head.extend_from_slice(&[0; 20]); // sha1, unverified
+        head.extend_from_slice(&1000u32.to_le_bytes()); // last ms
+        head.extend_from_slice(&1u32.to_le_bytes()); // notes
+        head.extend_from_slice(&1u32.to_le_bytes()); // markers
+        head.push(3); // difficulty
+        head.extend_from_slice(&0u16.to_le_bytes()); // stars
+        head.extend_from_slice(&[0, 0, 0]); // audio/cover/mod flags
+
+        let strings = {
+            let mut v = Vec::new();
+            for s in ["mapid", "map name", "song name"] {
+                v.extend_from_slice(&(s.len() as u16).to_le_bytes());
+                v.extend_from_slice(s.as_bytes());
+            }
+            v.extend_from_slice(&1u16.to_le_bytes()); // one mapper
+            v.extend_from_slice(&6u16.to_le_bytes());
+            v.extend_from_slice(b"mapper");
+            v
+        };
+        let defs = {
+            let mut v = vec![1u8]; // one definition
+            v.extend_from_slice(&8u16.to_le_bytes());
+            v.extend_from_slice(b"ssp_note");
+            v.push(1); // one value
+            v.push(0x07); // of type position
+            v.push(0); // terminator
+            v
+        };
+        let markers = {
+            let mut v = Vec::new();
+            v.extend_from_slice(&500u32.to_le_bytes());
+            v.push(0); // definition index
+            v.push(0); // grid position
+            v.extend_from_slice(&[1, 1]); // x, y
+            v
+        };
+
+        // Pointers are absolute, so the layout has to be decided first.
+        let ptr_bytes = 5 * 16;
+        let base = head.len() + ptr_bytes + strings.len();
+        let custom_off = base;
+        let defs_off = custom_off + custom.len();
+        let markers_off = defs_off + defs.len();
+
+        let mut out = head;
+        for (off, len) in [
+            (custom_off, custom.len()),
+            (0, 0), // audio
+            (0, 0), // cover
+            (defs_off, defs.len()),
+            (markers_off, markers.len()),
+        ] {
+            out.extend_from_slice(&(off as u64).to_le_bytes());
+            out.extend_from_slice(&(len as u64).to_le_bytes());
+        }
+        out.extend_from_slice(&strings);
+        out.extend_from_slice(custom);
+        out.extend_from_slice(&defs);
+        out.extend_from_slice(&markers);
+        out
+    }
+
+    /// Six maps in the published ranked catalogue carry a custom block this
+    /// parser cannot walk (a field length of 256 inside a 13-byte block), and
+    /// all six are otherwise perfect. The block holds an optional display
+    /// name and nothing else, so it must never take the map down with it.
+    #[test]
+    fn an_unwalkable_custom_block_costs_the_name_and_nothing_else() {
+        // Claims four fields, then runs out of block half way through one.
+        let broken = vec![
+            0x04, 0x00, 0x01, 0x00, 0x02, 0x00, 0x00, 0x01, 0x00, 0x5f, 0x01, 0x00, 0x30,
+        ];
+        let map = parse(&v2_file(&broken)).expect("a broken custom block must not fail the map");
+        assert_eq!(map.notes.len(), 1, "the notes are in their own block");
+        assert_eq!(map.meta.custom_difficulty_name, "");
+        assert_eq!(map.meta.title, "map name");
+    }
+
+    /// The difficulty name comes in two shapes in the wild: 528 maps of that
+    /// catalogue use a u16 length, 16 use a u32 one. Only the first was read.
+    #[test]
+    fn a_difficulty_name_is_read_whichever_length_it_carries() {
+        for (type_id, len_bytes) in [(0x09u8, vec![4u8, 0]), (0x0bu8, vec![4u8, 0, 0, 0])] {
+            let mut custom = Vec::new();
+            custom.extend_from_slice(&1u16.to_le_bytes());
+            custom.extend_from_slice(&15u16.to_le_bytes());
+            custom.extend_from_slice(b"difficulty_name");
+            custom.push(type_id);
+            custom.extend_from_slice(&len_bytes);
+            custom.extend_from_slice(b"Hard");
+            let map = parse(&v2_file(&custom)).expect("parses");
+            assert_eq!(
+                map.meta.custom_difficulty_name, "Hard",
+                "type 0x{type_id:02x}"
+            );
+        }
+    }
 
     /// A hostile marker value: `depth` nested arrays, the innermost one an
     /// array of the zero-width type. Parsed naively this either overflows
