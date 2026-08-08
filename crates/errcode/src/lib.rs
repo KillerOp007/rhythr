@@ -1182,12 +1182,12 @@ pub fn markdown() -> String {
                 let _ = write!(s, "Shown to the user: {}\n\n", e.fix);
             }
             for (plat, cause) in e.causes {
-                let _ = write!(s, "- **{}**: {}\n", plat.name(), cause);
+                let _ = writeln!(s, "- **{}**: {}", plat.name(), cause);
             }
             if !e.patterns.is_empty() {
-                let _ = write!(
+                let _ = writeln!(
                     s,
-                    "- Recognised by: {}\n",
+                    "- Recognised by: {}",
                     e.patterns
                         .iter()
                         .map(|p| format!("`{p}`"))

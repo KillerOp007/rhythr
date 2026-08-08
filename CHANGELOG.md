@@ -3,7 +3,7 @@
 rhythr is an unofficial community tool and is not affiliated with or
 endorsed by Rhythia or Capo Games.
 
-## Unreleased
+## v0.6.0 (2026-08-08)
 
 The default render is measured against the game instead of approximating it,
 the hit window follows the run's speed the way the game does, renders got
