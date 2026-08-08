@@ -533,9 +533,9 @@ impl HudState {
             .filter(|r| !r.hit)
             .filter_map(|r| {
                 let note = &map.notes[r.note_index];
-                // The game decides a miss when the hit window CLOSES,
-                // because an X at the chart time pops up while the cursor
-                // could still legally take the note.
+                // The game decides a miss when the hit window CLOSES. An X at
+                // the chart time would pop up while the cursor could still
+                // legally take the note.
                 let miss_t = note.time_ms as f64 + self.window_ms;
                 // Reported as REAL milliseconds, not song ones. The game
                 // animates this X off frame time, so at 1.45x a song-time

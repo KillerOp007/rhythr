@@ -324,6 +324,19 @@ impl Renderer {
         (self.width as f32) < 0.9 * self.height as f32
     }
 
+    /// The instance every render path starts from.
+    ///
+    /// NOT `Instance::default()`, which takes `Backends::all()` from the
+    /// build configuration and never looks at the environment. Both GPU
+    /// errors tell the user to start rhythr with `WGPU_BACKEND=gl`, and with
+    /// `default()` that advice did nothing at all: the variable reached only
+    /// the Analyze window's live renderer, which is the one path most people
+    /// never open. The diagnostics report prints `WGPU_BACKEND` when it is
+    /// set, which made an inert setting look like a decision.
+    fn env_instance() -> wgpu::Instance {
+        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env())
+    }
+
     async fn new_async(
         width: u32,
         height: u32,
@@ -331,7 +344,7 @@ impl Renderer {
         instance: Option<wgpu::Instance>,
         surface: Option<&wgpu::Surface<'static>>,
     ) -> Result<Renderer, Error> {
-        let instance = instance.unwrap_or_default();
+        let instance = instance.unwrap_or_else(Self::env_instance);
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,
@@ -3249,7 +3262,10 @@ impl GpuInfo {
 /// is not in the `render`/`video` group.
 pub fn describe_gpu() -> Result<GpuInfo, String> {
     pollster::block_on(async {
-        let instance = wgpu::Instance::default();
+        // The same instance a render would build, WGPU_BACKEND included, so
+        // the report names the adapter that would actually be used rather
+        // than one picked by different rules.
+        let instance = Renderer::env_instance();
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,

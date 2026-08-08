@@ -422,8 +422,6 @@ mod tests {
         assert!(dimmer, "ghost changed no opacity anywhere on the approach");
     }
 
-    use super::*;
-
     #[test]
     fn grid_centre_is_origin_and_y_flips() {
         assert_eq!(grid_to_world(1.0, 1.0), (0.0, 0.0));

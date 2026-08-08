@@ -317,6 +317,14 @@ impl Settings {
         // 16 KiB measured slower than not using the socket at all. Normalise
         // it here so a file cannot carry a value the UI would refuse.
         self.socket_chunk_kib = clamp_socket_chunk_kib(self.socket_chunk_kib);
+        // Same reasoning for the frame size. The window now rounds the width
+        // to a multiple of four (the GPU colour conversion packs four pixels
+        // per word and silently falls back to the CPU otherwise), but a size
+        // saved before that, or typed into an older build, arrives through
+        // serde without passing it.
+        let (w, h) = clamp_output_size(self.width, self.height);
+        self.width = w;
+        self.height = h;
     }
 
     fn load() -> Settings {
@@ -898,6 +906,21 @@ fn clamp_socket_chunk_kib(v: u32) -> u32 {
         v if v < 64 => 256,
         v => v.min(4096),
     }
+}
+
+/// Normalises a frame size to one the whole pipeline is happy with.
+///
+/// h.264 in yuv420p cannot encode an odd side at all, and the GPU colour
+/// conversion additionally needs a width divisible by four, because its
+/// compute shader packs four horizontal pixels into one 32-bit word. A width
+/// of 1366 encodes perfectly well and quietly costs roughly ten times as much
+/// per frame in conversion, which is the kind of slowdown nobody can explain
+/// from the outside. Two pixels of width is the entire price of avoiding it.
+fn clamp_output_size(width: u32, height: u32) -> (u32, u32) {
+    (
+        (width / 4 * 4).clamp(320, 7680),
+        (height / 2 * 2).clamp(240, 4320),
+    )
 }
 
 fn sanitize_filename(name: &str) -> String {
@@ -2774,11 +2797,13 @@ fn set_output(state: tauri::State<'_, App>, update: OutputUpdate) -> Result<Stat
     let mut inner = app.lock();
     let was_portrait = inner.settings.height > inner.settings.width;
     let s = &mut inner.settings;
+    // Rounded here as well as in the window: a preset, the Analyze window and
+    // a restored session all reach this without going through the input.
     if let Some(v) = update.width {
-        s.width = v.clamp(320, 7680);
+        s.width = clamp_output_size(v, s.height).0;
     }
     if let Some(v) = update.height {
-        s.height = v.clamp(240, 4320);
+        s.height = clamp_output_size(s.width, v).1;
     }
     if let Some(v) = update.fps {
         s.fps = v.clamp(24, 240);
@@ -5244,6 +5269,26 @@ mod settings_migration_tests {
         assert_eq!(clamp_socket_chunk_kib(64), 64);
         assert_eq!(clamp_socket_chunk_kib(256), 256);
         assert_eq!(clamp_socket_chunk_kib(99_999), 4096, "top is bounded");
+
+        // And the frame size too: a width of 1366 renders fine and drops the
+        // colour conversion onto the CPU, which is a slowdown with nothing on
+        // screen to explain it.
+        let mut s: Settings =
+            serde_json::from_str(r#"{"width":1366,"height":769}"#).expect("parses");
+        s.adopt_legacy_quality();
+        assert_eq!(
+            (s.width, s.height),
+            (1364, 768),
+            "size must be pipeline-safe"
+        );
+        let mut keeps: Settings =
+            serde_json::from_str(r#"{"width":1920,"height":1080}"#).expect("parses");
+        keeps.adopt_legacy_quality();
+        assert_eq!(
+            (keeps.width, keeps.height),
+            (1920, 1080),
+            "a good size is left alone"
+        );
 
         // And it actually runs at load, via adopt_legacy_quality.
         let mut s: Settings = serde_json::from_str(r#"{"socket_chunk_kib":16}"#).expect("parses");

@@ -2144,7 +2144,14 @@ function initControls() {
   });
   // h.264 in yuv420p cannot encode an odd side: round here rather than let
   // ffmpeg refuse the job minutes in. The bounds are the backend's own.
-  const fitEven = (v, lo, hi) => Math.min(hi, Math.max(lo, Math.round(v / 2) * 2));
+  //
+  // The width goes to a multiple of FOUR, not two. The colour conversion runs
+  // on the GPU only when four horizontal pixels pack into one 32-bit word,
+  // and a width like 1366 quietly fell back to the CPU: same video, roughly
+  // ten times the conversion cost per frame, with nothing on screen to say
+  // why. Two pixels of width is a price nobody would refuse to pay.
+  const fitStep = (v, lo, hi, step) =>
+    Math.min(hi, Math.max(lo, Math.round(v / step) * step));
   const pushRes = () => {
     const w = Number($("set-res-w").value.trim());
     const h = Number($("set-res-h").value.trim());
@@ -2153,8 +2160,8 @@ function initControls() {
       $("set-res-h").value = String(status?.settings?.height ?? 1080);
       return;
     }
-    const fw = fitEven(w, 320, 7680);
-    const fh = fitEven(h, 240, 4320);
+    const fw = fitStep(w, 320, 7680, 4);
+    const fh = fitStep(h, 240, 4320, 2);
     $("set-res-w").value = String(fw);
     $("set-res-h").value = String(fh);
     pushOutput({ width: fw, height: fh });

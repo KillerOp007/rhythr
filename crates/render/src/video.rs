@@ -828,29 +828,77 @@ impl FfmpegLog {
         FfmpegLog { lines }
     }
 
-    /// The last lines that are not ffmpeg's periodic progress readout,
-    /// formatted for appending to an error message (empty when silent).
+    /// The lines worth showing, formatted for appending to an error message
+    /// (empty when ffmpeg said nothing).
     fn tail(&self) -> String {
         let q = self.lines.lock().unwrap_or_else(|e| e.into_inner());
-        let picked: Vec<&str> = q
-            .iter()
-            .rev()
-            .filter(|l| !l.starts_with("frame=") && !l.starts_with("size="))
-            .take(3)
-            .map(String::as_str)
-            .collect();
-        if picked.is_empty() {
-            return String::new();
-        }
-        let mut out = String::from(": ");
-        for (i, l) in picked.iter().rev().enumerate() {
-            if i > 0 {
-                out.push_str(" / ");
-            }
-            out.push_str(l);
-        }
-        out
+        let kept: Vec<String> = q.iter().cloned().collect();
+        pick_tail(&kept)
     }
+}
+
+/// Which of ffmpeg's last words to keep.
+///
+/// This used to be "the last three", which is where ffmpeg puts its
+/// CONCLUSION and not its reason. A missing CUDA library, an encoder that is
+/// not in the build, a resolution the hardware cannot take: all of them are
+/// printed first and were then pushed out of the message by "Error while
+/// opening encoder, maybe incorrect parameters such as bit_rate, rate, width
+/// or height", which is the same sentence for every one of them. So the first
+/// line that reads like a diagnosis is kept as well, and it is put first.
+/// Whether a line of ffmpeg's stderr is a diagnosis rather than narration.
+///
+/// Deliberately broad: a false positive costs one extra line in an error
+/// message, a false negative costs the entire diagnosis.
+fn reads_like_a_reason(line: &str) -> bool {
+    const HINTS: &[&str] = &[
+        "error",
+        "unknown",
+        "cannot",
+        "could not",
+        "unable to",
+        "no such",
+        "not supported",
+        "does not support",
+        "invalid",
+        "failed",
+        "denied",
+        "no space",
+        "not found",
+        "killed",
+        "out of memory",
+    ];
+    let low = line.to_ascii_lowercase();
+    HINTS.iter().any(|h| low.contains(h))
+}
+
+fn pick_tail(lines: &[String]) -> String {
+    let usable: Vec<&str> = lines
+        .iter()
+        .map(|l| l.as_str())
+        .filter(|l| !l.starts_with("frame=") && !l.starts_with("size="))
+        .collect();
+    if usable.is_empty() {
+        return String::new();
+    }
+    let mut picked: Vec<&str> = Vec::new();
+    if let Some(first) = usable.iter().find(|l| reads_like_a_reason(l)) {
+        picked.push(first);
+    }
+    for l in usable.iter().rev().take(2).rev() {
+        if !picked.contains(l) {
+            picked.push(l);
+        }
+    }
+
+    let mut out = String::from(": ");
+    for (i, l) in picked.iter().enumerate() {
+        if i > 0 {
+            out.push_str(" / ");
+        }
+        out.push_str(l);
+    }
+    out
 }
 
 /// Owns the ffmpeg child during encoding; unless defused (`done = true`),
@@ -1318,15 +1366,26 @@ fn vaapi_probe(ffmpeg: &str, device: &str, icq: bool) -> Result<(), String> {
     }
 }
 
-/// ffmpeg's own explanation, which is nearly always its last non-empty line.
+/// ffmpeg's own explanation of a failed probe.
+///
+/// The first line that reads like a reason, not the last line printed. The
+/// last line is ffmpeg's summary, and for every encoder that is missing,
+/// unlicensed or unsupported it is the identical "Nothing was written into
+/// output file, because at least one of its streams received no packets",
+/// which is what the encoder list and the diagnostics file used to say
+/// instead of "Cannot load libcuda.so.1".
 fn last_meaningful_line(stderr: &[u8]) -> String {
-    String::from_utf8_lossy(stderr)
+    let text = String::from_utf8_lossy(stderr);
+    let lines: Vec<&str> = text
         .lines()
-        .rev()
         .map(str::trim)
-        .find(|l| !l.is_empty())
-        .unwrap_or("encoder test failed")
-        .to_string()
+        .filter(|l| !l.is_empty())
+        .collect();
+    lines
+        .iter()
+        .find(|l| reads_like_a_reason(l))
+        .or_else(|| lines.last())
+        .map_or_else(|| "encoder test failed".to_string(), |l| l.to_string())
 }
 
 /// Whether this VAAPI driver accepts intelligent-constant-quality. Several do
@@ -1440,5 +1499,80 @@ pub fn encoder_error(ffmpeg: &str, encoder: &str) -> Option<String> {
         // not support the required nvenc API version…").
         Ok(out) => Some(last_meaningful_line(&out.stderr)),
         Err(e) => Some(format!("could not run ffmpeg: {e}")),
+    }
+}
+
+#[cfg(test)]
+mod ffmpeg_message_tests {
+    use super::{last_meaningful_line, pick_tail};
+
+    /// Real ffmpeg output, shortened. The point of every case is the same:
+    /// the line that says WHY comes first and the line that says "it did not
+    /// work" comes last, so keeping the tail alone kept the useless half.
+    #[test]
+    fn the_reason_survives_even_though_ffmpeg_prints_it_first() {
+        let nvenc: Vec<String> = [
+            "[h264_nvenc @ 0x5610] Cannot load libcuda.so.1",
+            "[h264_nvenc @ 0x5610] The minimum required Nvidia driver for nvenc is 550.54.14 or newer",
+            "[vost#0:0/h264_nvenc @ 0x5610] Error while opening encoder - maybe incorrect parameters such as bit_rate, rate, width or height.",
+            "[out#0/null @ 0x5610] Nothing was written into output file, because at least one of its streams received no packets.",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let tail = pick_tail(&nvenc);
+        assert!(
+            tail.contains("Cannot load libcuda.so.1"),
+            "the driver problem was dropped: {tail}"
+        );
+
+        let stderr = nvenc.join("\n");
+        assert!(
+            last_meaningful_line(stderr.as_bytes()).contains("Cannot load libcuda.so.1"),
+            "the encoder probe reported the summary instead of the reason"
+        );
+    }
+
+    /// A resolution the hardware cannot take, which reads as a parameter
+    /// problem unless the constraint line survives.
+    #[test]
+    fn a_hardware_size_limit_is_named() {
+        let lines: Vec<String> = [
+            "[h264_vaapi @ 0x55f0] Hardware does not support encoding at size 5120x2880 (constraints: width 128-4096 height 128-4096).",
+            "[vost#0:0/h264_vaapi @ 0x55f0] Error while opening encoder - maybe incorrect parameters such as bit_rate, rate, width or height.",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        assert!(pick_tail(&lines).contains("5120x2880"));
+    }
+
+    /// Progress lines are still not an explanation, and a run that says
+    /// nothing at all still says nothing.
+    #[test]
+    fn progress_lines_are_not_an_explanation() {
+        let only_progress: Vec<String> = ["frame=  120 fps=60", "size=    2048kB time=00:00:02"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(pick_tail(&only_progress), "");
+        assert_eq!(pick_tail(&[]), "");
+    }
+
+    /// With nothing that looks like a reason, the last lines are still worth
+    /// more than nothing.
+    #[test]
+    fn without_a_reason_the_tail_is_kept() {
+        let lines: Vec<String> = [
+            "Input #0, rawvideo",
+            "Stream mapping: 0:0 -> 0:0",
+            "Press [q] to stop",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let tail = pick_tail(&lines);
+        assert!(tail.contains("Press [q] to stop"), "{tail}");
+        assert!(tail.contains("Stream mapping"), "{tail}");
     }
 }

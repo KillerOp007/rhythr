@@ -593,6 +593,20 @@ fn run() -> anyhow::Result<bool> {
             background_start,
             background_sync,
         } => {
+            // h.264 refuses an odd side, and the GPU colour conversion needs
+            // a width divisible by four (four pixels per 32-bit word), so an
+            // unrounded size either fails minutes in or runs ten times slower
+            // at the conversion with nothing said. The GUI rounds for you;
+            // here it is worth saying out loud, since a script may be passing
+            // the number.
+            let (width, height) = {
+                let w = (width / 4 * 4).clamp(320, 7680);
+                let h = (height / 2 * 2).clamp(240, 4320);
+                if (w, h) != (width, height) {
+                    eprintln!("note: rendering at {w}x{h} (width to a multiple of 4, height to an even number)");
+                }
+                (w, h)
+            };
             let r = Replay::from_path(&replay)
                 .with_context(|| format!("reading {}", replay.display()))?;
             let mut m =
