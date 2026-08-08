@@ -1011,8 +1011,17 @@ function gotoMiss(dir) {
     next = here;
   }
   next = clamp(next, 0, missTimes.length - 1);
-  seek(Math.max(0, missTimes[next] - MISS_LEAD_MS));
-  if (missLoop) setMissLoop(true); // re-anchor the loop on the new miss
+  const target = missTimes[next];
+  // Re-anchor the loop on the DESTINATION before seeking, not after. Seeking
+  // first fires updateTime() -> enforceLoop(), and with the loop still on the
+  // old miss and playback running, the new position lies outside it, so
+  // enforceLoop yanks the playhead straight back to the old miss — and the
+  // jump silently does nothing. Moving the loop first means the seek lands
+  // inside it.
+  if (missLoop) {
+    missLoop = { from: Math.max(0, target - MISS_LEAD_MS), to: target + MISS_TAIL_MS };
+  }
+  seek(Math.max(0, target - MISS_LEAD_MS));
   showChrome();
 }
 
@@ -2618,7 +2627,12 @@ function toggleOptions(show) {
     drawSection();
   }
   requestAnimationFrame(() => {
-    drawOverlay();
+    // drawFrame(), not drawOverlay(): in native and video mode the canvas is
+    // overlay-only and drawOverlay() does not clear it, so toggling the drawer
+    // while paused stacked a fresh overlay over the old one and it darkened
+    // each time. drawFrame() clears first in every mode, then draws the
+    // overlay.
+    drawFrame();
     drawScrub();
   });
 }
@@ -2752,6 +2766,12 @@ async function bootNative() {
 window.addEventListener("DOMContentLoaded", async () => {
   // Before anything reads opt: restore what the last session chose.
   loadOpt();
+  // The restored checkboxes/slider only change the picture if the backend is
+  // told too — the change handlers do that, but they never fire at boot, so
+  // without this a reopened window shows "Notes off" while a rendered segment
+  // still has notes. Sync the backend to the restored state once.
+  invoke("set_analyze_view", { hideCursor: !opt.gameCursor, hideNotes: !opt.notes }).catch(() => {});
+  invoke("set_analyze_linger", { ms: opt.linger }).catch(() => {});
   $("an-gear").addEventListener("click", () => toggleOptions());
   $("an-close").addEventListener("click", () => toggleOptions(false));
   $("an-play").addEventListener("click", () => setPlaying(!play.on));

@@ -194,6 +194,7 @@ function initOptionalCards() {
 /// since only a success ever wrote the fold state, a machine where detection
 /// keeps failing re-folded it on every single launch. So: open it while the
 /// game is NOT connected.
+let lastCardFilled = {};
 function syncOptionalCards() {
   const filled = {
     "card-ghost": !!status?.ghost,
@@ -202,7 +203,13 @@ function syncOptionalCards() {
   };
   for (const [id, has] of Object.entries(filled)) {
     const card = $(id);
-    if (has && card && card.classList.contains("collapsed")) {
+    // Auto-open only on the EDGE from empty to filled — the moment something
+    // arrives — not on every status refresh. Refreshing on every one meant a
+    // card the user deliberately folded (a loaded ghost they are done with,
+    // or a game that stays unconnected) sprang back open each time, so it
+    // could never be kept shut.
+    const justFilled = has && !lastCardFilled[id];
+    if (justFilled && card && card.classList.contains("collapsed")) {
       card.classList.remove("collapsed");
       const now = collapsedCards();
       now.delete(id);
@@ -211,6 +218,7 @@ function syncOptionalCards() {
       } catch { /* ignore */ }
     }
   }
+  lastCardFilled = filled;
 }
 
 /// Trims a path from the middle, keeping the root and the file name — the
@@ -1537,10 +1545,19 @@ async function startRender() {
     const planned = await invoke("planned_output_path");
     if (planned.exists) {
       const name = planned.path.split(/[\\/]/).pop();
-      const overwrite = await dialog.ask(
-        `${name} already exists in the output folder.\n\nReplace it?`,
-        { title: "File already there", kind: "warning", okLabel: "Replace", cancelLabel: "Keep both" }
-      );
+      // If the dialog itself fails (a missing permission once cost us this
+      // whole prompt), the safe default is to KEEP the existing file, never
+      // to overwrite it silently — losing a video is worse than a stray
+      // "name (2).mp4".
+      let overwrite = false;
+      try {
+        overwrite = await dialog.ask(
+          `${name} already exists in the output folder.\n\nReplace it?`,
+          { title: "File already there", kind: "warning", okLabel: "Replace", cancelLabel: "Keep both" }
+        );
+      } catch (e) {
+        console.error("overwrite dialog failed, keeping the existing file", e);
+      }
       keepExisting = !overwrite;
     }
   } catch {
@@ -1577,6 +1594,9 @@ function initRenderEvents() {
     // during it: "why was that one slower than the last" is a question you
     // only think to ask once it is over.
     $("render-text").classList.add("done");
+    // Clear any error tooltip left from a previous failed render; a Done line
+    // carrying the last error's hover text is worse than none.
+    $("render-text").title = "";
     // Everything that could explain the speed, on screen: with no console on
     // Windows, two finished renders side by side is the only way to see what
     // differed between them.
@@ -1648,13 +1668,19 @@ function updateRenderButton() {
         : status.replay.failed
           ? status.replay.fail_time_ms
           : status.replay.length_ms;
-      const frames = (runMs / 1000) * (status.settings.fps || 60);
+      // runMs is SONG time; a speed mod compresses the video to runMs/speed
+      // of wall clock, so it produces that many fewer output frames. Ignoring
+      // speed over-estimated the time by exactly the speed factor.
+      const speed = status.replay.speed || 1;
+      const frames = (runMs / speed / 1000) * (status.settings.fps || 60);
       const est = frames / fps + (clip ? 0 : status.settings.results_secs || 0);
       readyText = `Ready to render ${what} (~${fmtTime(est * 1000)} at last speed)`;
     }
     // ffmpeg is checked here too: `ready` is only replay+map, while the
     // button is also disabled without ffmpeg, so this line used to promise a
     // render next to a button that could not start one.
+    // A Ready line must not keep an old error's hover text.
+    $("render-text").title = "";
     $("render-text").textContent = ffmpegMissing
       ? "ffmpeg could not be run. Set its path under Advanced, or install it."
       : ready
@@ -1988,7 +2014,13 @@ function initControls() {
     const name = $("preset-name").value.trim();
     // Deleting a preset asks; saving over one did not, and destroys exactly
     // as much.
-    const existing = name in (status?.settings?.presets || {});
+    // hasOwnProperty, not `in`: `in` walks the prototype chain, so a preset
+    // named "toString" or "constructor" would falsely read as existing and
+    // pop a replace prompt for a preset that is not there.
+    const existing = Object.prototype.hasOwnProperty.call(
+      status?.settings?.presets || {},
+      name,
+    );
     if (existing) {
       const ok = await dialog.ask(`Replace the preset "${name}" with the current layout?`, {
         title: "Replace preset",
@@ -2164,6 +2196,10 @@ function initControls() {
     note.textContent = "Pushing frames through each transport. A few seconds.";
     try {
       const line = await invoke("benchmark_transport");
+      // The benchmark writes tcp_feed/socket size into settings; pull the
+      // status back so the Fast-frame-transport checkbox reflects a run that
+      // may have chosen the pipe, instead of still showing its old state.
+      applyStatus(await invoke("get_status"));
       note.textContent = line;
     } catch (e) {
       note.textContent = `Could not measure: ${e}`;
@@ -2352,7 +2388,7 @@ async function initEncoders() {
         )}">ffmpeg not found — rendering unavailable</span>`;
     } else {
       $("topbar-info").textContent = hw.length
-        ? `Hardware encoder: ${hw.map((e) => labels[e]?.split(" ")[0] || e).join(", ")}`
+        ? `Hardware encoder: ${hw.map((e) => labels[e]?.split(" (")[0] || e).join(", ")}`
         : "Software encoding (x264)";
     }
     updateRenderReady();
@@ -2361,7 +2397,7 @@ async function initEncoders() {
     const note = $("encoder-note");
     const reasons = Object.entries(probe.unavailable || {})
       .filter(([e]) => e !== "vaapi" || hw.length === 0) // vaapi absence on Windows is normal
-      .map(([e, r]) => `${labels[e]?.split(" ")[0] || e}: ${r}`);
+      .map(([e, r]) => `${labels[e]?.split(" (")[0] || e}: ${r}`);
     if (note) {
       note.textContent = hw.length === 0 && reasons.length ? reasons.join("  ·  ") : "";
       note.hidden = !note.textContent;

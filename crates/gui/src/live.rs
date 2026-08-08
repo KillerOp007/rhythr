@@ -163,15 +163,20 @@ pub fn spawn(
             };
 
         let mut cfg = init.cfg;
-        cfg.cursor_opacity = if init.hide_cursor { 0.0 } else { cfg.cursor_opacity };
+        // The value to restore a toggle TO is the skin's real opacity, so it
+        // must be read before the hide flags zero it. Reading it afterwards
+        // meant a window opened with notes or cursor hidden could only ever
+        // bring them back at 1% — max(0.01) of the zero the hide had already
+        // written.
+        let base_cursor_opacity = cfg.cursor_opacity.max(0.01);
+        let base_note_opacity = cfg.note_opacity.max(0.01);
         if init.hide_cursor {
+            cfg.cursor_opacity = 0.0;
             cfg.cursor_trail_enabled = false;
         }
         if init.hide_notes {
             cfg.note_opacity = 0.0;
         }
-        let base_cursor_opacity = cfg.cursor_opacity.max(0.01);
-        let base_note_opacity = cfg.note_opacity.max(0.01);
 
         let skin = renderer.prepare_skin(&cfg);
         let replay = init.replay;

@@ -308,6 +308,12 @@ impl Settings {
         if let Some(crf) = self.crf.take() {
             self.quality = rhythia_render::quality::from_legacy_crf(crf);
         }
+        // A socket write size an older test build persisted (16 KiB was once a
+        // dropdown choice) comes in through serde without passing the update
+        // handler's clamp, so it would reach the render path unchecked — and
+        // 16 KiB measured slower than not using the socket at all. Normalise
+        // it here so a file cannot carry a value the UI would refuse.
+        self.socket_chunk_kib = clamp_socket_chunk_kib(self.socket_chunk_kib);
     }
 
     fn load() -> Settings {
@@ -852,6 +858,19 @@ fn load_base_config(
         cfg.resolve_builtins(&rhythia_render::BuiltinAssets::load(Path::new(dir)));
     }
     Ok(cfg)
+}
+
+/// Normalises a socket write size to a value the transport will actually use.
+/// Anything under 64 KiB measured worse than the plain pipe on three of four
+/// output sizes, so it is refused; 0 (whole frame in one write) is fine; the
+/// top is bounded. Used both when the UI changes it and when a settings file
+/// (possibly from an older test build) is loaded.
+fn clamp_socket_chunk_kib(v: u32) -> u32 {
+    match v {
+        0 => 0,
+        v if v < 64 => 256,
+        v => v.min(4096),
+    }
 }
 
 fn sanitize_filename(name: &str) -> String {
@@ -1429,10 +1448,23 @@ fn load_replay(state: tauri::State<'_, App>, path: String, app_handle: tauri::Ap
             inner.map_hash_mismatch = mismatch;
         }
     } else if inner.map_source != "local" {
-        // Same map, different replay: the stored mismatch flag belongs to
-        // the old replay's hash — recompute against the new one.
-        inner.map_hash_mismatch = cached_map_hash(replay.map_id)
-            .is_some_and(|h| !replay.beatmap_hash.is_empty() && h != replay.beatmap_hash);
+        // Same map id, different replay: apply the same one-fetch policy the
+        // initial load uses, instead of only recomputing a warning flag. A
+        // mismatch that predates any fetch for THIS replay means the stale
+        // copy should be dropped so it can be fetched once; a mismatch that
+        // survives such a fetch means keep it and warn. Recomputing the flag
+        // alone left the user staring at "map updated" with no way to get the
+        // version their new replay was played on.
+        let cached_hash = cached_map_hash(replay.map_id).unwrap_or_default();
+        let fetched_for = cached_meta_field(replay.map_id, "fetchedFor");
+        match cache_decision(&replay.beatmap_hash, &cached_hash, fetched_for.as_deref()) {
+            Some(mismatch) => inner.map_hash_mismatch = mismatch,
+            None => {
+                inner.map = None;
+                inner.map_source.clear();
+                inner.map_hash_mismatch = false;
+            }
+        }
     }
     // A loaded ghost belongs to the previous replay; drop it when it no
     // longer fits the new one (other map, or a speed it cannot race).
@@ -1489,8 +1521,16 @@ async fn download_map(
         if map_id <= 0 {
             return Err("replay has no online map id".to_string());
         }
+        // Timeouts so a stalled server cannot pin "Downloading map…" open
+        // forever with no way out. This bounds the wait, not the request
+        // scope: still one request per uncached map.
+        let http = ureq::AgentBuilder::new()
+            .timeout_connect(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(60))
+            .build();
         // Resolve the map page -> .sspm URL + server-side hash.
-        let resp: serde_json::Value = ureq::post(API_BEATMAP_PAGE)
+        let resp: serde_json::Value = http
+            .post(API_BEATMAP_PAGE)
             .set("User-Agent", USER_AGENT)
             .send_json(serde_json::json!({"session": "", "id": map_id, "limit": 1}))
             .map_err(|e| match e {
@@ -1515,7 +1555,7 @@ async fn download_map(
             !replay_hash.is_empty() && !map_hash.is_empty() && replay_hash != map_hash;
 
         let mut bytes = Vec::new();
-        ureq::get(&file_url)
+        http.get(&file_url)
             .set("User-Agent", USER_AGENT)
             .call()
             .map_err(|e| format!("map download failed: {e}"))?
@@ -2323,15 +2363,7 @@ fn set_output(state: tauri::State<'_, App>, update: OutputUpdate) -> Result<Stat
         s.tcp_feed = v;
     }
     if let Some(v) = update.socket_chunk_kib {
-        // Anything under 64 KiB measured worse than not using the socket at
-        // all on three of four output sizes, so it is not offered and not
-        // accepted from a settings file either. 0 stays valid: that is the
-        // whole frame in one write, which is merely unremarkable.
-        s.socket_chunk_kib = match v {
-            0 => 0,
-            v if v < 64 => 256,
-            v => v.min(4096),
-        };
+        s.socket_chunk_kib = clamp_socket_chunk_kib(v);
     }
     if let Some(v) = update.dry_run {
         s.dry_run = v;
@@ -2405,14 +2437,22 @@ fn timeline(state: tauri::State<'_, App>, samples: usize) -> Result<TimelineDto,
         .map
         .as_ref()
         .map(|(_, m)| {
+            // Match against the map AS PLAYED: mirror/hardrock move the notes
+            // into the cursor's space, and match_hits' cursor-guided phase
+            // misplaces every miss if handed the un-flipped chart. And skip
+            // notes before start_from_ms — a practice run never attempted them,
+            // so they are not misses. Both bring this in line with the Analyze
+            // panel, which already does both.
+            let (mapped, _) = rhythia_render::mods::map_for_replay(m, replay);
             let window = rhythia_sim::hitreg::hit_window_ms(replay);
-            let outcome = rhythia_sim::hitreg::match_hits(&m.notes, frames, window);
+            let outcome = rhythia_sim::hitreg::match_hits(&mapped.notes, frames, window);
+            let attempt_lo = replay.start_from_ms.max(0) as f64;
             outcome
                 .results
                 .iter()
                 .filter(|r| !r.hit)
-                .map(|r| m.notes[r.note_index].time_ms as f64)
-                .filter(|&t| t <= run_end + window)
+                .map(|r| mapped.notes[r.note_index].time_ms as f64)
+                .filter(|&t| t >= attempt_lo && t <= run_end + window)
                 .collect()
         })
         .unwrap_or_default();
@@ -3856,10 +3896,16 @@ fn render_detail(app: &App, job: &RenderJob, encoder: &str, nth: u64) -> String 
         (None, false) => "image",
         (None, true) => "none",
     };
+    // The leading marker and every field below line up with a placeholder in
+    // order. The dry-run marker used to be placed among the later arguments
+    // while its `{}` sat at the very front, which shifted every field one slot
+    // and turned the whole line into "19201080x60 @240 fps…". Keep marker
+    // first, and keep this list in lockstep with the string above it.
     format!(
         "{}{}x{} @{} fps · quality {} (x264 {} / hw {}) · {} · {}
          {} · frame write {} · ghost {} · blur {} · background {} · hitsounds {}
          replay {} · map {}{} · render #{} since start",
+        if job.dry_run { "DIAGNOSTIC — nothing encoded, no file written\n" } else { "" },
         job.width,
         job.height,
         job.fps,
@@ -3869,7 +3915,6 @@ fn render_detail(app: &App, job: &RenderJob, encoder: &str, nth: u64) -> String 
         encoder,
         job.preset,
         if job.tcp_feed { "socket requested" } else { "pipe requested" },
-        if job.dry_run { "DIAGNOSTIC — nothing encoded, no file written\n" } else { "" },
         if job.socket_chunk_kib == 0 {
             "whole frame".to_string()
         } else {
@@ -4083,6 +4128,12 @@ fn quality_steps() -> Vec<QualityStep> {
 async fn benchmark_transport(state: tauri::State<'_, App>) -> Result<String, String> {
     let app = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
+        // Never measure while a render is running: it would time the transport
+        // against a machine already saturated by that render and then persist
+        // that skewed verdict as the default.
+        if app.rendering.load(Ordering::SeqCst) {
+            return Err("finish the current render before measuring the transport".to_string());
+        }
         let (ffmpeg, w, h) = {
             let inner = app.lock();
             (
@@ -4656,6 +4707,28 @@ mod update_channel_tests {
 
 #[cfg(test)]
 mod settings_migration_tests {
+    use super::clamp_socket_chunk_kib;
+
+    /// A socket write size below 64 KiB measured slower than not using the
+    /// socket at all, so the UI refuses it — but a value an older test build
+    /// persisted (16 KiB was once a choice) comes in through serde, bypassing
+    /// the UI clamp, and used to reach the render path unchecked. adopt_legacy
+    /// runs the same clamp at load so a file cannot carry a harmful value.
+    #[test]
+    fn a_harmful_socket_chunk_from_an_old_settings_file_is_normalised() {
+        assert_eq!(clamp_socket_chunk_kib(16), 256, "16 KiB must be lifted, not kept");
+        assert_eq!(clamp_socket_chunk_kib(1), 256);
+        assert_eq!(clamp_socket_chunk_kib(0), 0, "whole frame stays valid");
+        assert_eq!(clamp_socket_chunk_kib(64), 64);
+        assert_eq!(clamp_socket_chunk_kib(256), 256);
+        assert_eq!(clamp_socket_chunk_kib(99_999), 4096, "top is bounded");
+
+        // And it actually runs at load, via adopt_legacy_quality.
+        let mut s: Settings = serde_json::from_str(r#"{"socket_chunk_kib":16}"#).expect("parses");
+        s.adopt_legacy_quality();
+        assert_eq!(s.socket_chunk_kib, 256);
+    }
+
     /// Rhythia's terms allow one request per UNCACHED map. A map re-uploaded
     /// since a replay was recorded used to be fetched on every launch,
     /// forever, because the fetch stores the server's hash and the check

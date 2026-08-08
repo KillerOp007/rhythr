@@ -9,6 +9,8 @@
   "permissions": [
     "core:default",
     "dialog:default",
+    "dialog:allow-ask",
+    "dialog:allow-confirm",
     "opener:default",
     "updater:default",
     "process:allow-restart"
