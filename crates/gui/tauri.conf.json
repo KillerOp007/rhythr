@@ -80,6 +80,11 @@
           "/usr/share/doc/rhythr/THIRD-PARTY-NOTICES.md": "../../THIRD-PARTY-NOTICES.md"
         },
         "desktopTemplate": "../../packaging/linux/rhythr.desktop"
+      },
+      "appimage": {
+        "files": {
+          "/usr/lib/rhythr/ffmpeg": "ffmpeg"
+        }
       }
     },
     "createUpdaterArtifacts": true,

@@ -92,6 +92,19 @@ if res is not None:
   fi
 done
 
+# The AppImage is the one Linux format that cannot rely on a package manager
+# pulling ffmpeg in, so it carries its own copy. deb and rpm declare it as a
+# dependency instead and must NOT carry one.
+python3 -c '
+import json, sys
+b = json.load(open("crates/gui/tauri.conf.json"))["bundle"]
+files = b.get("linux", {}).get("appimage", {}).get("files", {})
+if not any(k.endswith("/ffmpeg") for k in files):
+    print("  FAIL   the AppImage bundles no ffmpeg, so it cannot render on a machine without one")
+    sys.exit(1)
+print("  ok     the AppImage carries its own ffmpeg")
+' || FAIL=1
+
 # Tauri only reads tauri.<platform>.conf.json for linux, windows and macos. A
 # file named after a BUNDLE FORMAT is silently ignored, which is how the
 # AppImage lost the ffmpeg that resolve_ffmpeg documents as its fallback.
