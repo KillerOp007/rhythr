@@ -142,8 +142,11 @@ if grep -q 'id="set-dryrun"' crates/gui/ui/index.html; then
 else
   ok "no dry-run control in the UI"
 fi
-if grep -q 'render #\|replay restored at startup\|opened by hand' crates/gui/src/main.rs; then
-  warn "the finished-render message still carries the full diagnostic block (fine for a test build, noise for a release)"
+# The backend still measures all of that and keeps it for the diagnostics
+# file, which is the point: the check is about what the WINDOW says after a
+# render, so it looks at the UI rather than at what is available to it.
+if grep -q 'payload.detail\|payload.timing' crates/gui/ui/app.js; then
+  warn "the finished-render message still shows the diagnostic block (fine for a test build, noise for a release)"
 else
   ok "finished-render message is release-shaped"
 fi
@@ -159,6 +162,41 @@ if grep -q '^## Unreleased' CHANGELOG.md; then
   warn "CHANGELOG.md still says Unreleased (correct until you tag, wrong after)"
 else
   ok "changelog has a released heading"
+fi
+
+echo
+echo "house style"
+# Em and en dashes are out everywhere in this project (parentheses, a colon or
+# two sentences instead). Third-party license text is quoted, not written here,
+# so it is exempt.
+# The pattern is built from code points so this script does not trip its own
+# check, and so it keeps working if an editor normalises the file.
+DASH_PAT=$(printf '\u2014\\|\u2013')
+DASHES=$(grep -rln "$DASH_PAT" \
+  --include="*.rs" --include="*.js" --include="*.html" --include="*.css" \
+  --include="*.wgsl" --include="*.sh" --include="*.md" --include="*.toml" \
+  --include="*.json" . 2>/dev/null \
+  | grep -v "^./target/" | grep -v "^./notes/" \
+  | grep -v "^./crates/gui/ui-dist/" \
+  | grep -v "THIRD-PARTY" | sort)
+if [ -n "$DASHES" ]; then
+  bad "em or en dashes left in: $(echo "$DASHES" | tr '\n' ' ')"
+else
+  ok "no em or en dashes outside quoted third-party text"
+fi
+
+if [ -f docs/ERROR-CODES.md ]; then
+  MISSING_CODES=$(grep -oE '"RH-[A-Z]{3}-[0-9]{3}"' crates/errcode/src/lib.rs \
+    | tr -d '"' | sort -u | while read -r code; do
+      grep -q "$code" docs/ERROR-CODES.md || echo "$code"
+    done)
+  if [ -n "$MISSING_CODES" ]; then
+    bad "docs/ERROR-CODES.md is missing: $(echo "$MISSING_CODES" | tr '\n' ' ') (run RHYTHR_UPDATE_DOCS=1 cargo test -p rhythia-errcode)"
+  else
+    ok "every error code has a row in docs/ERROR-CODES.md"
+  fi
+else
+  bad "docs/ERROR-CODES.md is missing: users are told to quote codes that lead nowhere"
 fi
 
 echo

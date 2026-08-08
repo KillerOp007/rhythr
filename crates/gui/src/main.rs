@@ -1,4 +1,4 @@
-//! rhythr — desktop app (Tauri shell around the render crates).
+//! rhythr: desktop app (Tauri shell around the render crates).
 //!
 //! Read-only like the CLI: replays are parsed, verified and rendered, never
 //! written. Maps auto-download from production.rhythia.com (cached locally,
@@ -34,7 +34,7 @@ const USER_AGENT: &str = concat!(
 const API_BEATMAP_PAGE: &str = "https://production.rhythia.com/api/getBeatmapPage";
 /// Refuse to download maps larger than this (malformed/hostile responses).
 const MAX_MAP_BYTES: u64 = 512 * 1024 * 1024;
-/// Ghost overlay colour (sRGB 0..1) — a warm orange, clearly distinct.
+/// Ghost overlay colour (sRGB 0..1): a warm orange, clearly distinct.
 pub(crate) const GHOST_COLOR: [f32; 3] = [1.0, 0.55, 0.24];
 const PREVIEW_W: u32 = 1280;
 const PREVIEW_H: u32 = 720;
@@ -60,7 +60,7 @@ struct Settings {
     width: u32,
     height: u32,
     fps: u32,
-    /// Render quality, 0..=100, HIGHER IS BETTER — see
+    /// Render quality, 0..=100, HIGHER IS BETTER. See
     /// [`rhythia_render::quality`].
     quality: u32,
     /// Present only in settings written before that scale was inverted,
@@ -69,8 +69,8 @@ struct Settings {
     #[serde(skip_serializing)]
     crf: Option<u32>,
     /// Hand frames to ffmpeg over a loopback socket instead of its stdin.
-    /// On by default since it was measured on a fast encoder — 160 fps to
-    /// 210 fps at 4K240 — and since the render crate probes the path before
+    /// On by default since it was measured on a fast encoder (160 fps to
+    /// 210 fps at 4K240) and since the render crate probes the path before
     /// depending on it and falls back to the pipe on its own.
     tcp_feed: bool,
     /// Kibibytes handed to that socket per write; 0 means the whole frame at
@@ -164,7 +164,7 @@ impl Default for Settings {
             error_meter: MeterSettings::at(0.5, 0.88),
             aim_meter: MeterSettings::at(0.15, 0.32),
             // The race widget only ever shows in ghost races, which are
-            // deliberate — unlike the meters it defaults to on.
+            // deliberate. Unlike the meters, it defaults to on.
             race_delta: MeterSettings {
                 enabled: true,
                 ..MeterSettings::at(0.5, 0.095)
@@ -183,7 +183,7 @@ impl Default for Settings {
 }
 
 /// A named layout/look snapshot: everything that defines how a render
-/// LOOKS — HUD layout, sizes and visibility, the meters, the skin config,
+/// LOOKS: HUD layout, sizes and visibility, the meters, the skin config,
 /// output format and the custom background. "TikTok layout" and "YouTube
 /// layout" become one click each.
 #[derive(Serialize, Deserialize, Clone)]
@@ -263,7 +263,7 @@ fn preset_snapshot(inner: &Inner) -> LayoutPreset {
 }
 
 /// Restores only the LAYOUT part (element positions/sizes/visibility and
-/// meters) — what Undo covers. Resolution, skin config and background
+/// meters), which is what Undo covers. Resolution, skin config and background
 /// stay put.
 fn apply_layout_only(settings: &mut Settings, p: &LayoutPreset) {
     settings.hud_overrides = p.hud_overrides.clone();
@@ -274,7 +274,7 @@ fn apply_layout_only(settings: &mut Settings, p: &LayoutPreset) {
     settings.race_delta = p.race_delta;
 }
 
-/// Remembers the current layout on the undo stack — called before every
+/// Remembers the current layout on the undo stack. Called before every
 /// editor action, and once per drag GESTURE (mark_undo), not per live
 /// tick. A new action invalidates the redo branch.
 fn remember_layout(inner: &mut Inner) {
@@ -304,7 +304,7 @@ impl Settings {
     ///
     /// Those files stored the raw x264 CRF, where LOWER meant better. Reading
     /// one of those numbers as a 0..=100 quality would turn somebody's "best"
-    /// into "draft" the first time they opened the new version — 14 was the
+    /// into "draft" the first time they opened the new version: 14 was the
     /// finest the old slider went and is nearly the coarsest the new one
     /// does. The old field is converted once and never written back.
     fn adopt_legacy_quality(&mut self) {
@@ -313,7 +313,7 @@ impl Settings {
         }
         // A socket write size an older test build persisted (16 KiB was once a
         // dropdown choice) comes in through serde without passing the update
-        // handler's clamp, so it would reach the render path unchecked — and
+        // handler's clamp, so it would reach the render path unchecked, and
         // 16 KiB measured slower than not using the socket at all. Normalise
         // it here so a file cannot carry a value the UI would refuse.
         self.socket_chunk_kib = clamp_socket_chunk_kib(self.socket_chunk_kib);
@@ -347,7 +347,7 @@ impl Settings {
 
     /// Writes via a temporary file and a rename, so an interrupted save (or
     /// two windows saving at once) can never leave a half-written settings
-    /// file behind — the old one stays until the new one is complete.
+    /// file behind. The old one stays until the new one is complete.
     fn save(&self) {
         let dir = config_dir();
         let _ = std::fs::create_dir_all(&dir);
@@ -435,7 +435,7 @@ struct FrameCache {
 }
 
 impl FrameCache {
-    /// Frame size scales with the window, so bound the cache by BYTES —
+    /// Frame size scales with the window, so bound the cache by BYTES.
     /// 96 MiB is ~2 s of 60 fps at 1440p and ~12 s at 720p.
     const CAP_BYTES: usize = 96 * 1024 * 1024;
     /// …and never keep more than a few seconds of frames anyway.
@@ -472,7 +472,7 @@ impl FrameCache {
 
 /// A rendered playback segment: real video the webview can play with
 /// hardware decoding, instead of streaming stills it has to decode one by
-/// one. `out_fps` frames per SONG second — raise it and the same span
+/// one. `out_fps` frames per SONG second: raise it and the same span
 /// plays back slower while staying perfectly smooth.
 #[derive(Clone)]
 #[allow(dead_code)] // segment fields feed the fallback engines' events
@@ -490,6 +490,7 @@ struct SegmentState {
     ready: Option<ReadySegment>,
 }
 
+#[derive(Default)]
 struct Shared {
     inner: Mutex<Inner>,
     cancel: AtomicBool,
@@ -517,7 +518,7 @@ struct Shared {
 }
 
 impl Shared {
-    /// Locks the app state, recovering from poisoning — a panic in one
+    /// Locks the app state, recovering from poisoning. A panic in one
     /// command (e.g. a GPU error during preview) must not brick every
     /// other command for the rest of the session.
     fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
@@ -793,7 +794,7 @@ impl Default for MeterSettings {
     }
 }
 
-/// Applies the LAYOUT part of the settings onto a config — cheap (bools
+/// Applies the LAYOUT part of the settings onto a config: cheap (bools
 /// and small maps only), so the live editor can re-apply it per preview
 /// frame without rebuilding the renderer or re-uploading the skin. The
 /// hud section resets from the BASE config first: a removed override
@@ -806,8 +807,8 @@ fn apply_hud_settings(cfg: &mut SkinConfig, base: &SkinConfig, s: &Settings) {
     s.error_meter.apply(&mut cfg.hud.error_meter);
     s.aim_meter.apply(&mut cfg.hud.aim_meter);
     s.race_delta.apply(&mut cfg.hud.race_delta);
-    // The dim rides the background quad's instance colour — no
-    // recompose needed, so it is live too.
+    // The dim rides the background quad's instance colour, so no
+    // recompose is needed and it is live too.
     cfg.custom_bg_dim = s
         .background
         .as_ref()
@@ -818,8 +819,8 @@ fn apply_hud_settings(cfg: &mut SkinConfig, base: &SkinConfig, s: &Settings) {
 /// game assets + HUD overrides, plus that window's own view toggles.
 ///
 /// Use [`render_config`] for anything the user keeps. The two toggles below
-/// exist so a person can study hitboxes without the notes on top of them —
-/// they are a lens on the picture, not a property of the run, and letting
+/// exist so a person can study hitboxes without the notes on top of them.
+/// They are a lens on the picture, not a property of the run, and letting
 /// them reach a render meant unticking "Notes" in one window produced a
 /// finished video with no notes in it, silently, minutes later.
 fn effective_config(inner: &Inner) -> SkinConfig {
@@ -847,7 +848,7 @@ fn render_config(inner: &Inner) -> SkinConfig {
 /// Everything both of them share, after the point where they differ.
 fn finish_config(mut cfg: SkinConfig, inner: &Inner) -> SkinConfig {
     // Custom background: replaces the skin's background layers. Silently
-    // skipped if the file vanished — set_background validated it once.
+    // skipped if the file vanished (set_background validated it once).
     if let Some(p) = &inner.settings.background {
         let _ = rhythia_render::background::apply_background(
             &mut cfg,
@@ -988,15 +989,15 @@ fn load_hitsounds(s: &Settings) -> Option<rhythia_render::video::HitsoundOptions
     })
 }
 
-/// Bundle resource directory, set once at startup — where the AppImage
+/// Bundle resource directory, set once at startup: where the AppImage
 /// carries its ffmpeg (on Windows the resources sit next to the exe, so
 /// the sibling check below covers it).
 static RESOURCE_DIR: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
 
 /// ffmpeg to run: explicit setting first. On Windows the bundled sibling
 /// wins (the installer ships a full build). On Linux the DISTRO ffmpeg
-/// wins when present — its VAAPI/NVENC are linked against the system's
-/// own driver libraries, where a portable static build can misbehave —
+/// wins when present (its VAAPI/NVENC are linked against the system's
+/// own driver libraries, where a portable static build can misbehave),
 /// and the copy bundled in the AppImage is the fallback so the app still
 /// works on systems with no ffmpeg at all.
 fn resolve_ffmpeg(settings: &Settings) -> String {
@@ -1037,8 +1038,8 @@ fn resolve_ffmpeg(settings: &Settings) -> String {
 
 /// How this install updates. "self": Windows (NSIS) and the Linux
 /// AppImage replace themselves through the updater. "aur": the binary is
-/// owned by pacman (the AUR package) — the update comes through the AUR
-/// helper, the banner should say so. "page": deb/rpm — point at the
+/// owned by pacman (the AUR package), so the update comes through the AUR
+/// helper and the banner should say so. "page": deb/rpm, so point at the
 /// releases page.
 #[tauri::command]
 fn update_channel() -> String {
@@ -1093,24 +1094,80 @@ fn window_pos_visible(window: &tauri::WebviewWindow, x: i32, y: i32) -> bool {
     })
 }
 
-/// A bit more than "linux" or "windows", where it is cheap to get.
+/// A bit more than "linux" or "windows", because the error codes are written
+/// per system and the row a maintainer should read depends on the details.
 ///
 /// The distribution matters on Linux far more than the kernel version does:
 /// which ffmpeg build, which Mesa, whether VAAPI works at all. On Windows the
-/// graphics driver version (reported next to the GPU) says more than the
-/// build number would, so the architecture is enough here.
+/// build number separates 10 from 11 and dates the WebView2 runtime, and
+/// asking a reporter for it never goes well.
 fn os_detail() -> String {
     #[cfg(target_os = "linux")]
     {
-        if let Ok(text) = std::fs::read_to_string("/etc/os-release") {
-            for line in text.lines() {
-                if let Some(v) = line.strip_prefix("PRETTY_NAME=") {
-                    return format!("{} ({})", v.trim_matches('"'), std::env::consts::ARCH);
-                }
+        let arch = std::env::consts::ARCH;
+        let name = std::fs::read_to_string("/etc/os-release")
+            .ok()
+            .and_then(|text| {
+                text.lines()
+                    .find_map(|l| l.strip_prefix("PRETTY_NAME=").map(|v| v.to_string()))
+            })
+            .map(|v| v.trim_matches('"').to_string())
+            .unwrap_or_else(|| "unknown distribution".to_string());
+        // Wayland against X11, and any sandbox, decide half the Linux causes
+        // in the code table (portals, /dev/dri, loopback), so they belong
+        // next to the name rather than in a question back to the reporter.
+        let mut extra = Vec::new();
+        if let Ok(session) = std::env::var("XDG_SESSION_TYPE") {
+            if !session.is_empty() {
+                extra.push(session);
             }
         }
+        for (var, label) in [
+            ("APPIMAGE", "AppImage"),
+            ("FLATPAK_ID", "Flatpak"),
+            ("SNAP", "Snap"),
+        ] {
+            if std::env::var_os(var).is_some() {
+                extra.push(label.to_string());
+            }
+        }
+        let extra = if extra.is_empty() {
+            String::new()
+        } else {
+            format!(", {}", extra.join(", "))
+        };
+        return format!("{name} ({arch}{extra})");
     }
-    std::env::consts::ARCH.to_string()
+    #[cfg(not(target_os = "linux"))]
+    {
+        // No dependency for this: both are one short command, run once, when
+        // the user asks for a report.
+        #[cfg(windows)]
+        let probe = ("cmd", vec!["/C", "ver"]);
+        #[cfg(target_os = "macos")]
+        let probe = ("sw_vers", vec!["-productVersion"]);
+        #[cfg(not(any(windows, target_os = "macos")))]
+        let probe = ("uname", vec!["-sr"]);
+
+        let mut cmd = std::process::Command::new(probe.0);
+        cmd.args(probe.1);
+        rhythia_render::video::hide_console_window(&mut cmd);
+        let version = cmd
+            .output()
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+            .and_then(|t| {
+                t.lines()
+                    .map(str::trim)
+                    .find(|l| !l.is_empty())
+                    .map(|l| l.to_string())
+            })
+            .unwrap_or_default();
+        if version.is_empty() {
+            return std::env::consts::ARCH.to_string();
+        }
+        format!("{version} ({})", std::env::consts::ARCH)
+    }
 }
 
 /// ffmpeg's own first line, which names the build and its origin. A build
@@ -1178,7 +1235,7 @@ fn diagnostics_report(app: &App) -> String {
     let inner = app.lock();
     let mut s = String::new();
     let _ = writeln!(s, "rhythr {}", env!("CARGO_PKG_VERSION"));
-    let _ = writeln!(s, "os: {} {}", std::env::consts::OS, os_detail());
+    let _ = writeln!(s, "os: {}, {}", std::env::consts::OS, os_detail());
     let _ = writeln!(
         s,
         "cpu: {} logical cores",
@@ -1199,7 +1256,13 @@ fn diagnostics_report(app: &App) -> String {
             } else {
                 String::new()
             };
-            let _ = writeln!(s, "  {}{}: {}", e.code, times, redact_path(&e.message));
+            let _ = writeln!(s, "  {}{}", e.code, times);
+            // Indented and kept whole: ffmpeg's own reason is the last line
+            // of what it said, and a message flattened onto the code line
+            // would be the one thing here that scrolls sideways.
+            for line in redact_path(&e.message).lines() {
+                let _ = writeln!(s, "      {}", line.trim_end());
+            }
         }
     }
 
@@ -1264,7 +1327,7 @@ fn diagnostics_report(app: &App) -> String {
                     for c in report.failed_checks() {
                         let _ = writeln!(
                             s,
-                            "    {} — expected {}, got {}",
+                            "    {}: expected {}, got {}",
                             c.name, c.expected, c.actual
                         );
                     }
@@ -1426,11 +1489,11 @@ fn verify_dto(replay: &Replay, map: &Map, hash_mismatch: bool) -> VerifyDto {
 
 /// Whether a failed check is better explained by the loaded map than by the
 /// replay. A replay's hit flags only line up with the chart they were played
-/// on, so against a foreign map most of them match nothing at all — a state
-/// no edit produces, since editing a replay keeps its own totals coherent.
+/// on, so against a foreign map most of them match nothing at all (a state
+/// no edit produces, since editing a replay keeps its own totals coherent).
 
 /// Overlays and meter chrome flip to dark strokes on bright skin
-/// backgrounds — one rule, used by the HUD and the analyze overlay.
+/// backgrounds (one rule, used by the HUD and the analyze overlay).
 fn is_light_background(cfg: &rhythia_render::config::SkinConfig) -> bool {
     let bg = cfg.background_color;
     0.299 * bg[0] + 0.587 * bg[1] + 0.114 * bg[2] > 0.55
@@ -1646,7 +1709,7 @@ fn cache_decision(replay_hash: &str, cached_hash: &str, fetched_for: Option<&str
 /// Invalidate the cached preview pipeline (config/replay/map changed).
 /// Rescales wall-clock replays (speed already applied to their frame
 /// times) into song time as soon as replay and map are paired, so every
-/// consumer — preview, timeline, verify badge, render — sees one
+/// consumer (preview, timeline, verify badge, render) sees one
 /// consistent base. Idempotent; no-op for well-formed replays.
 fn normalize_time_bases(inner: &mut Inner) {
     let Some((_, map)) = &inner.map else { return };
@@ -1697,7 +1760,7 @@ fn load_replay(
     let replay = Replay::from_path(&path).map_err(err_str)?;
     let mut inner = app.lock();
     // Keep the map when it still belongs to this replay (same online id) or
-    // when the user picked it manually — the verify badge flags a true
+    // when the user picked it manually, since the verify badge flags a true
     // mismatch. Auto-resolved maps for another id are swapped out.
     let keep_map = inner.map.is_some()
         && (inner.map_source == "local"
@@ -1740,7 +1803,7 @@ fn load_replay(
             inner.ghost = None;
         }
     }
-    // A clip range belongs to the run it was set on — a different replay
+    // A clip range belongs to the run it was set on, so a different replay
     // must not inherit it (a shorter run would collapse it to nothing).
     inner.clip = None;
     inner.replay_restored = false;
@@ -1864,7 +1927,7 @@ async fn download_map(
 
         let mut inner = app.lock();
         // The download is slow; the user may have loaded a different replay
-        // meanwhile. The cache write above still counts — but don't pair
+        // meanwhile. The cache write above still counts, but don't pair
         // this map with a replay it doesn't belong to.
         let still_wanted = inner
             .replay
@@ -1903,7 +1966,7 @@ fn load_config(
     inner.settings.save();
     invalidate_preview(&mut inner);
     // The analyze window renders with this config baked in (live engine,
-    // cached geometry, overlay palette) — it must rebuild.
+    // cached geometry, overlay palette), so it must rebuild.
     notify_sources_changed(&app_handle);
     Ok(assemble_status(
         &inner,
@@ -1949,12 +2012,12 @@ async fn set_game_assets(
         let mut resolved = path.filter(|p| !p.trim().is_empty());
         // A rhythia.exe gets its skin assets extracted locally; the config
         // then resolves against the extracted copy. Extraction runs into a
-        // temp dir first and only replaces the live cache once validated —
+        // temp dir first and only replaces the live cache once validated:
         // a failed/partial run must not pollute a previously good cache.
         if let Some(p) = &resolved {
             // Any file is treated as the game binary (rhythia.exe under
             // Windows/Proton, an extensionless ELF for the native Linux
-            // build — the bundle format is the same); a directory is an
+            // build, since the bundle format is the same); a directory is an
             // already-extracted assets folder.
             if Path::new(p).is_file() {
                 // One extraction at a time (second click while running).
@@ -1970,7 +2033,7 @@ async fn set_game_assets(
                     if n < 50 {
                         let _ = std::fs::remove_dir_all(&tmp);
                         return Err(format!(
-                            "only {n} assets found in this exe — unexpected; not using it"
+                            "only {n} assets found in this exe (unexpected); not using it"
                         ));
                     }
                     let _ = std::fs::remove_dir_all(&cache);
@@ -2017,13 +2080,13 @@ fn windows_steam_path() -> Option<PathBuf> {
 
 /// Finds the game binary across every Steam library (registry/default
 /// roots plus libraryfolders.vdf). Works for Windows installs, Proton
-/// installs and the native Linux build alike — the extraction is
+/// installs and the native Linux build alike: the extraction is
 /// file-based and the .NET bundle layout is the same everywhere.
 #[tauri::command]
 async fn detect_game() -> Option<String> {
     // The scan touches every Steam library on every drive; a spun-down
     // HDD or dead network mapping blocks for seconds, and sync commands
-    // run on the UI thread — so it goes through the blocking pool like
+    // run on the UI thread, so it goes through the blocking pool like
     // every other filesystem-heavy command here.
     tauri::async_runtime::spawn_blocking(detect_game_scan)
         .await
@@ -2070,8 +2133,8 @@ fn detect_game_scan() -> Option<String> {
     // Scan every library's steamapps/common for a folder that mentions
     // the game, then take the largest plausible game binary inside it:
     // rhythia.exe under Windows/Proton, an extensionless ELF for the
-    // native Linux build. Names are matched case-insensitively — installs
-    // exist as "Rhythia", "rhythia" and "SoundSpacePlus".
+    // native Linux build. Names are matched case-insensitively, since
+    // installs exist as "Rhythia", "rhythia" and "SoundSpacePlus".
     let mut best: Option<(u64, PathBuf)> = None;
     for root in roots {
         let common = root.join("steamapps").join("common");
@@ -2114,8 +2177,8 @@ fn game_binary_in(dir: &Path) -> Option<(u64, PathBuf)> {
         if !looks_like || !ext_ok {
             continue;
         }
-        // fs::metadata (not DirEntry::metadata) so symlinked game files —
-        // common in hand-built Steam libraries — report their real size.
+        // fs::metadata (not DirEntry::metadata) so symlinked game files,
+        // common in hand-built Steam libraries, report their real size.
         let Ok(meta) = std::fs::metadata(&path) else {
             continue;
         };
@@ -2209,7 +2272,7 @@ fn clear_ghost(
     ))
 }
 
-/// Stores a dragged HUD element's new centre (normalised to the frame —
+/// Stores a dragged HUD element's new centre (normalised to the frame,
 /// or to one half in a ghost split) and refreshes the preview. Saved
 /// immediately: the render always matches the live preview.
 #[tauri::command]
@@ -2237,7 +2300,7 @@ fn set_hud_position(
 }
 
 /// The drag editor's corner-handle resize. A scale close to 1 removes the
-/// entry — back to the standard size, no leftover override.
+/// entry: back to the standard size, no leftover override.
 #[tauri::command]
 fn set_hud_scale(
     state: tauri::State<'_, App>,
@@ -2273,7 +2336,7 @@ struct HudBoxDto {
 }
 
 /// The drag editor's hitboxes at the given song time, in preview-frame
-/// pixels — computed by the renderer from the very vertices it draws, so
+/// pixels, computed by the renderer from the very vertices it draws, so
 /// box and pixels cannot drift apart.
 #[tauri::command]
 async fn hud_layout(state: tauri::State<'_, App>, time_ms: f64) -> Result<Vec<HudBoxDto>, String> {
@@ -2377,7 +2440,7 @@ fn set_meter(
 }
 
 /// Puts every draggable HUD element back where the game/config puts it:
-/// the drag-editor overrides and the meters' positions — nothing else
+/// the drag-editor overrides and the meters' positions, and nothing else
 /// (visibility, scale and opacity survive).
 #[tauri::command]
 fn reset_hud_layout(state: tauri::State<'_, App>) -> Result<StatusDto, String> {
@@ -2413,7 +2476,7 @@ fn reset_hud_layout(state: tauri::State<'_, App>) -> Result<StatusDto, String> {
 
 /// Sets (or clears, with None) the custom playfield background. Validates
 /// up front: images must fully decode, videos must be readable by the
-/// bundled ffmpeg — so a bad file errors here instead of rendering black.
+/// bundled ffmpeg, so a bad file errors here instead of rendering black.
 #[tauri::command]
 fn set_background(state: tauri::State<'_, App>, path: Option<String>) -> Result<StatusDto, String> {
     use rhythia_render::background as bg;
@@ -2435,12 +2498,12 @@ fn set_background(state: tauri::State<'_, App>, path: Option<String>) -> Result<
                 let ffmpeg = resolve_ffmpeg(&inner.settings);
                 duration = bg::probe_duration(&ffmpeg, &pb);
                 if duration.is_none() {
-                    return Err("ffmpeg could not read this file — unsupported or corrupt".into());
+                    return Err("ffmpeg could not read this file (unsupported or corrupt)".into());
                 }
             }
         }
     }
-    // A different file means a different intro — the start point resets.
+    // A different file means a different intro, so the start point resets.
     if inner.settings.background != path {
         inner.settings.background_start = 0.0;
     }
@@ -2455,7 +2518,7 @@ fn set_background(state: tauri::State<'_, App>, path: Option<String>) -> Result<
 }
 
 /// The user's zoom/shift/start placement of the custom background. All
-/// fields optional — a patch, like set_meter.
+/// fields optional: a patch, like set_meter.
 #[derive(Deserialize, Default)]
 #[serde(default)]
 struct BackgroundTransform {
@@ -2547,7 +2610,7 @@ fn apply_preset(state: tauri::State<'_, App>, name: String) -> Result<StatusDto,
         .then(|| rhythia_render::background::probe_duration(&resolve_ffmpeg(&inner.settings), &pb))
         .flatten()
     });
-    // The preset's skin config — falls back to defaults when it had none
+    // The preset's skin config falls back to defaults when it had none
     // or the file is gone (the rest of the preset still applies).
     let cfg_path = p.config_path.as_ref().map(PathBuf::from);
     match load_base_config(&cfg_path, &inner.settings.game_assets) {
@@ -2633,7 +2696,7 @@ fn set_clip(state: tauri::State<'_, App>, start_ms: f64, end_ms: f64) -> Result<
     let app = state.inner();
     let mut inner = app.lock();
     if end_ms - start_ms < 500.0 {
-        return Err("clip is too short — give it at least half a second".into());
+        return Err("clip is too short: give it at least half a second".into());
     }
     inner.clip = Some((start_ms.max(0.0), end_ms));
     Ok(assemble_status(
@@ -2807,7 +2870,7 @@ fn timeline(state: tauri::State<'_, App>, samples: usize) -> Result<TimelineDto,
             // Match against the map AS PLAYED: mirror/hardrock move the notes
             // into the cursor's space, and match_hits' cursor-guided phase
             // misplaces every miss if handed the un-flipped chart. And skip
-            // notes before start_from_ms — a practice run never attempted them,
+            // notes before start_from_ms: a practice run never attempted them,
             // so they are not misses. Both bring this in line with the Analyze
             // panel, which already does both.
             let (mapped, _) = rhythia_render::mods::map_for_replay(m, replay);
@@ -2837,7 +2900,7 @@ struct NoteQuadDto {
     i: u32,
     /// Four screen-space corners in preview pixels (TL, TR, BR, BL).
     pts: [[f32; 2]; 4],
-    /// Approach depth — 0 at the hit plane.
+    /// Approach depth (0 at the hit plane).
     depth: f32,
 }
 
@@ -2848,8 +2911,8 @@ struct SideProjDto {
     w: u32,
     /// Column-major 4×4 view-projection matrix.
     m: [[f32; 4]; 4],
-    /// Notes on screen right now, exactly as the renderer draws them —
-    /// the overlay traces these instead of guessing a grid cell.
+    /// Notes on screen right now, exactly as the renderer draws them.
+    /// The overlay traces these instead of guessing a grid cell.
     notes: Vec<NoteQuadDto>,
     /// Playfield border quad; overlays clip to it.
     field: [[f32; 2]; 4],
@@ -2868,7 +2931,7 @@ async fn preview(state: tauri::State<'_, App>, time_ms: f64) -> Result<String, S
     let app = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         // The pipeline can be invalidated between the two steps (a setting
-        // changed on another thread) — one retry covers that race.
+        // changed on another thread). One retry covers that race.
         ensure_preview_ctx(&app, time_ms)?;
         let png = match render_frame_png(&app, time_ms) {
             Ok(p) => p,
@@ -3018,7 +3081,7 @@ fn prepare_segment(
                 &opts,
                 move |done, total| {
                     if app2.segment_gen.load(Ordering::SeqCst) != token {
-                        return false; // superseded — stop rendering
+                        return false; // superseded, so stop rendering
                     }
                     let pct = if total > 0 { done * 100 / total } else { 0 };
                     if pct != last_pct {
@@ -3115,7 +3178,7 @@ async fn start_live_session(
     };
     if let Some(old) = stopping {
         // The old thread owns a swapchain on this window. Two flip-model
-        // swapchains on one HWND is a DXGI error — wait for the old one
+        // swapchains on one HWND is a DXGI error, so wait for the old one
         // to actually release before creating a new surface.
         let _ = old.tx.send(live::LiveCmd::Stop);
         let flag = old.running.clone();
@@ -3236,7 +3299,7 @@ fn live_cmd(
         "seek" => live::LiveCmd::Seek(value.unwrap_or(0.0)),
         "speed" => live::LiveCmd::Speed(value.unwrap_or(1.0)),
         "resize" => {
-            // The window's own physical size, not the JS estimate —
+            // The window's own physical size, not the JS estimate:
             // innerWidth·dpr is off by one at fractional Windows DPI,
             // and a 1px swapchain mismatch stretches the whole frame.
             let (pw, ph) = match (w, h) {
@@ -3262,7 +3325,7 @@ fn live_cmd(
     s.tx.send(msg).map_err(|_| "live thread gone".to_string())
 }
 
-/// Analyze view options — they change what the renderer draws, so the
+/// Analyze view options. They change what the renderer draws, so the
 /// preview pipeline and all cached frames restart.
 #[tauri::command]
 async fn set_analyze_view(
@@ -3357,7 +3420,7 @@ fn serve_frame(app_handle: &tauri::AppHandle, query: &str) -> Result<Arc<Vec<u8>
     Ok(png)
 }
 
-/// Drops cached frames without tearing down the GPU pipeline — for the
+/// Drops cached frames without tearing down the GPU pipeline, for the
 /// live-edit paths (HUD toggles, layout drags, background dim) that change
 /// what a frame LOOKS like while the pipeline itself stays valid.
 fn touch_frames(inner: &mut Inner) {
@@ -3393,7 +3456,7 @@ async fn frame_geometry(
     .map_err(err_str)?
 }
 
-/// Geometry for a whole run of upcoming frames in ONE round trip —
+/// Geometry for a whole run of upcoming frames in ONE round trip:
 /// playback must not pay IPC latency per frame.
 #[tauri::command]
 async fn frame_geometry_batch(
@@ -3455,7 +3518,7 @@ fn prefetch_frames(
                 continue;
             }
             // A frame the window is waiting for beats work done ahead of
-            // time — let it have the renderer first.
+            // time, so let it have the renderer first.
             let mut waited = 0;
             while app.frame_jobs.load(Ordering::SeqCst) > 0 && waited < 200 {
                 std::thread::sleep(std::time::Duration::from_millis(2));
@@ -3640,7 +3703,7 @@ fn render_frame_png(app: &App, time_ms: f64) -> Result<Arc<Vec<u8>>, String> {
     }
 }
 
-/// The on-screen geometry for `time_ms` — pure CPU math, no GPU work, so
+/// The on-screen geometry for `time_ms`: pure CPU math, no GPU work, so
 /// the overlay can be fetched in parallel with the frame image.
 fn frame_sides(app: &App, time_ms: f64) -> Result<PreviewFrameDto, String> {
     let inner = app.lock();
@@ -3724,14 +3787,14 @@ struct AnalysisDto {
     ghost_player: Option<String>,
     map_title: String,
     /// The game's cursor barrier per side (world units): the visible
-    /// cursor — and every hit test — is clamped here. Overlays must
+    /// cursor (and every hit test) is clamped here. Overlays must
     /// clamp too; raw recordings (tablets!) go beyond it.
     cursor_bound: f32,
     ghost_cursor_bound: Option<f32>,
 }
 
-/// Full replay analytics for the Analyze tab. Recomputed on demand — a
-/// few hundred ms even for long maps, and only requested on tab entry.
+/// Full replay analytics for the Analyze tab. Recomputed on demand (a
+/// few hundred ms even for long maps) and only requested on tab entry.
 #[tauri::command]
 async fn analysis_data(state: tauri::State<'_, App>) -> Result<AnalysisDto, String> {
     let app = state.inner().clone();
@@ -3794,7 +3857,7 @@ async fn set_preview_quality(
     .map_err(err_str)
 }
 
-/// Opens (or focuses) the Analyze window — a second webview showing the
+/// Opens (or focuses) the Analyze window: a second webview showing the
 /// replay full size with its own controls.
 #[tauri::command]
 async fn open_analyze_window(app_handle: tauri::AppHandle) -> Result<(), String> {
@@ -3823,7 +3886,7 @@ async fn open_analyze_window(app_handle: tauri::AppHandle) -> Result<(), String>
         "analyze",
         WebviewUrl::App("analyze.html".into()),
     )
-    .title("rhythr — Analyze")
+    .title("rhythr · Analyze")
     .inner_size(1280.0, 800.0)
     .min_inner_size(760.0, 520.0)
     // Live mode paints BEHIND the webview; the page body goes
@@ -3839,7 +3902,7 @@ async fn open_analyze_window(app_handle: tauri::AppHandle) -> Result<(), String>
             // The live thread owns a surface on this window: it MUST stop
             // and drop it before the X11/Win32 window dies, or the next
             // present hits a dead drawable and takes the process down.
-            // A start may also be in flight (session not stored yet) —
+            // A start may also be in flight (session not stored yet), so
             // hold the window open until that start lands, then stop
             // whatever session it stored.
             let (stopping, starting) = {
@@ -3925,7 +3988,7 @@ fn save_text_file(path: String, contents: String) -> Result<(), String> {
     std::fs::write(&path, contents).map_err(err_str)
 }
 
-/// The live engine's own picture at its current clock — PNG bytes for
+/// The live engine's own picture at its current clock: PNG bytes for
 /// the overlay snapshot, so the composite shows EXACTLY what the screen
 /// shows (skin background, live resolution), not the preview pipeline's
 /// rendition with the custom background.
@@ -3950,7 +4013,7 @@ async fn live_still(
 }
 
 /// Overlay snapshots: with RHYTHR_SNAP_DIR set, the analyze window saves
-/// there without a dialog — the composited picture+overlay PNG is the
+/// there without a dialog. The composited picture+overlay PNG is the
 /// only reliable way to SEE the overlay in automated tests (X11 screen
 /// grabs of a transparent window are compositor lottery).
 static SNAP_COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
@@ -4023,8 +4086,8 @@ async fn export_frame(
     .map_err(err_str)?
 }
 
-/// Renders the shareable score card as a PNG in the requested size —
-/// platform presets range from Discord's 1200x630 to a 1080x1920 Short.
+/// Renders the shareable score card as a PNG in the requested size.
+/// Platform presets range from Discord's 1200x630 to a 1080x1920 Short.
 #[tauri::command]
 async fn export_card(
     state: tauri::State<'_, App>,
@@ -4084,7 +4147,7 @@ fn planned_output(inner: &Inner) -> Result<PathBuf, String> {
         name.push_str(".mp4");
     }
     // A clip gets its range in the name: "… (1.02-1.34).mp4" (dots,
-    // not colons — Windows path rules).
+    // not colons, because of Windows path rules).
     if let Some((cs, ce)) = inner.clip {
         let tag = |ms: f64| {
             let t = (ms / 1000.0).max(0.0) as u64;
@@ -4214,7 +4277,7 @@ fn start_render(
     let thread_app = app.clone();
     let handle = std::thread::spawn(move || {
         // A panic anywhere in the job (wgpu device loss, driver reset, …)
-        // must still clear the rendering flag and tell the UI — otherwise
+        // must still clear the rendering flag and tell the UI. Otherwise
         // every later render/preview is refused until an app restart.
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             run_render_job(&thread_app, &app_handle, job)
@@ -4334,7 +4397,7 @@ fn render_detail(app: &App, job: &RenderJob, encoder: &str, nth: u64) -> String 
          {} · frame write {} · ghost {} · blur {} · background {} · hitsounds {}
          replay {} · map {}{} · render #{} since start",
         if job.dry_run {
-            "DIAGNOSTIC — nothing encoded, no file written\n"
+            "DIAGNOSTIC: nothing encoded, no file written\n"
         } else {
             ""
         },
@@ -4518,7 +4581,7 @@ struct EncoderProbe {
     /// Encoder -> why it is unavailable (ffmpeg's own words).
     unavailable: BTreeMap<String, String>,
     /// Set when ffmpeg itself cannot be run. Nothing will encode, and the
-    /// UI has to say so BEFORE a render — it used to advertise x264 as
+    /// UI has to say so BEFORE a render: it used to advertise x264 as
     /// available regardless and only fail minutes in.
     ffmpeg_missing: bool,
     /// The path or command that was tried, so the message can name it.
@@ -4566,7 +4629,7 @@ fn quality_steps() -> Vec<QualityStep> {
 /// keeps the fastest, and returns a line describing what it found.
 ///
 /// The alternative was a dropdown, and a dropdown asks the user to know
-/// something that differs by machine, by platform and by output size — the
+/// something that differs by machine, by platform and by output size: the
 /// owner had to render twenty times across four resolutions to answer it
 /// once. This answers it in a few seconds, for whatever machine it is running
 /// on, and remembers.
@@ -4690,7 +4753,7 @@ fn pid_alive(_pid: u32) -> Option<bool> {
 /// Drops `rhythr-segments-<pid>` directories that no live rhythr can own.
 /// A second launch runs this before the single-instance plugin turns it away
 /// (that happens inside the Tauri builder), so at this point it is a real
-/// process next to the first one — and the first one's segments are the
+/// process next to the first one, and the first one's segments are the
 /// video its Analyze window is playing from.
 fn sweep_stale_segments() {
     let Ok(rd) = std::fs::read_dir(std::env::temp_dir()) else {
@@ -4705,7 +4768,7 @@ fn sweep_stale_segments() {
         else {
             continue;
         };
-        // Ours is created lazily on the first segment — while this sweep runs.
+        // Ours is created lazily on the first segment (while this sweep runs).
         if pid == own {
             continue;
         }
@@ -4727,7 +4790,7 @@ fn sweep_stale_segments() {
 fn main() {
     // WebKitGTK's DMA-BUF renderer is broken on many Linux/Wayland driver
     // combinations (blank window or a Wayland protocol-error crash,
-    // especially on NVIDIA). Default it off unless the user overrides —
+    // especially on NVIDIA). Default it off unless the user overrides:
     // the UI is light, the webview performance cost is negligible.
     #[cfg(target_os = "linux")]
     if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
@@ -4797,7 +4860,7 @@ fn main() {
 
     tauri::Builder::default()
         // Frame channel for the Analyze window: PNG bytes straight into
-        // the webview's image decoder — no base64, no JSON, no IPC. Served
+        // the webview's image decoder (no base64, no JSON, no IPC). Served
         // off-thread; the handler must always respond or the image hangs.
         .register_asynchronous_uri_scheme_protocol("rhframe", |ctx, req, responder| {
             let app_handle = ctx.app_handle().clone();
@@ -4841,7 +4904,7 @@ fn main() {
                 }
             });
         })
-        // The map's own music for the analyzer: one whole-file response —
+        // The map's own music for the analyzer: one whole-file response.
         // WebAudio decodes the complete buffer up front, no ranges needed.
         .register_asynchronous_uri_scheme_protocol("rhaudio", |ctx, req, responder| {
             let app_handle = ctx.app_handle().clone();
@@ -4956,7 +5019,7 @@ fn main() {
         })
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             // A .rhr double-click while the app runs lands here as a second
-            // instance's argv — forward it and pull the window up.
+            // instance's argv, so forward it and pull the window up.
             if let Some(path) = argv.get(1).filter(|a| a.to_lowercase().ends_with(".rhr")) {
                 let _ = app.emit("open-replay", path.clone());
             }
@@ -4973,7 +5036,7 @@ fn main() {
         .setup(|app| {
             let _ = RESOURCE_DIR.set(app.path().resource_dir().ok());
             // A persisted VIDEO background needs its duration for the
-            // start-time slider — probe once, now that the bundled-ffmpeg
+            // start-time slider, so probe once, now that the bundled-ffmpeg
             // resource dir is known.
             let shared = app.state::<App>().inner().clone();
             let mut inner = shared.lock();
@@ -5023,8 +5086,8 @@ fn main() {
                     // Recorded in a lock of its own, and written ONCE on
                     // exit. Taking the global state lock here would put the
                     // event-loop thread behind whatever the render or
-                    // prefetch worker is holding — the documented way to
-                    // freeze this window — and a drag fires this per pixel,
+                    // prefetch worker is holding (the documented way to
+                    // freeze this window), and a drag fires this per pixel,
                     // so saving here meant rewriting settings.json hundreds
                     // of times to move a window.
                     if let Ok(mut slot) = LAST_WINDOW_RECT.lock() {
@@ -5165,7 +5228,7 @@ mod settings_migration_tests {
     use super::clamp_socket_chunk_kib;
 
     /// A socket write size below 64 KiB measured slower than not using the
-    /// socket at all, so the UI refuses it — but a value an older test build
+    /// socket at all, so the UI refuses it, but a value an older test build
     /// persisted (16 KiB was once a choice) comes in through serde, bypassing
     /// the UI clamp, and used to reach the render path unchecked. adopt_legacy
     /// runs the same clamp at load so a file cannot carry a harmful value.
@@ -5191,7 +5254,7 @@ mod settings_migration_tests {
     /// Rhythia's terms allow one request per UNCACHED map. A map re-uploaded
     /// since a replay was recorded used to be fetched on every launch,
     /// forever, because the fetch stores the server's hash and the check
-    /// compares the replay's — they can never agree again.
+    /// compares the replay's, so they can never agree again.
     #[test]
     fn a_re_uploaded_map_is_fetched_once_and_then_left_alone() {
         // Nothing cached yet, or hashes agree: use it, no warning.
@@ -5213,7 +5276,7 @@ mod settings_migration_tests {
 
     /// The Analyze window's view toggles are a lens for studying a run, not a
     /// property of it. They used to reach the render job, the exported frame
-    /// and the score card through the same config builder the preview used —
+    /// and the score card through the same config builder the preview used,
     /// so unticking "Notes" in one window produced a finished video with no
     /// notes in it, silently, minutes later. render_config must not carry
     /// them; effective_config must.
@@ -5298,7 +5361,44 @@ mod settings_migration_tests {
 
 #[cfg(test)]
 mod diagnostics_tests {
-    use super::redact_path;
+    use super::{diagnostics_report, redact_path, App, Shared};
+    use std::sync::Arc;
+
+    /// The report exists to be sent to a stranger, so the test that matters
+    /// is the one that reads the whole thing back and looks for the account
+    /// name. It also pins the sections down: a report missing the codes or
+    /// the GPU is the report that starts the second round of questions.
+    #[test]
+    fn the_report_carries_the_sections_and_no_account_name() {
+        let app: App = Arc::new(Shared::default());
+        let text = diagnostics_report(&app);
+
+        assert!(text.starts_with("rhythr "), "the build comes first");
+        for section in [
+            "os:",
+            "cpu:",
+            "errors this session",
+            "\ngpu",
+            "\nffmpeg",
+            "\nloaded",
+            "\noutput",
+            "\nlast render",
+            "settings differing from a fresh install",
+        ] {
+            assert!(text.contains(section), "no {section:?} section:\n{text}");
+        }
+
+        if let Some(home) = dirs::home_dir() {
+            let home = home.to_string_lossy().to_string();
+            // The empty state has no loaded files, but resolve_ffmpeg and the
+            // output folder can both land inside the home directory, and on
+            // Windows that string is the user's real name.
+            assert!(
+                !home.is_empty() && !text.contains(&home),
+                "the report leaked the home path:\n{text}"
+            );
+        }
+    }
 
     /// The report is written to be sent to a stranger, and on Windows every
     /// absolute path starts with the account name. A path that only shortens

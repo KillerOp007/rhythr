@@ -23,14 +23,14 @@ pub struct VideoOptions {
     pub audio: Option<PathBuf>,
     /// x264 CRF (lower = higher quality); the QP for VAAPI.
     /// User-facing quality, 0..=100, HIGHER IS BETTER. Mapped onto each
-    /// encoder's own scale by [`crate::quality`] — it is deliberately not
+    /// encoder's own scale by [`crate::quality`]. It is deliberately not
     /// the raw CRF any more, see that module.
     pub quality: u32,
     /// x264 speed preset (ultrafast..placebo). veryfast roughly doubles
     /// encoding throughput over medium at slightly larger files.
     pub preset: String,
     /// Encoder: "x264" (software), or hardware "nvenc" (NVIDIA), "qsv"
-    /// (Intel) or "vaapi" (AMD/Intel via /dev/dri) — the ffmpeg build must
+    /// (Intel) or "vaapi" (AMD/Intel via /dev/dri). The ffmpeg build must
     /// support the chosen one.
     pub encoder: String,
     /// Seconds of results screen appended after the clip (0 disables). Only
@@ -46,15 +46,15 @@ pub struct VideoOptions {
     /// A second replay of the same map, rendered as a ghost overlay.
     pub ghost: Option<GhostOptions>,
     /// Extra ffmpeg output arguments, appended just before the output
-    /// path — the Analyze window uses this for `+faststart` and a short
+    /// path. The Analyze window uses this for `+faststart` and a short
     /// GOP so its segments start and seek instantly.
     pub extra_output_args: Vec<String>,
     /// Hand frames to ffmpeg over a loopback socket instead of its stdin.
-    /// Off by default — see [`FrameSink`] for what it is worth and why that
+    /// Off by default: see [`FrameSink`] for what it is worth and why that
     /// is not obviously a win.
     pub tcp_feed: bool,
     /// Bytes per write into that socket; 0 means the whole frame in one
-    /// call. See [`FrameSink::write_frame`] — the best value is not the same
+    /// call. See [`FrameSink::write_frame`]. The best value is not the same
     /// on every platform, so this is a setting rather than a constant.
     pub socket_chunk: usize,
     /// Diagnostic: feed ffmpeg every frame exactly as a real render does,
@@ -63,7 +63,7 @@ pub struct VideoOptions {
     /// This is the only way to see how the `feed` time splits. That number
     /// is the write into the transport AND everything ffmpeg was too busy to
     /// accept, and on a machine with a fast GPU it is essentially the whole
-    /// frame — so knowing whether it is the transport or the encoder decides
+    /// frame, so knowing whether it is the transport or the encoder decides
     /// whether tuning the transport can achieve anything at all. Writes no
     /// file.
     pub discard_output: bool,
@@ -141,15 +141,15 @@ pub struct RenderStats {
     /// Colour conversion on the CPU. Zero when the GPU did it.
     pub convert_ms: f64,
     /// Pushing the frame into ffmpeg, including any time ffmpeg spent not
-    /// keeping up — this is the encoder's back pressure as much as the
-    /// transport's cost.
+    /// keeping up (this is the encoder's back pressure as much as the
+    /// transport's cost).
     pub feed_ms: f64,
     /// Set when this was a diagnostic run that encoded nothing, so the feed
     /// figure is the transport alone.
     pub discarded: bool,
     /// Which transport carried the frames, and how they were written into
     /// it. The write size is a setting and this is where its effect can be
-    /// read off — a desktop app has no console to print it to, which is
+    /// read off. A desktop app has no console to print it to, which is
     /// exactly how an environment variable failed at the job.
     pub transport: String,
 }
@@ -165,7 +165,7 @@ impl RenderStats {
             self.convert_ms,
             self.feed_ms,
             if self.discarded {
-                format!("{}, NO ENCODING — transport only", self.transport)
+                format!("{}, NO ENCODING: transport only", self.transport)
             } else {
                 self.transport.clone()
             }
@@ -187,7 +187,7 @@ pub fn render_video(
     // Upload the skin's textures once; reused for every frame.
     let skin = renderer.prepare_skin(config);
     // Each side plays on its own field: mirror/hardrock from that replay's
-    // mods are applied to its copy of the notes. Speed is the exception —
+    // mods are applied to its copy of the notes. Speed is the exception:
     // both runs share one timeline and one audio track, so a ghost with a
     // different speed cannot race.
     if let Some(g) = &opts.ghost {
@@ -236,7 +236,7 @@ pub fn render_video(
     // Resolve every note's hit/miss once; the HUD reads running stats from it.
     let hud_state = crate::hud::HudState::new(map, replay);
     // With both sides resolved, the whole-map race series (results delta
-    // graph) is fixed — build it once.
+    // graph) is fixed: build it once.
     if let Some(g) = ghost_input.as_mut() {
         g.race = Some(crate::race::RaceSeries::for_race(
             &crate::race::RaceSide {
@@ -252,12 +252,12 @@ pub fn render_video(
         ));
     }
     let ghost_input = ghost_input;
-    // Replay frame times are song time — speed mods are baked in when the
+    // Replay frame times are song time: speed mods are baked in when the
     // .rhr is recorded (the hit registration matching note times proves
     // it). The VIDEO however runs at the modded speed, like the game did:
     // a 1.45x run covers song time 1.45x faster and the audio is rate-
     // shifted (pitch up, as in the game). speed is 1.0 unless modded.
-    // A failed run ends at its fail time — the game stops there.
+    // A failed run ends at its fail time (the game stops there).
     let run_end = if replay.failed() {
         replay.fail_time_ms as f64
     } else {
@@ -292,9 +292,9 @@ pub fn render_video(
             cmd.args(["-vaapi_device", &dev]);
         }
     }
-    // Input 0: raw frames on stdin. NV12 where the frame size allows it —
-    // 1.5 bytes per pixel instead of 4, on a pipe that was measured to be
-    // the render's entire speed limit. See crate::nv12.
+    // Input 0: raw frames on stdin. NV12 where the frame size allows it
+    // (1.5 bytes per pixel instead of 4, on a pipe that was measured to be
+    // the render's entire speed limit). See crate::nv12.
     let feed_nv12 = crate::nv12::nv12_supported(width as usize, height as usize)
         && std::env::var_os("RHYTHR_NO_NV12").is_none();
     cmd.args([
@@ -363,8 +363,8 @@ pub fn render_video(
         }
     }
 
-    // Optional motion blur: tmix averages neighbouring frames — free at
-    // encode time, no extra rendering. It must run before any hardware
+    // Optional motion blur: tmix averages neighbouring frames (free at
+    // encode time, no extra rendering). It must run before any hardware
     // upload in the filter chain.
     let tmix = match opts.motion_blur.min(2) {
         0 => None,
@@ -373,7 +373,7 @@ pub fn render_video(
     if opts.discard_output {
         // Diagnostic: every frame still crosses the transport exactly as it
         // would in a real render, but nothing encodes it. No filter chain,
-        // no encoder, no audio — what is left in the `feed` figure is the
+        // no encoder, no audio. What is left in the `feed` figure is the
         // transport by itself, and the difference against a real render of
         // the same clip is what the encoder costs.
         cmd.args(["-c:v", "copy", "-an"]);
@@ -405,7 +405,7 @@ pub fn render_video(
         let play_secs = span_real_ms / 1000.0;
         let mv = opts.music_volume.clamp(0.0, 1.5);
         // Speed mod: rate-shift the song like the game does (faster AND
-        // higher-pitched) — resample to a known rate first so asetrate
+        // higher-pitched). Resample to a known rate first so asetrate
         // scales from a fixed base.
         let rate = if (speed - 1.0).abs() > 0.001 {
             format!(
@@ -486,15 +486,15 @@ pub fn render_video(
     // Captured, not inherited: a GUI has no terminal, so an inherited
     // stderr threw away the only explanation ffmpeg ever gives and every
     // failure arrived as a bare "exited with exit status: 1". It must be
-    // DRAINED on a thread — ffmpeg writes progress here, and a full pipe
-    // with no reader deadlocks the encode.
+    // DRAINED on a thread, because ffmpeg writes progress here and a full
+    // pipe with no reader deadlocks the encode.
     cmd.stderr(Stdio::piped());
 
     let mut child = cmd
         .spawn()
         .map_err(|e| Error::Ffmpeg(format!("could not start ffmpeg ({}): {e}", opts.ffmpeg)))?;
     // From here on, EVERY exit except the final success must kill/reap the
-    // ffmpeg child and remove the partial output — cancel, a GPU error from
+    // ffmpeg child and remove the partial output: cancel, a GPU error from
     // `?`, a failed write, a bad ffmpeg exit status, even a panic. The guard's
     // Drop does exactly that unless it is defused at the end.
     //
@@ -516,7 +516,7 @@ pub fn render_video(
     // job: the compute path needs a width it can address, and everything it
     // turns down falls through to the CPU conversion unchanged.
     // RHYTHR_NO_GPU_NV12 forces that fallback, which is the way out if a
-    // driver ever miscompiles the shader — the CPU path stays the reference
+    // driver ever miscompiles the shader. The CPU path stays the reference
     // and both are held to producing the same bytes by a test.
     let gpu_nv12 = feed_nv12
         && std::env::var_os("RHYTHR_NO_GPU_NV12").is_none()
@@ -580,13 +580,13 @@ pub fn render_video(
             Ok(())
         };
     // Pipelined: submit frame i to the GPU, then read out frame i-1 while
-    // the GPU is busy — overlapping rendering with readback and encoding
+    // the GPU is busy. Overlapping rendering with readback and encoding
     // roughly doubles throughput over the strictly serial loop.
     const DEPTH: u64 = crate::renderer::READBACK_SLOTS as u64 - 1;
     let slot = |i: u64| (i % crate::renderer::READBACK_SLOTS as u64) as usize;
     // Custom video background: a second ffmpeg decodes it muted, looped
-    // and scaled-to-cover — one RGBA frame per output frame, streamed
-    // into the skin's persistent background texture. If it dies mid-way
+    // and scaled-to-cover (one RGBA frame per output frame, streamed
+    // into the skin's persistent background texture). If it dies mid-way
     // the last good frame stays. It runs on its own thread: decoding it
     // inline blocked the render loop on a pipe for a whole frame before
     // the GPU got any work at all.
@@ -646,7 +646,7 @@ pub fn render_video(
             t_submit += mark.elapsed().as_secs_f64();
         }
         let mark = std::time::Instant::now();
-        // Read a frame that has DEPTH newer frames in flight behind it —
+        // Read a frame that has DEPTH newer frames in flight behind it:
         // headroom that lets a fast GPU keep rendering while we encode.
         if i >= DEPTH {
             let j = i - DEPTH;
@@ -720,7 +720,7 @@ pub fn render_video(
         .map_err(|e| Error::Ffmpeg(format!("waiting for ffmpeg: {e}")))?;
     if !status.success() {
         // Guard drop removes the unusable partial file. describe_exit already
-        // starts with "ffmpeg", so no prefix here — a "ffmpeg {}" wrapper
+        // starts with "ffmpeg", so no prefix here. A "ffmpeg {}" wrapper
         // produced "ffmpeg ffmpeg exited with status 1".
         return Err(Error::Ffmpeg(format!(
             "{}{}",
@@ -739,7 +739,7 @@ pub fn render_video(
         std::fs::rename(&part, out).map_err(|e| {
             Error::Ffmpeg(format!(
                 "the render finished but could not be moved into place ({e}). \
-                 It is saved at {} — rename it yourself, or close whatever is \
+                 It is saved at {}. Rename it yourself, or close whatever is \
                  holding {} open and it will move next time.",
                 part.display(),
                 out.display()
@@ -752,7 +752,7 @@ pub fn render_video(
 /// How ffmpeg ended, in words.
 ///
 /// This used to be `{status:?}` on a `Result<ExitStatus, _>`, which printed
-/// `Ok(ExitStatus(unix_wait_status(153)))` — and when a signal kills ffmpeg it
+/// `Ok(ExitStatus(unix_wait_status(153)))`, and when a signal kills ffmpeg it
 /// writes nothing to stderr, so that integer was the entire diagnosis.
 fn describe_exit(status: &std::io::Result<std::process::ExitStatus>) -> String {
     match status {
@@ -786,7 +786,7 @@ fn describe_exit(status: &std::io::Result<std::process::ExitStatus>) -> String {
 fn explain_silence(log: &FfmpegLog) -> String {
     let tail = log.tail();
     if tail.trim().is_empty() {
-        " — ffmpeg said nothing on its way out, which usually means the disk \
+        ". It said nothing on its way out, which usually means the disk \
          filled up or something else is holding the output file"
             .into()
     } else {
@@ -795,7 +795,7 @@ fn explain_silence(log: &FfmpegLog) -> String {
 }
 
 /// The tail of ffmpeg's stderr, collected on a reader thread so the pipe
-/// never fills up. Only the last few lines are kept — that is where ffmpeg
+/// never fills up. Only the last few lines are kept: that is where ffmpeg
 /// puts the reason, and the rest is progress spam.
 struct FfmpegLog {
     lines: std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<String>>>,
@@ -842,7 +842,7 @@ impl FfmpegLog {
         if picked.is_empty() {
             return String::new();
         }
-        let mut out = String::from(" — ");
+        let mut out = String::from(": ");
         for (i, l) in picked.iter().rev().enumerate() {
             if i > 0 {
                 out.push_str(" / ");
@@ -932,7 +932,7 @@ pub fn hardware_encoders() -> &'static [&'static str] {
 /// Probed once per binary, and the reason for probing rather than simply
 /// trying is that the answer arrives too late otherwise: a pipe cannot fail
 /// to connect, a socket can, and by then the render has already started. So
-/// the whole path — bind, spawn, connect, feed, exit cleanly — is walked
+/// the whole path (bind, spawn, connect, feed, exit cleanly) is walked
 /// with a 64x64 frame first, and anything that does not survive that quietly
 /// gets the pipe instead.
 fn tcp_feed_works(ffmpeg: &str) -> bool {
@@ -1006,7 +1006,7 @@ fn probe_tcp_feed(ffmpeg: &str) -> bool {
 /// which is why it took two machines to settle. Here, where libx264 is the
 /// wall, it is nothing: a full render came out the same either way. On the
 /// owner's NVENC machine, where the encoder is not the wall, the same switch
-/// is 160 fps to 210 fps at 3840x2160/240 — most of a third, because by then
+/// is 160 fps to 210 fps at 3840x2160/240 (most of a third), because by then
 /// the transport was most of what was left.
 ///
 /// So it is on by default, but only after [`tcp_feed_works`] has walked the
@@ -1022,7 +1022,7 @@ enum FrameSink {
 impl FrameSink {
     /// Waits for ffmpeg to dial in, when a listener was opened. ffmpeg is
     /// already running by this point, so the only outcomes are a connection
-    /// or a diagnosable failure — there is no going back to a pipe here,
+    /// or a diagnosable failure. There is no going back to a pipe here,
     /// because the child was told where to read from before it started.
     fn open(
         listener: Option<std::net::TcpListener>,
@@ -1093,7 +1093,7 @@ impl FrameSink {
     ///
     /// 256 KiB is the only value that is best or tied-best at every size, so
     /// it is the default. 16 KiB is the worst at every size and is SLOWER
-    /// THAN NOT USING THE SOCKET AT ALL at three of the four — which is worth
+    /// THAN NOT USING THE SOCKET AT ALL at three of the four, which is worth
     /// spelling out, because a single earlier reading pointed at 16 KiB and
     /// very nearly became the default on the strength of it.
     ///
@@ -1160,7 +1160,7 @@ struct EncoderArgs {
 /// that encoder come out as unavailable and auto-selection moves on, instead
 /// of the mistake surfacing as a failed encode after someone has sat through
 /// a render. That matters most for AMF, which cannot be tested on the machine
-/// this was written on — a wrong flag there costs an AMD owner nothing worse
+/// this was written on. A wrong flag there costs an AMD owner nothing worse
 /// than the software fallback they already had.
 fn video_encoder_args(
     encoder: &str,
@@ -1251,13 +1251,13 @@ fn amf_quality(preset: &str) -> &'static str {
 ///
 /// renderD128 is usually right and used to be hardcoded, but on a hybrid
 /// laptop the first node is often the display-only chip while the encoder
-/// lives on the second — rhythr then reported "no VAAPI" on a machine that
+/// lives on the second: rhythr then reported "no VAAPI" on a machine that
 /// has one. Enumerated and probed once per process.
 pub fn vaapi_device(ffmpeg: &str) -> Option<String> {
     // Keyed by ffmpeg path, because the answer belongs to the binary and not
     // to the process: the app resolves its ffmpeg at runtime and the user can
     // repoint it in Settings. A single cached answer meant the verdict for
-    // whichever binary happened to be probed first — including a "no VAAPI
+    // whichever binary happened to be probed first, including a "no VAAPI
     // here" that then stuck to a perfectly capable replacement until restart.
     static CACHE: std::sync::OnceLock<
         std::sync::Mutex<std::collections::HashMap<String, Option<String>>>,
@@ -1309,7 +1309,7 @@ fn vaapi_probe(ffmpeg: &str, device: &str, icq: bool) -> Result<(), String> {
     cmd.args(["-f", "null", "-"]);
     // The reason is kept rather than discarded. Throwing it away and telling
     // everyone "no render device in /dev/dri" named the wrong cause for every
-    // other way this fails — an ffmpeg built without VAAPI, a broken libva
+    // other way this fails: an ffmpeg built without VAAPI, a broken libva
     // driver, or simply not being in the `render` group.
     match cmd.stdout(Stdio::null()).stderr(Stdio::piped()).output() {
         Ok(out) if out.status.success() => Ok(()),
@@ -1354,7 +1354,7 @@ fn vaapi_icq_supported(ffmpeg: &str, needed: bool) -> bool {
 
 /// Translates the x264 speed preset the user picked into nvenc's p1..p7
 /// scale. Without this the hardware encoder ignored the speed control
-/// completely and always ran p5, one of the slowest quality presets — which
+/// completely and always ran p5, one of the slowest quality presets, which
 /// is what pins the encoder at 100% on a 4K120 render while the GPU's 3D
 /// engine idles at 17%.
 fn nvenc_preset(preset: &str) -> &'static str {
@@ -1385,7 +1385,7 @@ fn qsv_preset(preset: &str) -> &'static str {
 }
 
 /// Like [`encoder_works`], but on failure returns ffmpeg's stderr (its last
-/// meaningful line) so the UI can say WHY an encoder is unavailable — e.g.
+/// meaningful line) so the UI can say WHY an encoder is unavailable, e.g.
 /// nvenc rejecting an outdated NVIDIA driver.
 pub fn encoder_error(ffmpeg: &str, encoder: &str) -> Option<String> {
     let mut cmd = std::process::Command::new(ffmpeg);

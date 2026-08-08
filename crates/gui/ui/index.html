@@ -54,7 +54,7 @@
           </span>
         </div>
         <div class="card-body" id="config-body">
-          <p class="hint">Optional <code>.rhs</code> or the game's <code>config.json</code> — defaults otherwise</p>
+          <p class="hint">Optional <code>.rhs</code> or the game's <code>config.json</code> (defaults otherwise)</p>
         </div>
       </section>
 
@@ -123,11 +123,11 @@
       <span id="preview-tools" hidden>
         <button class="btn small accent" id="btn-analyze" hidden title="Open the Analyze window: full-size replay, slow motion, overlays and stats">Analyze</button>
         <span class="tool-sep" aria-hidden="true"></span>
-        <button class="btn small ghost" id="btn-edit-hud" title="Drag any HUD element where you want it — positions save automatically and apply to every render">Edit HUD</button>
+        <button class="btn small ghost" id="btn-edit-hud" title="Drag any HUD element where you want it. Positions save automatically and apply to every render">Edit HUD</button>
         <button class="btn small ghost" id="btn-hud-undo" hidden title="Undo the last layout change (Ctrl+Z)">Undo</button>
         <button class="btn small ghost" id="btn-hud-redo" hidden title="Redo an undone layout change (Ctrl+Y)">Redo</button>
         <button class="btn small ghost" id="btn-hud-grid" hidden title="Snap grid for the HUD editor">Grid: Off</button>
-        <button class="btn small ghost" id="btn-hud-reset" hidden title="Put every HUD element (meters included) back to its standard position and size — visibility and the meters' size sliders stay as they are">Reset layout</button>
+        <button class="btn small ghost" id="btn-hud-reset" hidden title="Put every HUD element (meters included) back to its standard position and size. Visibility and the meters' size sliders stay as they are">Reset layout</button>
       <span id="thumb-wrap">
         <button class="btn small" id="btn-frame" title="Save a shareable score card (PNG) of this run">Save thumbnail ▾</button>
         <div id="thumb-menu" hidden>
@@ -164,11 +164,11 @@
         <button class="btn small" id="btn-clip-out" title="Clip ends at the playhead">Set end</button>
         <input type="text" id="clip-in" class="mono" inputmode="decimal" spellcheck="false"
                style="width:6.4rem" aria-label="Clip start"
-               title="Clip start as mm:ss.ms — type it, or nudge with ↑ / ↓ (one frame, Shift = one second)" />
-        <span class="muted" aria-hidden="true">–</span>
+               title="Clip start as mm:ss.ms. Type it, or nudge with ↑ / ↓ (one frame, Shift = one second)" />
+        <span class="muted" aria-hidden="true">-</span>
         <input type="text" id="clip-out" class="mono" inputmode="decimal" spellcheck="false"
                style="width:6.4rem" aria-label="Clip end"
-               title="Clip end as mm:ss.ms — type it, or nudge with ↑ / ↓ (one frame, Shift = one second)" />
+               title="Clip end as mm:ss.ms. Type it, or nudge with ↑ / ↓ (one frame, Shift = one second)" />
         <span id="clip-label" class="mono muted" title="Clip length"></span>
         <button class="btn small ghost" id="btn-clip-clear" hidden title="Render the full run again">✕</button>
         <span style="flex:1"></span>
@@ -208,10 +208,10 @@
           </select>
           <div class="row" id="res-custom" hidden>
             <input type="text" id="set-res-w" class="mono" inputmode="numeric" spellcheck="false"
-                   aria-label="Width" title="Width in pixels (320–7680, rounded to an even number)" />
+                   aria-label="Width" title="Width in pixels (320-7680, rounded to an even number)" />
             <span class="sub" style="align-self:center">×</span>
             <input type="text" id="set-res-h" class="mono" inputmode="numeric" spellcheck="false"
-                   aria-label="Height" title="Height in pixels (240–4320, rounded to an even number)" />
+                   aria-label="Height" title="Height in pixels (240-4320, rounded to an even number)" />
           </div>
         </div>
         <div class="field">
@@ -223,7 +223,7 @@
             <option value="custom">Custom…</option>
           </select>
           <input type="text" id="set-fps-custom" class="mono" inputmode="numeric" spellcheck="false"
-                 aria-label="Frames per second" title="Frames per second (24–240)" hidden />
+                 aria-label="Frames per second" title="Frames per second (24-240)" hidden />
         </div>
         <label class="field">
           <span>Quality <em id="quality-val" class="mono">70</em></span>
@@ -250,7 +250,7 @@
             <option value="slower">Slower</option>
             <option value="veryslow">Very slow</option>
           </select>
-          <span class="sub">A slower preset encodes longer and writes a smaller file at the same quality. This now reaches the hardware encoders too — it used to configure x264 alone, and did nothing on NVENC or Quick Sync.</span>
+          <span class="sub">A slower preset encodes longer and writes a smaller file at the same quality. This now reaches the hardware encoders too: it used to configure x264 alone, and did nothing on NVENC or Quick Sync.</span>
         </label>
         <label class="field">
           <span>Motion blur</span>
@@ -295,7 +295,7 @@
           <label class="field">
             <span>Interface size <em id="uiscale-val" class="mono">100%</em></span>
             <input type="range" id="set-uiscale" min="80" max="160" step="5" value="100" />
-            <span class="sub">Size of this window's text and panels — Ctrl+= larger, Ctrl+- smaller, Ctrl+0 back to 100%. Does not affect the render.</span>
+            <span class="sub">Size of this window's text and panels: Ctrl+= larger, Ctrl+- smaller, Ctrl+0 back to 100%. Does not affect the render.</span>
           </label>
           <label class="field">
             <span>ffmpeg path</span>

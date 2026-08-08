@@ -551,7 +551,7 @@ pub static CODES: &[Entry] = &[
             ".rhm archive",
             "map json:",
             "unsupported map file extension",
-            "over the",
+            "-byte limit",
         ],
         causes: &[(
             Plat::Any,
@@ -856,7 +856,19 @@ pub fn stamp_in(area: Area, message: &str) -> String {
     stamp_in_area(Some(area), message)
 }
 
+/// Outcomes that travel as errors because that is how they unwind, but that
+/// nobody would report: the user asked for them. A code on "render cancelled"
+/// would be noise in the message and, worse, noise in the diagnostics list
+/// that is meant to be read top to bottom.
+fn is_not_a_failure(message: &str) -> bool {
+    let low = message.to_ascii_lowercase();
+    low.contains("cancelled") || low.contains("canceled")
+}
+
 fn stamp_in_area(area: Option<Area>, message: &str) -> String {
+    if is_not_a_failure(message) {
+        return message.to_string();
+    }
     let entry = match area {
         Some(a) => classify_in(a, message),
         None => classify(message),
@@ -874,14 +886,20 @@ fn stamp_in_area(area: Option<Area>, message: &str) -> String {
 #[derive(Debug, Clone)]
 pub struct Recorded {
     pub code: String,
-    /// First line of the raw message, for context. May contain a path, so
-    /// whoever prints this is responsible for redacting it.
+    /// The message as it was, minus the code, and trimmed to
+    /// [`MESSAGE_MAX`]. Kept whole rather than shortened to its first line,
+    /// because ffmpeg puts its reason at the END and that reason is the
+    /// single most useful line in the file. May contain a path, so whoever
+    /// prints this is responsible for redacting it.
     pub message: String,
     /// How often this code has come up since the app started.
     pub count: u32,
 }
 
 const RECENT_MAX: usize = 24;
+/// Long enough for an ffmpeg failure with its stderr tail, short enough that
+/// a render looping on an error cannot grow the report without bound.
+const MESSAGE_MAX: usize = 600;
 
 fn recent_store() -> &'static Mutex<Vec<Recorded>> {
     static RECENT: OnceLock<Mutex<Vec<Recorded>>> = OnceLock::new();
@@ -889,13 +907,22 @@ fn recent_store() -> &'static Mutex<Vec<Recorded>> {
 }
 
 fn record_code(code: &str, message: &str) {
-    let first_line = message.lines().next().unwrap_or("").trim().to_string();
+    let mut text = message.trim().to_string();
+    if text.len() > MESSAGE_MAX {
+        // On a char boundary: a message can carry a map title in any script.
+        let mut cut = MESSAGE_MAX;
+        while cut > 0 && !text.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        text.truncate(cut);
+        text.push_str(" [...]");
+    }
     let Ok(mut list) = recent_store().lock() else {
         return;
     };
     if let Some(hit) = list.iter_mut().find(|r| r.code == code) {
         hit.count += 1;
-        hit.message = first_line;
+        hit.message = text;
         return;
     }
     if list.len() == RECENT_MAX {
@@ -903,7 +930,7 @@ fn record_code(code: &str, message: &str) {
     }
     list.push(Recorded {
         code: code.to_string(),
-        message: first_line,
+        message: text,
         count: 1,
     });
 }
@@ -911,13 +938,6 @@ fn record_code(code: &str, message: &str) {
 /// Everything that has gone wrong since the app started, oldest first.
 pub fn recent() -> Vec<Recorded> {
     recent_store().lock().map(|l| l.clone()).unwrap_or_default()
-}
-
-/// Clears the record. Only for tests: a user's session is the unit here.
-pub fn clear_recent() {
-    if let Ok(mut list) = recent_store().lock() {
-        list.clear();
-    }
 }
 
 /// The maintainer-side lookup table as markdown, so `docs/ERROR-CODES.md` is
@@ -1101,9 +1121,19 @@ mod tests {
 
     #[test]
     fn a_code_is_never_stacked_twice() {
-        clear_recent();
         let once = stamp("something went wrong");
         let twice = stamp(&once);
         assert_eq!(once, twice);
+    }
+
+    /// Cancelling is not a failure, and a session full of "RH-APP-600" from
+    /// people pressing Cancel would bury the one line that matters.
+    #[test]
+    fn cancelling_is_not_recorded_as_a_failure() {
+        assert_eq!(stamp("render cancelled"), "render cancelled");
+        // Not is_empty(): the record is process-wide and the other tests in
+        // this binary run beside this one, so the claim has to be about this
+        // message rather than about the whole list.
+        assert!(recent().iter().all(|r| !r.message.contains("cancelled")));
     }
 }

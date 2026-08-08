@@ -23,7 +23,7 @@ let previewBusy = false;
 let previewWanted = false;
 let lastOutPath = null;
 let rendering = false;
-/// ffmpeg could not be executed at the last probe — nothing will encode.
+/// ffmpeg could not be executed at the last probe: nothing will encode.
 let ffmpegMissing = false;
 let autoDownloadTried = 0;  // map id of the last automatic download attempt
 
@@ -34,7 +34,7 @@ function fmtTime(ms) {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
 
-/// mm:ss.ms — the clip fields need the milliseconds fmtTime rounds away.
+/// mm:ss.ms (the clip fields need the milliseconds fmtTime rounds away).
 function fmtClock(ms) {
   const t = Math.max(0, ms);
   const min = Math.floor(t / 60000);
@@ -76,18 +76,18 @@ function renderReplayCard() {
   let chip = "";
   if (r.verify) {
     if (r.verify.consistent) {
-      chip = `<span class="chip ok" title="rhythr's own consistency check — not an official Rhythia score verification.">verified</span>`;
+      chip = `<span class="chip ok" title="rhythr's own consistency check (not an official Rhythia score verification).">verified</span>`;
     } else if (r.verify.wrong_map) {
       // Blaming the replay here was wrong: the usual cause is a map file
       // that simply is not the chart this run was played on.
       chip = `<span class="chip warn" title="${esc(
         "The recorded hits do not line up with this chart:\n" +
           r.verify.problems.join("\n") +
-          "\n\nMost often this means the loaded map is not the one that was played — " +
-          "try the chart this replay came from."
+          "\n\nMost often this means the loaded map is not the one that was played. " +
+          "Try the chart this replay came from."
       )}">map may not match</span>`;
     } else {
-      chip = `<span class="chip bad" title="${esc(r.verify.problems.join("\n"))}">inconsistent — possibly modified</span>`;
+      chip = `<span class="chip bad" title="${esc(r.verify.problems.join("\n"))}">inconsistent (possibly modified)</span>`;
     }
   }
   const outcome = r.failed
@@ -109,7 +109,7 @@ function renderMapCard() {
   const m = status?.map;
   const r = status?.replay;
   // Downloading needs an online id. Without one the button could only ever
-  // fail with "replay has no online map id", so it is not offered — and the
+  // fail with "replay has no online map id", so it is not offered. The
   // replay's readable map name is shown instead, which is what someone needs
   // to find the file themselves. It was parsed and carried all along and
   // displayed nowhere.
@@ -137,7 +137,7 @@ function renderMapCard() {
     <div class="src-title">${esc(m.title || m.song_name)}</div>
     <div class="src-meta">
       ${m.note_count.toLocaleString()} notes · ${fmtTime(m.duration_ms)}<br>
-      audio ${m.has_audio ? "✓" : "—"} · cover ${m.has_cover ? "✓" : "—"}
+      audio ${m.has_audio ? "✓" : "✕"} · cover ${m.has_cover ? "✓" : "✕"}
     </div>
     <span class="chip info">${esc(src)}</span> ${warn}`;
 }
@@ -184,7 +184,7 @@ function initOptionalCards() {
   syncOptionalCards();
 }
 
-/// A card that now holds something real opens itself once — a loaded ghost
+/// A card that now holds something real opens itself once: a loaded ghost
 /// or background should never be hidden behind a fold the user forgot.
 ///
 /// The Game card is the exception and runs the other way round. It used to
@@ -203,8 +203,8 @@ function syncOptionalCards() {
   };
   for (const [id, has] of Object.entries(filled)) {
     const card = $(id);
-    // Auto-open only on the EDGE from empty to filled — the moment something
-    // arrives — not on every status refresh. Refreshing on every one meant a
+    // Auto-open only on the EDGE from empty to filled (the moment something
+    // arrives), not on every status refresh. Refreshing on every one meant a
     // card the user deliberately folded (a loaded ghost they are done with,
     // or a game that stays unconnected) sprang back open each time, so it
     // could never be kept shut.
@@ -221,8 +221,8 @@ function syncOptionalCards() {
   lastCardFilled = filled;
 }
 
-/// Trims a path from the middle, keeping the root and the file name — the
-/// two ends that tell you where something is. CSS ellipsis alone can only
+/// Trims a path from the middle, keeping the root and the file name (the
+/// two ends that tell you where something is). CSS ellipsis alone can only
 /// cut one end, and the rtl trick that cuts the front visibly moves the
 /// leading slash to the back.
 function shortenPath(path, max = 46) {
@@ -240,7 +240,7 @@ function renderConfigCard() {
   const path = status?.config?.path;
   $("btn-config-clear").hidden = !path;
   if (!path) {
-    body.innerHTML = `<p class="hint">Optional <code>.rhs</code> or the game's <code>config.json</code> — defaults otherwise</p>`;
+    body.innerHTML = `<p class="hint">Optional <code>.rhs</code> or the game's <code>config.json</code> (defaults otherwise)</p>`;
     return;
   }
   const name = path.split(/[\\/]/).pop();
@@ -277,7 +277,7 @@ function renderPresetsCard() {
             `<li data-preset="${esc(n)}" tabindex="0" title="Apply this preset"><span class="name">${esc(n)}</span><button class="del" title="Delete preset">✕</button></li>`,
         )
         .join("")
-    : `<li style="cursor:default">No presets yet — set up a look and hit Save.</li>`;
+    : `<li style="cursor:default">No presets yet. Set up a look and hit Save.</li>`;
 }
 
 // ------------------------------------------------------------ clip range
@@ -297,8 +297,8 @@ function renderClipRow() {
 }
 
 /// The clip bounds are editable, so a refresh must not overwrite what is
-/// being typed — except right after a commit, when the value that actually
-/// applies has to land in the field the user still has focus in.
+/// being typed (except right after a commit, when the value that actually
+/// applies has to land in the field the user still has focus in).
 function writeClipFields(force) {
   const clip = status?.clip;
   const put = (id, ms, whole) => {
@@ -338,7 +338,7 @@ async function applyClipBound(isIn, ms) {
   seekTo(isIn ? s : e);
 }
 
-// Suggestions computed from the run itself — offered, never imposed: a
+// Suggestions computed from the run itself (offered, never imposed): a
 // click sets the range, the handles stay free to move.
 function computeClipSuggestions() {
   if (!timelineData) return [];
@@ -395,7 +395,7 @@ function renderClipSuggestions() {
   el.innerHTML = sug
     .map(
       (s, i) =>
-        `<span class="chip info" data-sug="${i}" title="${esc(s.why)} — just a suggestion: set it, then move the handles however you like">${esc(s.label)}</span>`,
+        `<span class="chip info" data-sug="${i}" title="${esc(s.why)}. Just a suggestion: set it, then move the handles however you like">${esc(s.label)}</span>`,
     )
     .join(" ");
   el.querySelectorAll("[data-sug]").forEach((c) =>
@@ -471,7 +471,7 @@ function renderBackgroundCard() {
   const p = status?.settings?.background;
   $("btn-bg-clear").hidden = !p;
   const body = $("bg-body");
-  // Re-rendering would yank the dim slider out from under an active drag —
+  // Re-rendering would yank the dim slider out from under an active drag,
   // but only skip while the CONTENT is unchanged (the slider keeps focus
   // after use, and a background dropped then must still show up).
   if (
@@ -576,7 +576,7 @@ function meterRow(key, label, m) {
 
 function renderHudTab() {
   const wrap = $("hud-groups");
-  // Rebuilding the DOM would yank a slider out from under an active drag —
+  // Rebuilding the DOM would yank a slider out from under an active drag:
   // the slider itself is the source of truth then, skip the re-render.
   if (wrap.contains(document.activeElement) && document.activeElement?.type === "range") {
     return;
@@ -592,7 +592,7 @@ function renderHudTab() {
       return `
         <div class="hud-row" data-key="${key}" data-on="${on ? 1 : 0}" role="switch"
              aria-checked="${on}" tabindex="0"
-             title="${modified ? "Overridden — config says " + (base[key] ? "on" : "off") : "Click to toggle"}">
+             title="${modified ? "Overridden: config says " + (base[key] ? "on" : "off") : "Click to toggle"}">
           <span class="name">${name}${sub ? `<small>${sub}</small>` : ""}</span>
           ${modified ? `<span class="dot mod"></span>` : ""}
           <span class="switch"></span>
@@ -773,7 +773,7 @@ async function autoConnectGame() {
   const exe = await invoke("detect_game").catch(() => null);
   if (!exe) {
     setGameNote(null);
-    renderGameCard("Not found automatically — if the game is installed somewhere unusual, click Locate… and pick its executable.");
+    renderGameCard("Not found automatically. If the game is installed somewhere unusual, click Locate… and pick its executable.");
     return;
   }
   await applyGameAssets(exe);
@@ -904,8 +904,8 @@ function meterBox(key, m, side, imgH) {
 
 // ------------------------------------------------ HUD drag editor
 // The hitboxes come from the RENDERER (bounds of the vertices it actually
-// draws), so box and pixels can never drift apart — the lesson from the
-// old meter-drag offset bug. The frontend only maps frame pixels onto the
+// draws), so box and pixels can never drift apart (the lesson from the
+// old meter-drag offset bug). The frontend only maps frame pixels onto the
 // displayed image. Positions save immediately; the render always matches
 // the live preview, whether the switch stays on or not.
 let hudEditOn = false;
@@ -913,7 +913,7 @@ let hudDrag = null;
 let hudRefreshQueued = false;
 
 // Snap grid for the editor: cell size as a fraction of the frame height
-// (square cells). Persisted locally — a pure editor preference.
+// (square cells). Persisted locally as a pure editor preference.
 const GRID_STEPS = [0, 1 / 48, 1 / 24, 1 / 12, 1 / 6];
 const GRID_NAMES = ["Off", "Fine", "Small", "Medium", "Large"];
 let gridStep = Number(localStorage.getItem("hud-grid")) || 0;
@@ -1013,7 +1013,7 @@ async function refreshHudBoxes() {
     el.style.width = `${(b.x1 - b.x0) * sx + pad * 2}px`;
     el.style.height = `${(b.y1 - b.y0) * sy + pad * 2}px`;
     el.title = b.key.replace("_", " ");
-    // The element's true frame-pixel size (no editor padding) — the snap
+    // The element's true frame-pixel size (no editor padding): the snap
     // math aligns real edges with grid lines, not the dashed outline.
     el.dataset.fw = String(b.x1 - b.x0);
     el.dataset.fh = String(b.y1 - b.y0);
@@ -1023,8 +1023,8 @@ async function refreshHudBoxes() {
     el.appendChild(grip);
     layer.appendChild(el);
   }
-  // Meters join the editor as real boxes too (client-side geometry —
-  // they have no renderer hitbox): drag to move, corner grip to resize.
+  // Meters join the editor as real boxes too (client-side geometry,
+  // since they have no renderer hitbox): drag to move, corner grip to resize.
   const iw = img.naturalWidth || 1;
   const ih = img.naturalHeight || 1;
   const addMeter = (key, m, side) => {
@@ -1059,8 +1059,8 @@ async function refreshHudBoxes() {
   drawEditGrid();
 }
 
-/// The history is global — Ctrl+Z works anywhere and the HUD tab pushes
-/// steps of its own — so the buttons follow can_undo/can_redo rather than
+/// The history is global (Ctrl+Z works anywhere and the HUD tab pushes
+/// steps of its own), so the buttons follow can_undo/can_redo rather than
 /// the editor, which would hide them in the very moment something became
 /// undoable. The editor keeps them in place while it is open.
 function syncHistoryButtons() {
@@ -1216,7 +1216,7 @@ function initHudEdit() {
       origTop: parseFloat(box.style.top),
     };
   });
-  // The backend payload for the gesture's current geometry — shared by the
+  // The backend payload for the gesture's current geometry, shared by the
   // live (uncommitted) pushes and the final commit on release.
   const dragPayload = (d) => {
     if (d.mode === "resize") {
@@ -1499,14 +1499,14 @@ let notifyAsked = false;
 function setWindowNotice(text) {
   if (document.hasFocus()) return;
   titleNotice = true;
-  document.title = `${text} — ${BASE_TITLE}`;
+  document.title = `${text} · ${BASE_TITLE}`;
   // A real notification on top, where the webview has them and the user has
   // already allowed them. Optional by design: it must never throw.
   try {
     if (window.Notification && Notification.permission === "granted") {
       new Notification(BASE_TITLE, { body: text });
     }
-  } catch { /* no notifications in this webview — the title said it */ }
+  } catch { /* no notifications in this webview (the title said it) */ }
 }
 
 function clearWindowNotice() {
@@ -1547,7 +1547,7 @@ async function startRender() {
       const name = planned.path.split(/[\\/]/).pop();
       // If the dialog itself fails (a missing permission once cost us this
       // whole prompt), the safe default is to KEEP the existing file, never
-      // to overwrite it silently — losing a video is worse than a stray
+      // to overwrite it silently: losing a video is worse than a stray
       // "name (2).mp4".
       let overwrite = false;
       try {
@@ -1561,7 +1561,7 @@ async function startRender() {
       keepExisting = !overwrite;
     }
   } catch {
-    // Path not resolvable yet (no folder set) — let start_render report it.
+    // Path not resolvable yet (no folder set): let start_render report it.
   }
   try {
     lastOutPath = await invoke("start_render", { keepExisting });
@@ -1583,7 +1583,7 @@ function initRenderEvents() {
     $("render-progress-fill").style.width = `${pct.toFixed(1)}%`;
     $("render-text").classList.remove("done");
     $("render-text").textContent =
-      `${pct.toFixed(0)}% — frame ${done.toLocaleString()} / ${total.toLocaleString()}` +
+      `${pct.toFixed(0)}% · frame ${done.toLocaleString()} / ${total.toLocaleString()}` +
       ` · ${fps.toFixed(0)} fps · ETA ${fmtTime(eta_secs * 1000)}`;
   });
   listen("render-done", (e) => {
@@ -1623,7 +1623,7 @@ function initRenderEvents() {
 
 /// The results screen is only appended when the clip reaches the end of the
 /// run (video.rs: `end_ms >= run_end - 500`). Nothing said so, and two of the
-/// four clips the app itself suggests stop mid-run — so the app offered a
+/// four clips the app itself suggests stop mid-run, so the app offered a
 /// chip that quietly turned off a setting the app defaults to on.
 function updateResultsAvailability() {
   const sel = $("set-results");
@@ -1651,7 +1651,7 @@ function updateRenderButton() {
   const btn = $("btn-render");
   btn.disabled = !ready || rendering || ffmpegMissing;
   btn.title = ffmpegMissing
-    ? "ffmpeg could not be run — set its path under Advanced, or install it"
+    ? "ffmpeg could not be run. Set its path under Advanced, or install it"
     : "";
   if (!rendering) {
     const clip = status?.clip;
@@ -1718,7 +1718,7 @@ async function call(fn) {
   try {
     const st = await fn();
     // Await: applyStatus ends with updateRenderButton writing the status
-    // line — callers that print their own message must come after it.
+    // line, so callers that print their own message must come after it.
     if (st) await applyStatus(st);
     return st;
   } catch (e) {
@@ -1751,8 +1751,8 @@ async function applyStatus(st) {
   // A page (re)load during an active render must show the rendering state.
   if (st.rendering && !rendering) setRenderingUi(true);
 
-  // A replay without its map: fetch it from rhythia.com right away —
-  // once per map id, so a failure (offline, unpublished map) falls back
+  // A replay without its map: fetch it from rhythia.com right away, but
+  // only once per map id, so a failure (offline, unpublished map) falls back
   // to the manual Download/Browse buttons instead of looping.
   if (st.replay && !st.map && st.replay.map_id > 0 && autoDownloadTried !== st.replay.map_id) {
     autoDownloadTried = st.replay.map_id;
@@ -1761,7 +1761,7 @@ async function applyStatus(st) {
       .then(async (st2) => { await applyStatus(st2); loadNote("Map downloaded."); })
       .catch((e) => {
         $("map-body").innerHTML =
-          `<p class="hint">Automatic download failed: ${esc(String(e))} — try Download again or Browse a local file.</p>`;
+          `<p class="hint">Automatic download failed: ${esc(String(e))}. Try Download again or Browse a local file.</p>`;
         $("btn-map-dl").hidden = false;
       });
   }
@@ -1774,7 +1774,7 @@ async function applyStatus(st) {
     currentMs = Math.min(15000, (st.replay.length_ms || 0) / 2);
     timelineData = await invoke("timeline", { samples: 600 }).catch(() => null);
     $("scrub-len").textContent = fmtTime(timelineData?.length_ms || 0);
-    // The clip suggestions come from the timeline — refresh them now
+    // The clip suggestions come from the timeline: refresh them now
     // that it exists (the render pass above ran before this fetch).
     renderClipRow();
     $("scrub-time").textContent = fmtTime(currentMs);
@@ -1794,22 +1794,22 @@ async function applyStatus(st) {
 // ------------------------------------------------------------ file loading
 
 function loadNote(text) {
-  // The render bar is always visible — use it as the load status line
+  // The render bar is always visible, so use it as the load status line
   // (unless a render is writing progress there).
   if (!rendering) $("render-text").textContent = text;
 }
 
 // A replay dropped straight onto the Ghost race card. Without a main
-// replay there is nothing to race yet — it becomes YOUR replay, with a
+// replay there is nothing to race yet: it becomes YOUR replay, with a
 // hint (a lone replay renders as a normal video).
 async function dropGhost(path) {
   const name = path.split(/[\\/]/).pop();
   if (!status?.replay) {
     await loadPath(path);
-    // loadPath swallows its own errors — only claim success if the
+    // loadPath swallows its own errors, so only claim success if the
     // replay actually landed.
     if (status?.replay) {
-      loadNote("Loaded as your replay — a ghost race needs a second one. Drop it on Ghost race, otherwise this renders as a normal video.");
+      loadNote("Loaded as your replay. A ghost race needs a second one. Drop it on Ghost race, otherwise this renders as a normal video.");
     }
     return;
   }
@@ -1855,7 +1855,7 @@ async function loadPath(path) {
       loadNote(`Loaded skin: ${name}`);
       schedulePreview();
     } else {
-      // Anything else might be a background image/video — the backend
+      // Anything else might be a background image/video: the backend
       // classifies by content and rejects what neither the image decoder
       // nor ffmpeg can read.
       try {
@@ -1889,7 +1889,7 @@ function initDragDrop() {
   const hitTarget = (pos) => {
     if (!pos) return null;
     const scale = window.devicePixelRatio || 1;
-    // elementFromPoint respects the sources rail's scroll clipping — a
+    // elementFromPoint respects the sources rail's scroll clipping: a
     // card scrolled out of view must not catch drops through whatever
     // covers its unclipped rect.
     const el = document.elementFromPoint(pos.x / scale, pos.y / scale);
@@ -2133,7 +2133,7 @@ function initControls() {
   // Output settings.
   $("set-res").addEventListener("change", () => {
     if ($("set-res").value === "custom") {
-      // Nothing changes until a number is entered — just open the fields.
+      // Nothing changes until a number is entered: just open the fields.
       $("res-custom").hidden = false;
       $("set-res-w").focus();
       $("set-res-w").select();
@@ -2237,7 +2237,7 @@ function initControls() {
     const exe = await invoke("detect_game").catch(() => null);
     if (!exe) {
       setGameNote(null);
-      renderGameCard("Not found in any Steam library — click Locate… and pick the game's executable.");
+      renderGameCard("Not found in any Steam library. Click Locate… and pick the game's executable.");
       return;
     }
     await applyGameAssets(exe);
@@ -2347,7 +2347,7 @@ function initControls() {
     $("btn-frame").disabled = true;
     try {
       await invoke("export_card", { path: p, width: w, height: h });
-      $("render-text").textContent = `Score card saved — ${p}`;
+      $("render-text").textContent = `Score card saved: ${p}`;
     } catch (e2) {
       showPreviewMsg(String(e2));
     } finally {
@@ -2364,7 +2364,7 @@ function updateRenderReady() {
   updateRenderButton();
 }
 
-// Higher is better on this slider — that inversion is the whole point of it,
+// Higher is better on this slider: that inversion is the whole point of it,
 // so the hint has to keep saying what the number costs.
 function paintQuality() {
   const el = $("set-quality");
@@ -2405,7 +2405,7 @@ async function initEncoders() {
     if (list.includes(saved)) {
       sel.value = saved;
     } else if (list.length) {
-      // e.g. settings from another machine — keep backend and UI in agreement.
+      // e.g. settings from another machine: keep backend and UI in agreement.
       sel.value = "auto";
       pushOutput({ encoder: "auto" });
     }
@@ -2417,13 +2417,13 @@ async function initEncoders() {
     // path they are about to fix.
     const hw = list.filter((e) => e !== "auto" && e !== "x264");
     // No ffmpeg means no render at all. Say it here, not after the user has
-    // sat through one — and point at the setting that fixes it.
+    // sat through one, and point at the setting that fixes it.
     ffmpegMissing = !!probe.ffmpeg_missing;
     if (ffmpegMissing) {
       $("topbar-info").innerHTML =
         `<span class="chip bad" title="${esc(
           `Tried to run: ${probe.ffmpeg}\n\nSet the path under Advanced, or install ffmpeg.`
-        )}">ffmpeg not found — rendering unavailable</span>`;
+        )}">ffmpeg not found: rendering unavailable</span>`;
     } else {
       $("topbar-info").textContent = hw.length
         ? `Hardware encoder: ${hw.map((e) => labels[e]?.split(" (")[0] || e).join(", ")}`
@@ -2431,7 +2431,7 @@ async function initEncoders() {
     }
     updateRenderReady();
     // Say WHY a hardware encoder is missing (e.g. nvenc wants a newer
-    // NVIDIA driver) — otherwise "only x264" looks like a bug.
+    // NVIDIA driver), because otherwise "only x264" looks like a bug.
     const note = $("encoder-note");
     const reasons = Object.entries(probe.unavailable || {})
       .filter(([e]) => e !== "vaapi" || hw.length === 0) // vaapi absence on Windows is normal
@@ -2460,7 +2460,7 @@ function setUiScale(v, announce) {
   const pct = Math.round(uiScale * 100);
   $("set-uiscale").value = String(pct);
   $("uiscale-val").textContent = `${pct}%`;
-  // The scrubber is a canvas — its bitmap only follows the new box on redraw.
+  // The scrubber is a canvas: its bitmap only follows the new box on redraw.
   drawScrubber();
   try {
     localStorage.setItem(SCALE_STORE, String(uiScale));
@@ -2501,7 +2501,7 @@ async function initUpdater() {
     if (channel !== "self") {
       if (channel === "aur") {
         $("update-text").textContent =
-          `Update ${update.version} is available — update via your AUR helper (rhythr-bin).`;
+          `Update ${update.version} is available: update via your AUR helper (rhythr-bin).`;
         $("btn-update").textContent = "Release notes";
       } else {
         $("btn-update").textContent = "Open download page";
@@ -2527,7 +2527,7 @@ async function initUpdater() {
         $("btn-update").disabled = false;
       }
     };
-  } catch { /* offline or first run — try again next launch */ }
+  } catch { /* offline or first run: try again next launch */ }
 }
 
 window.addEventListener("DOMContentLoaded", async () => {

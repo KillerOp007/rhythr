@@ -259,11 +259,20 @@ one, because the old one wrote several times what an upload needs.
 - **An overlay legend**, and a list of every shortcut, in the Analyze window.
 - **An interface scale**, 80% to 160%, on Ctrl+= / Ctrl+- / Ctrl+0 or a
   slider under Advanced.
-- **A diagnostics file** under Advanced: build, OS, which ffmpeg was resolved
-  and whether it runs, each hardware encoder with ffmpeg's own reason when it
-  does not, what is loaded, and the output settings. You choose where it goes
-  and can read it first; it deliberately leaves out the player name and any
-  path beyond what the window already shows.
+- **A diagnostics file** under Advanced: build, OS and version, processor,
+  your GPU with its backend and driver, which ffmpeg was resolved and whether
+  it runs, each hardware encoder with ffmpeg's own reason when it does not,
+  what is loaded, the output settings, the timings of your last render, and
+  the settings you changed from a fresh install. There is a Copy button next
+  to it if you would rather paste than attach. You choose where it goes and
+  can read it first; your home folder is written as `~` throughout, so the
+  file carries no account name.
+- **Error codes.** Anything that goes wrong now ends with a code like
+  `RH-FFM-101-L`: the area, the failure, and the system it happened on (the
+  same failure has a different cause on Windows and on Linux). Quote the code
+  in a bug report and it can be looked up directly instead of guessed at. The
+  codes are also listed at the top of the diagnostics file, with how often
+  each one came up.
 - The render target's file name is shown before the render, not after.
 - The empty preview panel can be clicked, not just dropped onto.
 - Optional source cards fold away, and open themselves when they hold

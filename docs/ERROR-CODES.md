@@ -150,7 +150,7 @@ Shown to the user: Re-export the replay from the game and load it again.
 Shown to the user: Load the map again, or let rhythr download it from rhythia.com.
 
 - **all systems**: A map format rhythr does not know, a damaged archive, or an .sspm from a newer version of the format than this build handles.
-- Recognised by: `sspm:`, `.rhm archive`, `map json:`, `unsupported map file extension`, `over the`
+- Recognised by: `sspm:`, `.rhm archive`, `map json:`, `unsupported map file extension`, `-byte limit`
 
 ### RH-MAP-403 the loaded map is not the one the replay was played on
 

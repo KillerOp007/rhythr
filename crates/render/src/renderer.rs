@@ -128,7 +128,7 @@ pub struct Renderer {
     hud_sampler: wgpu::Sampler,
     hud_screen_buf: wgpu::Buffer,
     hud_atlas_view: wgpu::TextureView,
-    /// Per-frame buffers, created once and rewritten every frame — creating
+    /// Per-frame buffers, created once and rewritten every frame: creating
     /// fresh GPU buffers per frame accumulates allocations over long renders
     /// and eventually stalls the machine.
     inst_buf: wgpu::Buffer,
@@ -138,9 +138,9 @@ pub struct Renderer {
     readback_bufs: [wgpu::Buffer; READBACK_SLOTS],
     readback_submissions: std::cell::RefCell<[Option<wgpu::SubmissionIndex>; READBACK_SLOTS]>,
     /// Scratch for un-padding readback rows. Only widths whose byte stride
-    /// is not a multiple of 256 need it — 1080x1920 (Shorts) and 1080x1080
-    /// (square) do, 1920x1080 does not — and those used to allocate and
-    /// drop an 8 MB buffer for every single frame.
+    /// is not a multiple of 256 need it: 1080x1920 (Shorts) and 1080x1080
+    /// (square) do, 1920x1080 does not. Those used to allocate and drop an
+    /// 8 MB buffer for every single frame.
     depad_scratch: std::cell::RefCell<Vec<u8>>,
     /// When present, frames are converted to NV12 in a compute pass and the
     /// readback slots hold NV12 rather than padded RGBA. See
@@ -155,9 +155,9 @@ pub const READBACK_SLOTS: usize = 3;
 
 /// The four ambient background layers (tunnel, chevrons, rays, moving grid)
 /// are DELIBERATELY DISABLED (user decision, 2026-07-14): reconstructions
-/// from footage never got close enough to the game — the tunnel look was
+/// from footage never got close enough to the game (the tunnel look was
 /// off, rays rendered invisible, the grid showed only its ceiling plane and
-/// the chevrons didn't match — and iterating on rarely-used eye candy was
+/// the chevrons didn't match), and iterating on rarely-used eye candy was
 /// stalling the project. The implementations stay below so support can be
 /// revived by flipping this constant; recalibrate each against fresh footage
 /// (see docs/ROADMAP.md §6) before shipping it.
@@ -178,7 +178,7 @@ impl Renderer {
 
     /// Renderer for the LIVE path: created against an existing Instance
     /// whose Surface the adapter must be compatible with. The offscreen
-    /// pipeline is identical — presentation is a separate blit
+    /// pipeline is identical: presentation is a separate blit
     /// ([`crate::present::Presenter`]).
     pub fn new_for_surface(
         instance: wgpu::Instance,
@@ -212,7 +212,7 @@ impl Renderer {
         &self.instance
     }
 
-    /// View of the offscreen frame — what the presenter blits.
+    /// View of the offscreen frame: what the presenter blits.
     pub fn color_view(&self) -> wgpu::TextureView {
         self.color_tex.create_view(&Default::default())
     }
@@ -318,7 +318,7 @@ impl Renderer {
 
     /// Whether the OUTPUT frame is portrait (Shorts/TikTok). Layout and
     /// camera decisions key off this, never off a viewport slice: a
-    /// ghost-split half of a 16:9 frame is 8:9 — narrower than tall — but
+    /// ghost-split half of a 16:9 frame is 8:9 (narrower than tall) but
     /// must keep the landscape look it always had.
     fn portrait_output(&self) -> bool {
         (self.width as f32) < 0.9 * self.height as f32
@@ -469,7 +469,7 @@ impl Renderer {
         });
 
         // Same shader without depth write/test: the cursor trail's densely
-        // overlapping translucent stamps must all blend — with the depth
+        // overlapping translucent stamps must all blend: with the depth
         // test on, stamps quantising to the same depth reject each other's
         // overlap and the trail beads up.
         let pipeline_overlay = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -793,7 +793,7 @@ impl Renderer {
 
     /// The render target's (width, height) in pixels.
     /// The notes visible at `song_time_ms`, as screen-space quads in the
-    /// given viewport — the exact geometry the renderer draws (approach
+    /// given viewport: the exact geometry the renderer draws (approach
     /// depth, note radius, camera), so an overlay can trace the note (and
     /// therefore its hit area) instead of guessing a fixed grid cell.
     /// Returns `(note index, four corners in px, depth)`, far notes first.
@@ -870,7 +870,7 @@ impl Renderer {
         out
     }
 
-    /// The playfield border as a screen-space quad — overlays clip to it
+    /// The playfield border as a screen-space quad: overlays clip to it
     /// so nothing spills outside the field.
     pub fn playfield_quad(
         &self,
@@ -898,17 +898,17 @@ impl Renderer {
     }
 
     /// Screen mapping for the analyze overlay: one entry per rendered
-    /// side — viewport (x, width in px) and the view-projection matrix at
-    /// `song_time_ms`, exactly as [`Self::submit_side`] builds the camera
-    /// (parallax and spin included). World points on the hit plane map to
-    /// pixels via `px = (ndc.x*0.5+0.5)*vp_w + vp_x`,
+    /// side, giving the viewport (x, width in px) and the view-projection
+    /// matrix at `song_time_ms`, exactly as [`Self::submit_side`] builds
+    /// the camera (parallax and spin included). World points on the hit
+    /// plane map to pixels via `px = (ndc.x*0.5+0.5)*vp_w + vp_x`,
     /// `py = (0.5-ndc.y*0.5)*height`.
     #[allow(clippy::type_complexity)]
     pub fn field_projections(
         &self,
         params: &SceneParams,
         replay: &Replay,
-        // Ghost replay plus ITS grid scale — the clamp bound and camera
+        // Ghost replay plus ITS grid scale: the clamp bound and camera
         // must use each side's own field (a hardrock ghost clamps wider),
         // exactly as submit_frame_with_ghost_inner builds its params.
         ghost: Option<(&Replay, f32)>,
@@ -961,7 +961,7 @@ impl Renderer {
             .as_deref()
             .and_then(|b| self.upload_png(b));
         // Custom background layers, composited once on the CPU into a
-        // frame-sized image (static under camera motion — a documented
+        // frame-sized image (static under camera motion, a documented
         // approximation for parallax/spin). A video background instead
         // gets a persistent writable texture that stream_background()
         // refreshes once per output frame.
@@ -1146,7 +1146,7 @@ impl Renderer {
         self.with_slot_pixels(0, |px| px.to_vec())
     }
 
-    /// Renders one frame WITHOUT any readback — the live path. The frame
+    /// Renders one frame WITHOUT any readback: the live path. The frame
     /// lands in the offscreen texture; a [`crate::present::Presenter`]
     /// blits it to the window afterwards.
     #[allow(clippy::too_many_arguments)]
@@ -1197,7 +1197,7 @@ impl Renderer {
     }
 
     /// Renders one frame and queues its copy into readback slot `slot`
-    /// WITHOUT waiting — pair with [`Self::with_slot_pixels`]. Submitting
+    /// WITHOUT waiting. Pair with [`Self::with_slot_pixels`]. Submitting
     /// frame N and then reading slot N-1 overlaps GPU rendering with the
     /// CPU-side readback/encode of the previous frame.
     #[allow(clippy::too_many_arguments)]
@@ -1227,8 +1227,8 @@ impl Renderer {
     }
 
     /// Like [`Self::submit_frame`], with an optional second replay: the
-    /// frame splits into two side-by-side views — the player's run on the
-    /// left, the ghost's on the right — each with its own full HUD and the
+    /// frame splits into two side-by-side views (the player's run on the
+    /// left, the ghost's on the right), each with its own full HUD and the
     /// ghost's cursor/trail in its distinct colour.
     #[allow(clippy::too_many_arguments)]
     pub fn submit_frame_with_ghost(
@@ -1299,7 +1299,7 @@ impl Renderer {
                     &[],
                 )?;
                 // The racing delta sits at the split seam and needs both
-                // runs' stats — built here (the only per-frame scope with
+                // runs' stats, built here (the only per-frame scope with
                 // both sides) and drawn by the second side's HUD pass,
                 // whose pass covers the whole frame.
                 let race_verts = match hud_state {
@@ -1361,8 +1361,8 @@ impl Renderer {
                 };
                 // NOTE: this is a full clone, asset bytes included. An
                 // attempt to skip them with struct-update syntax was a
-                // no-op — `..self.clone()` evaluates the whole clone first
-                // and only then overwrites the fields — and measuring the
+                // no-op (`..self.clone()` evaluates the whole clone first
+                // and only then overwrites the fields), and measuring the
                 // ghost path with a 5.7 MB skin showed the copy is not what
                 // a render waits on. Doing it properly means Arc-ing the
                 // blobs, which is worth it only if a measurement ever says
@@ -1450,7 +1450,7 @@ impl Renderer {
         let mut items: Vec<(f32, Instance)> = Vec::new();
         // Custom skin background: a fullscreen quad at the far plane, drawn
         // before everything (kind 4 bypasses the camera in the shader).
-        // A user-chosen background carries its dim here — multiplied into
+        // A user-chosen background carries its dim here, multiplied into
         // the quad only, so gameplay stays untouched.
         if skin.tex_flags[3] > 0.5 {
             let lum = 1.0 - config.custom_bg_dim.unwrap_or(0.0).clamp(0.0, 1.0);
@@ -1477,7 +1477,7 @@ impl Renderer {
 
         // Ambient tunnel: nested square outlines behind everything, each
         // layer twisted against the last, slowly rotating (a full turn takes
-        // about a minute) with a per-layer brightness pulse — reconstructed
+        // about a minute) with a per-layer brightness pulse, reconstructed
         // from a kymograph of the user's footage. With AccentFromHitNote the
         // colour follows the most recently hit note.
         if AMBIENT_EFFECTS_SUPPORTED
@@ -1526,7 +1526,7 @@ impl Renderer {
         // Ambient chevrons ("moving chevron outline layer"): arrow outlines
         // that spawn far behind the playfield and fly toward and past the
         // camera, in two columns left/right of the centre with tips pointing
-        // inward. Colour is the fixed background accent — the hit-note tint
+        // inward. Colour is the fixed background accent: the hit-note tint
         // does not apply to this layer (per the user).
         if AMBIENT_EFFECTS_SUPPORTED
             && config.ambient.chevron_enabled
@@ -1573,7 +1573,7 @@ impl Renderer {
 
         // Ambient rays ("depth rays that streak toward the camera"): thin
         // streaks aligned along the depth axis flying from far behind toward
-        // and past the camera — on screen they read as radial speed lines.
+        // and past the camera: on screen they read as radial speed lines.
         if AMBIENT_EFFECTS_SUPPORTED
             && config.ambient.rays_enabled
             && config.ambient.rays_opacity > 0.0
@@ -1604,7 +1604,7 @@ impl Renderer {
             }
         }
 
-        // Ambient grid: a synthwave floor and ceiling — perspective planes
+        // Ambient grid: a synthwave floor and ceiling, perspective planes
         // with static lines running away from the camera and cross lines
         // scrolling toward it (kymograph: ~one line per second).
         if AMBIENT_EFFECTS_SUPPORTED
@@ -1673,8 +1673,8 @@ impl Renderer {
             }
         }
 
-        // Notes. The game removes a HIT note when the cursor takes it —
-        // the recorded hit frame — NOT at its chart time: late hits (up
+        // Notes. The game removes a HIT note when the cursor takes it
+        // (the recorded hit frame), NOT at its chart time: late hits (up
         // to the 80 ms window) keep flying briefly past the plane, and
         // ending them early reads as "hit before the cursor arrived" in
         // slow motion. Missed notes fly on only with PushBack skins.
@@ -1692,7 +1692,7 @@ impl Renderer {
                             // FREEZE at the plane instead of flying on:
                             // past the plane the perspective balloons a
                             // note over the field border within a frame
-                            // or two — the analyzer's contract is that
+                            // or two. The analyzer's contract is that
                             // notes stay inside the field. Same freeze
                             // rule as the verdict boxes.
                             let taken = r.hit_ms.unwrap_or(note_t).max(note_t);
@@ -1803,7 +1803,7 @@ impl Renderer {
         let hud_verts = hud_state.filter(|_| !config.disable_gui).map(|state| {
             // A failed run's stats freeze at its fail time (the results
             // screen's convention): the game never resolved the later
-            // notes. Only a ghost-race side can outlive its own run — the
+            // notes. Only a ghost-race side can outlive its own run: the
             // single-replay frame loop already stops at the fail.
             let stats_end = crate::race::side_end(replay);
             let mut stats = state.stats_at(map, replay, song_time_ms.min(stats_end));
@@ -1817,7 +1817,7 @@ impl Renderer {
             let field = self.playfield_screen(&view_proj, params.playfield_half(), vp_w);
             // Project freshly missed notes' cells to screen for the X
             // marks. `age` counts from the miss REGISTRATION (the window
-            // close) since the X waits for it — song_time - age IS the
+            // close) since the X waits for it: song_time - age IS the
             // registration time, the same strict condition stats_at uses.
             let miss_marks: Vec<(f32, f32, f64)> = state
                 .recent_misses(map, song_time_ms)
@@ -1855,7 +1855,7 @@ impl Renderer {
                 v.pos[0] += vp_x as f32;
             }
         }
-        // Full-frame extras join after the viewport shift — they are
+        // Full-frame extras join after the viewport shift: they are
         // already in frame space.
         verts.extend_from_slice(extra_hud);
         if !verts.is_empty() {
@@ -1979,7 +1979,7 @@ impl Renderer {
 
     /// Renders the results screen (after a finish or fail): blurred cover
     /// background, cover, title block, big grade, statistics, health graph
-    /// and mods — the game's screen minus its interactive buttons.
+    /// and mods: the game's screen minus its interactive buttons.
     pub fn render_results(
         &self,
         replay: &Replay,
@@ -1989,7 +1989,7 @@ impl Renderer {
         ghost: Option<&crate::hud::GhostInput>,
     ) -> Result<Vec<u8>, Error> {
         let (w, h) = (self.width as f32, self.height as f32);
-        // Final stats. A failed run ends at its fail time — notes after it
+        // Final stats. A failed run ends at its fail time: notes after it
         // were never attempted and must not count as misses. The window
         // margin lets the killing miss itself (note at ~fail time) register.
         let final_stats = |r: &Replay, state: &crate::hud::HudState| {
@@ -2104,7 +2104,7 @@ impl Renderer {
         // Background: blurred cover, heavily dimmed.
         quad(&mut verts, 0.0, 0.0, w, h, [0.055, 0.055, 0.06, 1.0], 3.0);
         // Cover with a green frame, top-left as in the game. One map, one
-        // cover — a ghost race shares it (with the title block) at full
+        // cover: a ghost race shares it (with the title block) at full
         // size instead of duplicating it per side. The art stays EXACTLY
         // square whatever the frame: portrait renders shrink it and give
         // the freed space to the blocks below.
@@ -2244,7 +2244,7 @@ impl Renderer {
 
     /// Renders the shareable score card (Discord-embed sized landscape):
     /// cover, title/difficulty/mapper, player, big grade, headline stats
-    /// and a trace of the actual cursor path with misses marked — in the
+    /// and a trace of the actual cursor path with misses marked, in the
     /// skin's own background and text colours.
     pub fn render_card(
         &self,
@@ -2443,7 +2443,7 @@ impl Renderer {
 
     /// The movable HUD elements' hitboxes for the drag editor, computed by
     /// building the same HUD geometry a frame render would draw (CPU only,
-    /// no GPU pass) — hitbox and pixels share one source of truth. In a
+    /// no GPU pass), so hitbox and pixels share one source of truth. In a
     /// ghost split the HUD lives per half; `half_width` mirrors that.
     #[allow(clippy::too_many_arguments)]
     pub fn hud_boxes(
@@ -2523,14 +2523,14 @@ impl Renderer {
         song_time_ms: f64,
     ) {
         let [cr, cg, cb] = srgb_to_linear(config.cursor_color);
-        // The game's cursor mesh is 0.263 units square (song.tscn) —
+        // The game's cursor mesh is 0.263 units square (song.tscn), so
         // half 0.1315. Its half-width IS the clamp inset (edgec 0.13125):
         // the clamped cursor's edge exactly kisses the 1.5 grid edge.
         let size = 0.1315 * config.cursor_scale;
         if config.cursor_trail_enabled {
             // The game's trail is a smooth snake: soft stamps laid out by
             // DISTANCE along the recent cursor path (SpacingMultiplier is
-            // the stamp interval in cursor widths — 0.05 reads as a solid
+            // the stamp interval in cursor widths: 0.05 reads as a solid
             // ribbon, 2.0 as separate dots), cursor-wide at the head and
             // tapering to a tip, with a steep fade so the bright tail is
             // much shorter than the lifetime.
@@ -2661,7 +2661,7 @@ impl Renderer {
 
 /// Note colour by index, cycling the (approximated) named colourset. The
 /// real `.txt` colorsets live compressed in the game bundle; these are
-/// visual stand-ins keyed by name — "Arctic" reads as icy blues/whites.
+/// visual stand-ins keyed by name: "Arctic" reads as icy blues/whites.
 /// Converts an sRGB colour component/triple to linear. Colours come from the
 /// config/colorsets as sRGB; the sRGB render target re-encodes on write, so
 /// the shader must receive linear values or everything renders too bright.
@@ -2922,7 +2922,7 @@ fn blit_over(dst: &mut [u8], dw: u32, src: &[u8], sw: u32, sh: u32, x: u32, y: u
 
 fn decode_image_rgba(bytes: &[u8]) -> Option<(Vec<u8>, u32, u32)> {
     // Map covers in the wild are PNGs of every flavour (indexed, 16-bit)
-    // and just as often JPEGs — decode whatever the image crate recognises.
+    // and just as often JPEGs, so decode whatever the image crate recognises.
     let img = image::load_from_memory(bytes).ok()?;
     let rgba = img.to_rgba8();
     let (w, h) = rgba.dimensions();
@@ -2930,7 +2930,7 @@ fn decode_image_rgba(bytes: &[u8]) -> Option<(Vec<u8>, u32, u32)> {
 }
 
 /// Box-averages an RGBA image down to at most `target` pixels on its longer
-/// side — linear upsampling of the result reads as a cheap blur.
+/// side: linear upsampling of the result reads as a cheap blur.
 fn average_pool(pixels: &[u8], w: u32, h: u32, target: u32) -> (Vec<u8>, u32, u32) {
     let scale = (w.max(h)).div_ceil(target).max(1);
     let (ow, oh) = ((w / scale).max(1), (h / scale).max(1));
@@ -2957,11 +2957,11 @@ fn average_pool(pixels: &[u8], w: u32, h: u32, target: u32) -> (Vec<u8>, u32, u3
     (out, ow, oh)
 }
 
-/// The game (raylib) blends straight in the sRGB framebuffer — no linear
-/// light anywhere. The whole pipeline therefore stays in sRGB space
+/// The game (raylib) blends straight in the sRGB framebuffer, with no
+/// linear light anywhere. The whole pipeline therefore stays in sRGB space
 /// (Unorm targets, raw colour values); this shim keeps the old call sites
 /// while making that explicit. Verified against footage on a white skin:
-/// a 75%-alpha near-black note frame reads 69/255 in game — sRGB-space
+/// a 75%-alpha near-black note frame reads 69/255 in game: sRGB-space
 /// blending reproduces it exactly, linear blending gave 137.
 fn srgb_to_linear(c: [f32; 3]) -> [f32; 3] {
     c
@@ -2970,7 +2970,7 @@ fn srgb_to_linear(c: [f32; 3]) -> [f32; 3] {
 fn colorset_color(name: &str, i: usize) -> [f32; 3] {
     let n = name.to_ascii_lowercase();
     // Arctic verified against the extracted colorset table: exactly
-    // [#ffffff, #a2e0ff, #a2e0ff] — white + icy blue, nothing else. (An
+    // [#ffffff, #a2e0ff, #a2e0ff]: white + icy blue, nothing else. (An
     // earlier 5-hue approximation had periwinkle/violet in it, which showed
     // up as wrong purple notes; user report 15.07.2026.)
     let palette: &[[f32; 3]] = if n.contains("arctic") || n.contains("ice") || n.contains("frost") {
@@ -2980,7 +2980,7 @@ fn colorset_color(name: &str, i: usize) -> [f32; 3] {
             [0.635, 0.878, 1.000], // #a2e0ff
         ]
     } else {
-        // Cotton Candy — the game's own default colorset, and the one a
+        // Cotton Candy, the game's own default colorset, and the one a
         // fresh install plays with: Rhythia.gd:2352 selects "ssp_cottoncandy",
         // registered at :1727-1731 as exactly these two colours. What stood
         // here until v0.6 was an invented four-hue palette that no install
@@ -3049,7 +3049,7 @@ impl CursorAt for Replay {
 /// Width of the default playfield frame, as a fraction of its half-extent.
 /// The game's border is `grid_outer.png` on the 3.04-unit Outer plane
 /// (song.tscn): a sharp-cornered square outline 6 px deep out of 1200, i.e.
-/// 0.0152 world units — 0.01 of the 1.52 half-extent. Until v0.6 this was a
+/// 0.0152 world units (0.01 of the 1.52 half-extent). Until v0.6 this was a
 /// hardcoded 0.05 in the shader, five times too heavy, with rounded corners
 /// the game does not have.
 const BORDER_OUTLINE: f32 = 0.01;
@@ -3061,7 +3061,7 @@ pub const HITBOX_LINGER_MS: f64 = 350.0;
 /// Approach depth for a note's hit-area quad, or None once the box should
 /// no longer exist. Once a note reaches the hit plane its box FREEZES
 /// there (depth 0): the game tests the cursor against the area in 2D,
-/// depth-free — a box that kept flying at the camera would balloon in
+/// depth-free: a box that kept flying at the camera would balloon in
 /// perspective and stop being comparable to the on-screen cursor. It
 /// stays until the note resolves (the recorded hit frame, or the end of
 /// the hit window for a miss) plus a short linger. Skins that fade notes
@@ -3072,7 +3072,7 @@ pub fn hitbox_depth(
     song_time_ms: f64,
     result: Option<rhythia_sim::hitreg::NoteResult>,
     linger_ms: f64,
-    // The run's hit window — when an unhit note's box stops being live.
+    // The run's hit window: when an unhit note's box stops being live.
     window_ms: f64,
 ) -> Option<f32> {
     if let Some(d) = params.note_depth(note_t, song_time_ms) {
@@ -3097,7 +3097,7 @@ mod hitbox_tests {
     use rhythia_sim::hitreg::NoteResult;
 
     const L: f64 = HITBOX_LINGER_MS;
-    /// A 1.45x run's hit window — what these lifetimes were calibrated on.
+    /// A 1.45x run's hit window: what these lifetimes were calibrated on.
     const W: f64 = 80.0;
 
     fn res(hit: bool, hit_ms: Option<f64>) -> Option<NoteResult> {

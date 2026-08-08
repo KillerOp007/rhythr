@@ -431,7 +431,7 @@ impl HudState {
             };
             let note = &map.notes[note_index];
             // Cursor frames live in world space (±1.37 around the origin,
-            // +y up); notes are grid coordinates — convert before diffing.
+            // +y up); notes are grid coordinates, so convert before diffing.
             let (nx, ny) = crate::scene::grid_to_world(note.x, note.y);
             hit_details.push(HitDetail {
                 hit_ms: t,
@@ -456,7 +456,7 @@ impl HudState {
         &self.hit_details[..end]
     }
 
-    /// Running stats at `song_time_ms` — hits/combo/misses derived from the
+    /// Running stats at `song_time_ms`: hits/combo/misses derived from the
     /// per-note resolution, score/points interpolated from the replay totals
     /// by hit fraction (the exact in-game score curve isn't in the file).
     pub fn stats_at(&self, map: &Map, replay: &Replay, song_time_ms: f64) -> HudStats {
@@ -499,7 +499,7 @@ impl HudState {
         };
         HudStats {
             // The game's live score is literally 100 per combo step: at 185x
-            // it reads 1,720,500 = 100·(1+…+185). No normalisation — the raw
+            // it reads 1,720,500 = 100·(1+…+185). No normalisation: the raw
             // formula matches the game frame-for-frame.
             score: (acc_weight * 100.0) as i64,
             points: live_rp(replay.points, accuracy_pct, replay.accuracy_pct),
@@ -524,7 +524,7 @@ impl HudState {
     }
 
     /// Grid cells of notes missed within the last [`MISS_X_MS`] before
-    /// `song_time_ms`, with how long ago each miss registered — the red X
+    /// `song_time_ms`, with how long ago each miss registered: the red X
     /// markers the game flashes on a missed note's cell.
     pub fn recent_misses(&self, map: &Map, song_time_ms: f64) -> Vec<(f32, f32, f64)> {
         self.outcome
@@ -533,13 +533,13 @@ impl HudState {
             .filter(|r| !r.hit)
             .filter_map(|r| {
                 let note = &map.notes[r.note_index];
-                // The game decides a miss when the hit window CLOSES —
-                // an X at the chart time pops up while the cursor could
-                // still legally take the note.
+                // The game decides a miss when the hit window CLOSES,
+                // because an X at the chart time pops up while the cursor
+                // could still legally take the note.
                 let miss_t = note.time_ms as f64 + self.window_ms;
                 // Reported as REAL milliseconds, not song ones. The game
                 // animates this X off frame time, so at 1.45x a song-time
-                // age of 500 ms is only 345 ms of wall clock — the X died
+                // age of 500 ms is only 345 ms of wall clock: the X died
                 // early and its 100 ms fade-in collapsed to 69. Converting
                 // here keeps every threshold downstream in real time, which
                 // is the unit they were measured in. The cursor trail got
@@ -556,7 +556,7 @@ impl HudState {
 
 /// Live RP (Rhythia Points) at the current accuracy. The real per-play
 /// value is a server-side calculation over the map's star rating (per
-/// the Rhythia wiki), which a renderer can't reproduce —
+/// the Rhythia wiki), which a renderer can't reproduce,
 /// but its accuracy response observed in footage is a steep curve above
 /// ~90% (0 RP at 92.31%, 2 at 96.67%, 4 at 97.37% on one map, a constant 78
 /// through a 100%-accuracy run on another). We model that shape with a
@@ -621,7 +621,7 @@ fn clock(ms: f64) -> String {
 }
 
 /// A movable HUD element's on-screen bounds in frame pixels, as actually
-/// drawn — the drag editor's hitboxes come straight from these, so hitbox
+/// drawn: the drag editor's hitboxes come straight from these, so hitbox
 /// and pixels can never drift apart.
 #[derive(Debug, Clone)]
 pub struct HudBox {
@@ -634,7 +634,7 @@ pub struct HudBox {
 
 /// Scales an element's vertices about its bounds' centre (the drag
 /// editor's resize) and returns the new bounds. Text scales with the
-/// element — the vertices are already laid out.
+/// element (the vertices are already laid out).
 fn scale_element(
     verts: &mut [HudVertex],
     bounds: (f32, f32, f32, f32),
@@ -725,7 +725,7 @@ pub fn build_hud(
     width: u32,
     height: u32,
     // Portrait frames (Shorts/TikTok) re-home the stat columns into rows
-    // above and below the field — the drag editor can rearrange from there.
+    // above and below the field. The drag editor can rearrange from there.
     // The caller decides from the OUTPUT frame, not this viewport (a
     // ghost-split half is 8:9 but keeps the landscape layout).
     portrait: bool,
@@ -852,7 +852,7 @@ pub fn build_hud(
         }
     };
 
-    // Left group: combo ring, Pauses, Grade, Accuracy — a column beside
+    // Left group: combo ring, Pauses, Grade, Accuracy. A column beside
     // the field on landscape, a row underneath it on portrait.
     let ln = [hud.combo_ring, hud.pauses, hud.grade, hud.accuracy]
         .iter()
@@ -918,7 +918,7 @@ pub fn build_hud(
         let el = b.verts.len();
         let (x, y) = next_left(&mut li);
         // "--" until the first note resolves; then two decimals, trailing
-        // zeros stripped ("92.31%", "100%") — as the game formats it.
+        // zeros stripped ("92.31%", "100%"), as the game formats it.
         let acc = if stats.resolved == 0 {
             "--".to_string()
         } else {
@@ -932,7 +932,7 @@ pub fn build_hud(
         finish_element(&mut b, el, "accuracy", hud, w, _h, &mut boxes);
     }
 
-    // Right group: Score, Points, Misses, Notes — column on landscape, a
+    // Right group: Score, Points, Misses, Notes. Column on landscape, a
     // row above the field on portrait.
     let rn = [hud.score, hud.points, hud.misses, hud.notes]
         .iter()
@@ -953,7 +953,7 @@ pub fn build_hud(
         right_cells.push(("score", "SCORE", thousands(stats.score)));
     }
     if hud.points {
-        // RP (Rhythia Points) — "--" until a note resolves.
+        // RP (Rhythia Points): "--" until a note resolves.
         let pts = if stats.resolved == 0 {
             "--".to_string()
         } else {
@@ -1002,7 +1002,7 @@ pub fn build_hud(
     }
 
     // Song progress bar just above the playfield, with its elapsed/total
-    // clock — one movable element (the clock belongs to the bar, not the
+    // clock, one movable element (the clock belongs to the bar, not the
     // title; user report 16.07.).
     let ty = field.cy - field.half - refd * 0.053;
     if hud.song_progress_bar {
@@ -1065,8 +1065,8 @@ pub fn build_hud(
         // The only title in the HUD that is not width-fitted: a long name
         // and a long song ran off the frame, and on a split-screen race
         // straight into the other player's half. The limit is the VIEWPORT,
-        // not the playfield — the header is allowed to be wider than the
-        // brackets, as it is in the game — with a margin so it never touches
+        // not the playfield (the header is allowed to be wider than the
+        // brackets, as it is in the game), with a margin so it never touches
         // the edge or the seam.
         let size = refd * 0.0187;
         let title = fit_to_width(b.atlas, &title, size, w * 0.94);
@@ -1074,7 +1074,7 @@ pub fn build_hud(
         finish_element(&mut b, el, "song_info", hud, w, _h, &mut boxes);
     }
 
-    // Fail vignette — the game's own formula (vignette.fs): a fullscreen
+    // Fail vignette, the game's own formula (vignette.fs): a fullscreen
     // radial smoothstep(0.35, 0.85) in red (0.9, 0.05, 0.05), scaled by a
     // strength that grows as health drains. The aspect correction from the
     // shader (p.x *= aspect) is baked into the quad's UVs here.
@@ -1215,7 +1215,7 @@ mod tests {
     fn ring_gains_a_side_every_8_streak_hits_capped_at_octagon() {
         // Clean-run fixed points from footage: 0x/7x triangle, 8x square
         // (empty), 15x square 7/8, 16x pentagon, 24x hexagon, 32x heptagon,
-        // 40x octagon full — and stays full (53x, 186x).
+        // 40x octagon full, and stays full (53x, 186x).
         let shape = |n: usize| {
             let (r, t) = ring_after_hits(n);
             (r.sides_at(t), r.progress())
@@ -1361,7 +1361,7 @@ mod tests {
 }
 
 /// Hits per combo-ring tier: the polygon gains a side every 8 streak hits
-/// (triangle → octagon) — verified frame-by-frame against game footage.
+/// (triangle → octagon), verified frame-by-frame against game footage.
 const RING_TIER: u32 = 8;
 /// The fill animates toward the new progress over this long after a hit.
 const RING_FILL_MS: f64 = 150.0;
@@ -1375,7 +1375,7 @@ const MISS_X_MS: f64 = 500.0;
 
 /// The combo ring's shape state. The side count is **not** a pure function
 /// of the current combo: a full ring (8 streak hits) adds a side, and each
-/// miss removes one (min triangle) while the combo itself resets to 0 —
+/// miss removes one (min triangle) while the combo itself resets to 0,
 /// verified in footage where a 35x heptagon dropped to a hexagon then a
 /// pentagon over two misses, and "1x" kept counting inside the pentagon.
 /// The octagon (reached at 40 streak on a clean run) renders full.
@@ -1383,7 +1383,7 @@ const MISS_X_MS: f64 = 500.0;
 pub struct RingState {
     /// Post-miss floor the shape sits on (3..=8). Each miss lowers it by
     /// one side; only the streak formula raises the shape above it again
-    /// (user-verified 16.07.2026: no time-based shrinking — the footage's
+    /// (user-verified 16.07.2026: no time-based shrinking, as the footage's
     /// heptagon → two misses → pentagon is exactly −1 per miss).
     floor: u32,
     /// Current hit streak (== displayed combo).
@@ -1414,14 +1414,14 @@ impl RingState {
 
     /// Displayed side count at `now_ms`. Growth always follows the pure
     /// combo formula ("same combo, same progress, up to 40"); the post-miss
-    /// floor only holds the shape up — and decays a side per
+    /// floor only holds the shape up, and decays a side per
     /// [`RING_SHRINK_STEP_MS`] while no hit has frozen it.
     fn sides_at(&self, _now_ms: f64) -> u32 {
         (3 + self.streak / RING_TIER).max(self.floor).min(8)
     }
 
     /// Target fill fraction of the outline. Only a true 40+ streak renders
-    /// the ring full — a shape held up by the post-miss floor keeps its
+    /// the ring full: a shape held up by the post-miss floor keeps its
     /// normal fill cycle.
     fn progress(&self) -> f32 {
         if self.streak >= 5 * RING_TIER {
@@ -1434,7 +1434,7 @@ impl RingState {
 
 /// Colours of the speed step marks, indexed from the ± sign outward: the
 /// mark next to the sign is green, then orange, then red (so 1.45x reads
-/// red–yellow–green left to right, per the zoomed screenshot).
+/// red-yellow-green left to right, per the zoomed screenshot).
 const SPEED_DOT_COLORS: [[u8; 3]; 3] = [
     [140, 200, 70], // green
     [235, 180, 60], // yellow/orange
@@ -1442,7 +1442,7 @@ const SPEED_DOT_COLORS: [[u8; 3]; 3] = [
 ];
 
 /// Draw the speed-modifier notation centred at (`cx`, baseline `y`): "S",
-/// step dots, and a +/- sign — or a slashed circle for unranked speeds.
+/// step dots, and a +/- sign, or a slashed circle for unranked speeds.
 fn speed_label(b: &mut HudBuilder, cx: f32, y: f32, refd: f32, speed: f32, col: [f32; 4]) {
     let px = refd * 0.0163;
     let close = |s: f32| (speed - s).abs() < 0.005;
@@ -1490,8 +1490,8 @@ fn speed_label(b: &mut HudBuilder, cx: f32, y: f32, refd: f32, speed: f32, col: 
 
     let sign = if up { "+" } else { "-" };
     let dot = (px * 0.16).max(1.5);
-    // Above 1x each step is a "<"-shaped triple of dots — a middle dot with
-    // an upper and lower dot one stride to its right — and consecutive steps
+    // Above 1x each step is a "<"-shaped triple of dots (a middle dot with
+    // an upper and lower dot one stride to its right), and consecutive steps
     // interlock (a step's outer dots share the column of the next step's
     // middle dot), reading like dotted pluses. Below 1x a step is a single
     // dot. Colours run green→orange→red outward from the sign (so 1.45x is
@@ -1567,7 +1567,7 @@ fn health_color(h: f32) -> [u8; 3] {
 /// [`ResultsPart::Side`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ResultsPart {
-    /// Everything — the classic single-player layout.
+    /// Everything: the classic single-player layout.
     Full,
     /// Only the shared map header (title/subtitle/mapper next to the cover).
     Header,
@@ -1668,7 +1668,7 @@ pub fn build_results(
     match part {
         ResultsPart::Full => {
             if portrait {
-                // Under the cover block, full width — no clipping.
+                // Under the cover block, full width (no clipping).
                 b.text(&played, w * 0.05, h * 0.225, fr * 0.026, Align::Left, white);
                 b.text(
                     glabel,
@@ -1857,7 +1857,7 @@ pub fn card_cover_rect(width: u32, height: u32) -> (f32, f32, f32) {
 }
 
 /// Builds the shareable score-card overlay (title block, grade and a
-/// roomy stat spread) — the Discord-embed companion to a full video, in
+/// roomy stat spread), the Discord-embed companion to a full video, in
 /// several aspect ratios: landscape reads left-to-right, square and
 /// portrait (Shorts/TikTok) stack everything centred. The cover quad and
 /// background are drawn by the renderer.
@@ -2178,7 +2178,7 @@ const METER_FADE_MS: f64 = 3000.0;
 const METER_POP_MS: f64 = 130.0;
 
 /// Envelope for a hit of the given age: quick eased rise, gentle quadratic
-/// fall — the difference between ticks snapping in and gliding in.
+/// fall. That is the difference between ticks snapping in and gliding in.
 fn meter_envelope(age_ms: f64) -> f32 {
     let rise = (age_ms / METER_POP_MS).clamp(0.0, 1.0) as f32;
     let rise = rise * rise * (3.0 - 2.0 * rise); // smoothstep
@@ -2251,7 +2251,7 @@ fn draw_error_meters(
     let chrome_boost = if light_bg { 4.0f32 } else { 1.0 };
     if em.enabled {
         // One-sided: hits can only ever be late (the hitbox arms at the
-        // note's time — verified across 6k reference hits, min error 0.0),
+        // note's time, verified across 6k reference hits, min error 0.0),
         // so the bar runs 0 → +80 ms with the anchor on the left.
         let (cx, cy) = (em.x * w, em.y * h);
         let halfw = h * 0.16 * em.scale;
@@ -2350,7 +2350,7 @@ fn draw_error_meters(
 /// (see [`RingState`]), whose outline fills clockwise from the top vertex.
 /// The fill runs to its new value over ~150 ms after each hit, drains to
 /// zero over ~250 ms after a miss, and the shape wobbles briefly when it
-/// gains a side — except when it becomes the octagon, matching the game.
+/// gains a side, except when it becomes the octagon, matching the game.
 fn combo_ring(
     b: &mut HudBuilder,
     cx: f32,
@@ -2413,7 +2413,7 @@ fn combo_ring(
         b.line(a, c, thick, faint);
     }
     // Bright fill: whole edges plus a partial edge, continuous around the
-    // rim. The partial end interpolates ALONG THE EDGE (not by angle — an
+    // rim. The partial end interpolates ALONG THE EDGE (not by angle: an
     // angular point sits on the circumcircle and would jut outside the line).
     let fill_edges = progress.clamp(0.0, 1.0) * n as f32;
     let whole = fill_edges.floor() as usize;
@@ -2458,7 +2458,7 @@ pub struct RaceDeltaInput {
     pub ghost: HudStats,
     /// Displayed score gap: positive = main/left leads.
     pub delta: i64,
-    /// Cursor colours per side (`[main, ghost]`, 0..1 sRGB) — the leader's
+    /// Cursor colours per side (`[main, ghost]`, 0..1 sRGB): the leader's
     /// colour tints the number, arrow and bar.
     pub colors: [[f32; 3]; 2],
     /// Side is past its fail time: its number froze, badge it.
@@ -2489,7 +2489,7 @@ fn race_delta_text(delta: i64) -> (String, i8) {
 
 /// Builds the live racing-delta widget in FULL-frame pixels (it sits at the
 /// split seam, not inside one side's viewport). Styled like the game's stat
-/// panels: grey uppercase label, big value in the interface font — with the
+/// panels: grey uppercase label, big value in the interface font, with the
 /// value and lead arrow tinted in the leading player's cursor colour.
 pub fn build_race_delta(
     atlas: &FontAtlas,
@@ -2580,7 +2580,7 @@ pub fn build_race_delta(
         }
     }
 
-    // A dead run's number froze — say so on its side of the widget.
+    // A dead run's number froze: say so on its side of the widget.
     let fail_col = srgb8_to_linear([225, 90, 60], a);
     let fail_dx = refd * 0.085 * em.scale;
     if input.failed[0] {
@@ -2656,7 +2656,7 @@ pub fn build_race_graph(
     let fr = w.min(h);
 
     // The band ends well above the 'played by' lines and the grade
-    // letters (tops ≈ 0.363 h) — nothing of the graph may reach into the
+    // letters (tops ≈ 0.363 h): nothing of the graph may reach into the
     // per-side text zone below.
     let (gx0, gx1, gy0, gy1) = if portrait {
         (w * 0.06, w * 0.94, h * 0.215, h * 0.345)
@@ -2668,7 +2668,7 @@ pub fn build_race_graph(
 
     // One legend line, right-aligned above the band and clear of the
     // header text column: RACE DELTA · <main> vs <ghost>, each name in
-    // its side's colour — the key to reading the fills below.
+    // its side's colour, the key to reading the fills below.
     let segs = [
         ("RACE DELTA".to_string(), label_col),
         ("   ".to_string(), label_col),
@@ -2723,7 +2723,7 @@ pub fn build_race_graph(
     );
 
     // Area fill between curve and zero line, tinted by whoever leads that
-    // segment (raw triangles — the band is not axis-aligned).
+    // segment (raw triangles, because the band is not axis-aligned).
     let fills = [cursor_col(colors[0], 0.20), cursor_col(colors[1], 0.24)];
     let mut tri = |p0: [f32; 2], p1: [f32; 2], p2: [f32; 2], color: [f32; 4]| {
         for pos in [p0, p1, p2] {

@@ -2958,13 +2958,13 @@ window.addEventListener("DOMContentLoaded", async () => {
     }).catch(() => {});
   }
   // Backstop for anything that changes without an event (a render
-  // finishing mid-playback, say) — the event above does the real work.
+  // finishing mid-playback, say). The event above does the real work.
   setInterval(() => {
     if (!play.on) refresh();
   }, 5000);
 
   setSpeed(1);
-  // Native boots from refresh() once the sources are known — booting
+  // Native boots from refresh() once the sources are known: booting
   // here too would tear the engine down and rebuild it immediately.
   await syncRenderSize();
   await refresh();
