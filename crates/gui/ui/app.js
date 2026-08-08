@@ -699,7 +699,7 @@ function renderOutputTab() {
   $("set-quality").value = String(s.quality);
   paintQuality();
   $("set-tcpfeed").checked = !!s.tcp_feed;
-  $("set-sockchunk").value = String(s.socket_chunk_kib);
+  if (s.transport_note) $("bench-note").textContent = s.transport_note;
   $("set-encoder").value = s.encoder;
   $("set-results").value = String(Math.round(s.results_secs));
   $("set-mblur").value = String(s.motion_blur);
@@ -2155,8 +2155,23 @@ function initControls() {
   $("set-preset").addEventListener("change", () => pushOutput({ preset: $("set-preset").value }));
   $("set-tcpfeed").addEventListener("change", () =>
     pushOutput({ tcp_feed: $("set-tcpfeed").checked }));
-  $("set-sockchunk").addEventListener("change", () =>
-    pushOutput({ socket_chunk_kib: Number($("set-sockchunk").value) }));
+  $("btn-bench-transport").addEventListener("click", async () => {
+    const btn = $("btn-bench-transport");
+    const note = $("bench-note");
+    btn.disabled = true;
+    const was = btn.textContent;
+    btn.textContent = "Measuring…";
+    note.textContent = "Pushing frames through each transport. A few seconds.";
+    try {
+      const line = await invoke("benchmark_transport");
+      note.textContent = line;
+    } catch (e) {
+      note.textContent = `Could not measure: ${e}`;
+    } finally {
+      btn.textContent = was;
+      btn.disabled = false;
+    }
+  });
   $("set-quality").addEventListener("input", paintQuality);
   $("set-quality").addEventListener("change", () => pushOutput({ quality: Number($("set-quality").value) }));
   $("set-encoder").addEventListener("change", () => {

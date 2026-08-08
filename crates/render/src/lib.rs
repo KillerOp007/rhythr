@@ -19,6 +19,7 @@ pub mod quality;
 pub mod race;
 pub mod renderer;
 pub mod scene;
+pub mod transport;
 pub mod video;
 
 pub use builtin::BuiltinAssets;

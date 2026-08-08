@@ -844,7 +844,7 @@ impl Drop for EncodeGuard<'_> {
 
 /// Keeps spawned ffmpeg processes from flashing a console window on Windows
 /// (CREATE_NO_WINDOW); no-op elsewhere.
-pub(crate) fn hide_console_window(cmd: &mut Command) {
+pub fn hide_console_window(cmd: &mut Command) {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;

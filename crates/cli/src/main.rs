@@ -28,6 +28,17 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Measure which way of handing frames to ffmpeg is fastest here, and
+    /// print what each one managed.
+    BenchTransport {
+        /// Output width to measure at; the best transport depends on it.
+        #[arg(long, default_value_t = 1920, value_parser = clap::value_parser!(u32).range(320..=7680))]
+        width: u32,
+        #[arg(long, default_value_t = 1080, value_parser = clap::value_parser!(u32).range(240..=4320))]
+        height: u32,
+        #[arg(long, default_value = "ffmpeg")]
+        ffmpeg: String,
+    },
     /// Print a replay's header and frame statistics.
     Info {
         replay: PathBuf,
@@ -433,6 +444,19 @@ fn main() -> ExitCode {
 
 fn run() -> anyhow::Result<bool> {
     match Cli::parse().command {
+        Command::BenchTransport { width, height, ffmpeg } => {
+            eprintln!("measuring at {width}x{height} (a few seconds)…");
+            let b = rhythia_render::transport::benchmark(&ffmpeg, width, height);
+            for m in &b.results {
+                match m.fps {
+                    Some(f) => println!("  {:<22} {:>8.0} frames/s", m.transport.label(), f),
+                    None => println!("  {:<22} {:>8}", m.transport.label(), "failed"),
+                }
+            }
+            println!();
+            println!("=> {}", b.summary());
+            Ok(true)
+        }
         Command::Info { replay, json } => {
             let r = Replay::from_path(&replay)
                 .with_context(|| format!("reading {}", replay.display()))?;

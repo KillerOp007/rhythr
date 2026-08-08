@@ -81,6 +81,11 @@ struct Settings {
     /// Diagnostic: run the whole pipeline but encode nothing and write no
     /// file, so the feed figure is the transport by itself.
     dry_run: bool,
+    /// What the last transport measurement found, kept so the window can say
+    /// it and so nobody has to remember whether they ever ran one. Persisted
+    /// like every other setting, so it survives restarts and updates and is
+    /// only replaced by measuring again.
+    transport_note: String,
     encoder: String,
     preset: String,
     results_secs: f64,
@@ -145,6 +150,7 @@ impl Default for Settings {
             tcp_feed: true,
             socket_chunk_kib: 256,
             dry_run: false,
+            transport_note: String::new(),
             encoder: "auto".into(),
             preset: "veryfast".into(),
             results_secs: 4.0,
@@ -4065,6 +4071,51 @@ fn quality_steps() -> Vec<QualityStep> {
         .collect()
 }
 
+/// Measures every way of handing frames to ffmpeg at the current output size,
+/// keeps the fastest, and returns a line describing what it found.
+///
+/// The alternative was a dropdown, and a dropdown asks the user to know
+/// something that differs by machine, by platform and by output size — the
+/// owner had to render twenty times across four resolutions to answer it
+/// once. This answers it in a few seconds, for whatever machine it is running
+/// on, and remembers.
+#[tauri::command]
+async fn benchmark_transport(state: tauri::State<'_, App>) -> Result<String, String> {
+    let app = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let (ffmpeg, w, h) = {
+            let inner = app.lock();
+            (
+                resolve_ffmpeg(&inner.settings),
+                inner.settings.width,
+                inner.settings.height,
+            )
+        };
+        if !rhythia_render::video::ffmpeg_runs(&ffmpeg) {
+            return Err(format!("ffmpeg could not be run ({ffmpeg})"));
+        }
+        let bench = rhythia_render::transport::benchmark(&ffmpeg, w, h);
+        let line = bench.summary();
+        let mut inner = app.lock();
+        match bench.best {
+            Some(rhythia_render::transport::Transport::Pipe) => {
+                inner.settings.tcp_feed = false;
+            }
+            Some(rhythia_render::transport::Transport::Socket(n)) => {
+                inner.settings.tcp_feed = true;
+                inner.settings.socket_chunk_kib = (n / 1024) as u32;
+            }
+            // Nothing measured: leave whatever was there rather than guessing.
+            None => {}
+        }
+        inner.settings.transport_note = line.clone();
+        inner.settings.save();
+        Ok(line)
+    })
+    .await
+    .map_err(err_str)?
+}
+
 #[tauri::command]
 async fn probe_encoders(state: tauri::State<'_, App>) -> Result<EncoderProbe, String> {
     let app = state.inner().clone();
@@ -4535,6 +4586,7 @@ fn main() {
             write_diagnostics,
             cancel_render,
             probe_encoders,
+            benchmark_transport,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
