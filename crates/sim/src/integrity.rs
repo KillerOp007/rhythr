@@ -62,6 +62,18 @@ pub fn looks_like_the_wrong_map(
     if hash_mismatch {
         return true;
     }
+    // A failed map-id check is direct evidence the loaded chart is not the one
+    // the replay was recorded on — stronger than any heuristic below. Ignoring
+    // it let a run whose id mismatch is printed two lines above still read as
+    // "possibly manipulated" when the timing heuristics happened not to fire.
+    let id_mismatch = report.checks.iter().any(|c| {
+        !c.ok
+            && (c.name == "map online id matches replay"
+                || c.name == "map legacy id matches replay")
+    });
+    if id_mismatch {
+        return true;
+    }
     let flags = report.flagged_frames;
     let header_hits = replay_hits.max(0) as u32;
     // A wrong map cannot change the FILE: the number of flagged frames still
@@ -235,4 +247,58 @@ pub fn verify_replay(replay: &Replay, map: &Map) -> IntegrityReport {
     let window = hitreg::hit_window_ms(replay);
     let outcome = hitreg::match_hits(&map.notes, &replay.frames, window);
     verify(replay, map, &outcome)
+}
+
+#[cfg(test)]
+mod wrong_map_tests {
+    use super::*;
+
+    fn report_with(checks: Vec<Check>, flagged: u32, derived_hits: u32, orphans: u32) -> IntegrityReport {
+        IntegrityReport {
+            flagged_frames: flagged,
+            derived_hits,
+            derived_misses: 0,
+            attempted_notes: flagged,
+            derived_accuracy_pct: 0.0,
+            orphan_flags: orphans,
+            checks,
+        }
+    }
+
+    fn id_check(ok: bool) -> Check {
+        Check {
+            name: "map legacy id matches replay",
+            severity: Severity::Warning,
+            ok,
+            expected: String::new(),
+            actual: String::new(),
+        }
+    }
+
+    /// The case reproduced from testdata: a failed id check is definitive
+    /// evidence of the wrong chart, even when the timing heuristics do not
+    /// fire (enough hits line up by coincidence). It used to read as
+    /// "possibly manipulated" with the id mismatch printed two lines above.
+    #[test]
+    fn a_failed_id_check_alone_means_wrong_map() {
+        // Heuristics deliberately quiet: flags==header, few orphans, most hits land.
+        let report = report_with(vec![id_check(false)], 471, 366, 105);
+        assert!(looks_like_the_wrong_map(471, &report, false));
+    }
+
+    /// A passing id check with quiet heuristics is NOT the wrong map — this
+    /// must not fire on an honest run just because an id check exists.
+    #[test]
+    fn a_passing_id_check_is_not_a_wrong_map() {
+        let report = report_with(vec![id_check(true)], 471, 366, 105);
+        assert!(!looks_like_the_wrong_map(471, &report, false));
+    }
+
+    /// The heuristic path still stands on its own when no id check is present
+    /// (a cache-JSON map carries no legacy id): most hits finding no note.
+    #[test]
+    fn heuristic_still_catches_a_wrong_map_without_an_id_check() {
+        let report = report_with(vec![], 100, 30, 5); // derived_hits*2 < header
+        assert!(looks_like_the_wrong_map(100, &report, false));
+    }
 }
