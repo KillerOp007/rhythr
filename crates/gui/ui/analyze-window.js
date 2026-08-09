@@ -1979,6 +1979,7 @@ function drawSection() {
           ["L", "Loop the current miss"],
           ["O", "Options drawer"],
           ["F8", "Save an overlay snapshot"],
+          ["F11", "Fullscreen"],
           ["Esc", "Close the drawer"],
         ]
           .map(([k, what]) => `<kbd>${k}</kbd><span>${what}</span>`)
@@ -2028,7 +2029,7 @@ function drawSection() {
     );
     html += card(
       "Shortcuts",
-      `<div class="an-list"><span>Space: play / pause</span><span>← / →: one frame</span><span>Shift + ← / →: one second</span><span>O: options · Esc: hide options</span><span>F8: save overlay snapshot</span><span>Click a note: inspect it</span></div>`,
+      `<div class="an-list"><span>Space: play / pause</span><span>← / →: one frame</span><span>Shift + ← / →: one second</span><span>O: options · Esc: hide options</span><span>F8: save overlay snapshot</span><span>F11: fullscreen</span><span>Click a note: inspect it</span></div>`,
     );
   }
 
@@ -2871,6 +2872,13 @@ window.addEventListener("DOMContentLoaded", async () => {
     if (e.key === "F8") {
       e.preventDefault();
       snapOverlay();
+      return;
+    }
+    if (e.key === "F11") {
+      // Through the backend: the page's own window permissions stop short
+      // of fullscreen, and widening them for one key is the wrong trade.
+      e.preventDefault();
+      invoke("toggle_analyze_fullscreen").catch(() => {});
       return;
     }
     if (typing || e.ctrlKey || e.metaKey || e.altKey) return;

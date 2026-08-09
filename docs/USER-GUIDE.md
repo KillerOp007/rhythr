@@ -175,6 +175,9 @@ The replay fills the window; the gear (or `O`) opens an options drawer.
 - **Not sure what you are looking at?** The Overlays tab opens with a
   legend for every colour, box, dot and line on the picture, and the
   View tab lists every keyboard shortcut the window has.
+- **Filling the screen**: `F11` goes fullscreen, and the window now
+  reopens at the size and position you left it at rather than at
+  1280x800 every time.
 - **Hitboxes** show the game's TRUE hit area (a fixed square, larger
   than the visual note; adjacent areas genuinely overlap, that is
   the game's own rule). At the hit plane the box freezes, and a dot

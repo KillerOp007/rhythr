@@ -46,6 +46,10 @@ const PREVIEW_H: u32 = 720;
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(default)]
 struct Settings {
+    /// Analyze window geometry from the last session, same shape as
+    /// [`Self::window_rect`]. That window is the one whose whole value is
+    /// filling the screen, and it reopened at 1280x800 every single time.
+    analyze_window_rect: Option<(i32, i32, u32, u32)>,
     /// Main window geometry from the last session: (x, y, width, height).
     /// Reopening at the default size every launch meant re-arranging the
     /// window on a large screen every single time.
@@ -153,6 +157,7 @@ impl Default for Settings {
     fn default() -> Self {
         Settings {
             window_rect: None,
+            analyze_window_rect: None,
             last_replay: None,
             last_config: None,
             game_assets: None,
@@ -1145,6 +1150,16 @@ fn open_releases_page(app: tauri::AppHandle) {
 /// lock so the event-loop thread never waits on a render worker.
 static LAST_WINDOW_RECT: std::sync::Mutex<Option<(i32, i32, u32, u32)>> =
     std::sync::Mutex::new(None);
+
+/// The same for the Analyze window, which comes and goes on its own and so
+/// cannot wait for application exit to be recorded.
+static LAST_ANALYZE_RECT: std::sync::Mutex<Option<(i32, i32, u32, u32)>> =
+    std::sync::Mutex::new(None);
+
+/// Smallest geometry worth restoring: the window's own minimum. Anything
+/// under it came from a state (minimised, a broken multi-monitor moment)
+/// that should not be reopened.
+const ANALYZE_MIN: (u32, u32) = (760, 520);
 
 fn window_pos_visible(window: &tauri::WebviewWindow, x: i32, y: i32) -> bool {
     let Ok(monitors) = window.available_monitors() else {
@@ -3977,6 +3992,38 @@ async fn set_preview_quality(
     .map_err(err_str)
 }
 
+/// F11 for the Analyze window. Done in Rust rather than from the page
+/// because the frontend's window permissions do not cover fullscreen, and
+/// widening them for one keystroke is the wrong trade.
+///
+/// Returns the state it ended up in so the page can say which way it went.
+#[tauri::command]
+fn toggle_analyze_fullscreen(app_handle: tauri::AppHandle) -> Result<bool, String> {
+    let Some(win) = app_handle.get_webview_window("analyze") else {
+        return Err("the Analyze window is not open".into());
+    };
+    let now = win.is_fullscreen().map_err(err_str)?;
+    win.set_fullscreen(!now).map_err(err_str)?;
+    Ok(!now)
+}
+
+/// Persists the Analyze window's last known geometry, if it moved at all.
+/// Cheap and idempotent: it writes settings.json only when the value
+/// actually changed.
+fn save_analyze_rect(handle: &tauri::AppHandle) {
+    let Some(rect) = LAST_ANALYZE_RECT.lock().ok().and_then(|slot| *slot) else {
+        return;
+    };
+    let Some(app) = handle.try_state::<App>() else {
+        return;
+    };
+    let mut inner = app.lock();
+    if inner.settings.analyze_window_rect != Some(rect) {
+        inner.settings.analyze_window_rect = Some(rect);
+        inner.settings.save();
+    }
+}
+
 /// Opens (or focuses) the Analyze window: a second webview showing the
 /// replay full size with its own controls.
 #[tauri::command]
@@ -4001,24 +4048,67 @@ async fn open_analyze_window(app_handle: tauri::AppHandle) -> Result<(), String>
     }
     let native_capable =
         cfg!(target_os = "windows") || std::env::var("RHYTHR_NATIVE_ANALYZE").is_ok();
-    let win = WebviewWindowBuilder::new(
+    // Reopen where it was left. Sized first, then positioned, and only
+    // when the remembered origin still lands on a connected monitor: a
+    // screen that has been unplugged since would put the window somewhere
+    // with no way to drag it back.
+    let saved = app_handle
+        .try_state::<App>()
+        .and_then(|app| app.lock().settings.analyze_window_rect);
+    let mut builder = WebviewWindowBuilder::new(
         &app_handle,
         "analyze",
         WebviewUrl::App("analyze.html".into()),
     )
     .title("rhythr · Analyze")
-    .inner_size(1280.0, 800.0)
     .min_inner_size(760.0, 520.0)
     // Live mode paints BEHIND the webview; the page body goes
     // transparent so the wgpu frame shows through.
-    .transparent(native_capable)
-    .build()
-    .map_err(err_str)?;
+    .transparent(native_capable);
+    let restore = saved.filter(|(_, _, w, h)| *w >= ANALYZE_MIN.0 && *h >= ANALYZE_MIN.1);
+    builder = match restore {
+        Some((_, _, w, h)) => builder.inner_size(w as f64, h as f64),
+        None => builder.inner_size(1280.0, 800.0),
+    };
+    let win = builder.build().map_err(err_str)?;
+    if let Some((x, y, _, _)) = restore {
+        if window_pos_visible(&win, x, y) {
+            let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
+        }
+    }
+    // Keep it current while it lives. Same reasoning as the main window:
+    // recorded into a lock of its own, since a drag fires this per pixel
+    // and taking the global state lock here would put the event loop
+    // behind a render worker.
+    {
+        let geom = win.clone();
+        win.on_window_event(move |e| {
+            if !matches!(
+                e,
+                tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_)
+            ) {
+                return;
+            }
+            if geom.is_minimized().unwrap_or(false) || geom.is_maximized().unwrap_or(false) {
+                return;
+            }
+            let (Ok(pos), Ok(size)) = (geom.outer_position(), geom.inner_size()) else {
+                return;
+            };
+            if let Ok(mut slot) = LAST_ANALYZE_RECT.lock() {
+                *slot = Some((pos.x, pos.y, size.width, size.height));
+            }
+        });
+    }
     // Closing it drops the preview back to its normal size.
     let handle = app_handle.clone();
     let win_for_close = win.clone();
     win.on_window_event(move |e| {
         if let tauri::WindowEvent::CloseRequested { api, .. } = e {
+            // Written here rather than at application exit, because this
+            // window is opened and closed many times in a session and the
+            // app may well outlive several of them.
+            save_analyze_rect(&handle);
             // The live thread owns a surface on this window: it MUST stop
             // and drop it before the X11/Win32 window dies, or the next
             // present hits a dead drawable and takes the process down.
@@ -5353,6 +5443,7 @@ fn main() {
             save_data_url,
             set_preview_quality,
             open_analyze_window,
+            toggle_analyze_fullscreen,
             set_clip,
             clear_clip,
             reset_hud_layout,
@@ -5375,6 +5466,7 @@ fn main() {
         .run(|app_handle, event| {
             if let tauri::RunEvent::ExitRequested { .. } = event {
                 // Persist the window geometry once, on the way out.
+                save_analyze_rect(app_handle);
                 let rect = LAST_WINDOW_RECT.lock().ok().and_then(|slot| *slot);
                 if let Some(rect) = rect {
                     let shared = app_handle.state::<App>();
@@ -5503,6 +5595,25 @@ mod settings_migration_tests {
         let mut s: Settings = serde_json::from_str(r#"{"socket_chunk_kib":16}"#).expect("parses");
         s.adopt_legacy_quality();
         assert_eq!(s.socket_chunk_kib, 256);
+    }
+
+    /// The Analyze window is opened and closed many times in a session,
+    /// and a file written before it remembered anything has no field for
+    /// it at all.
+    #[test]
+    fn a_settings_file_without_an_analyze_rect_still_loads() {
+        let mut old: Settings = serde_json::from_str(r#"{"width":1920}"#).expect("parses");
+        old.adopt_legacy_quality();
+        assert_eq!(old.analyze_window_rect, None);
+
+        let mut kept: Settings =
+            serde_json::from_str(r#"{"analyze_window_rect":[10,20,1600,900]}"#).expect("parses");
+        kept.adopt_legacy_quality();
+        assert_eq!(kept.analyze_window_rect, Some((10, 20, 1600, 900)));
+        // The size floor is the window's own minimum, checked at reopen
+        // rather than at load, so a small remembered value survives the
+        // round trip and is simply not used.
+        assert!(ANALYZE_MIN.0 >= 760 && ANALYZE_MIN.1 >= 520);
     }
 
     /// A settings file written before the playback speed existed has no
