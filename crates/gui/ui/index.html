@@ -173,7 +173,10 @@
         <button class="btn small ghost" id="btn-clip-clear" hidden title="Render the full run again">✕</button>
         <span style="flex:1"></span>
         <span id="clip-suggest"></span>
+        <input type="text" id="clip-mark-name" placeholder="name this range" style="width:8.5rem" hidden />
+        <button class="btn small ghost" id="btn-clip-save" hidden title="Save this range so it survives the next one and the next session">Save range</button>
       </div>
+      <div id="clip-marks" hidden></div>
 
       <div id="render-bar">
         <button class="btn primary" id="btn-render" disabled>Render video</button>

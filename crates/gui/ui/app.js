@@ -328,12 +328,48 @@ let tempClip = null;
 function renderClipRow() {
   const clip = status?.clip;
   $("btn-clip-clear").hidden = !clip;
+  $("btn-clip-save").hidden = !clip;
+  $("clip-mark-name").hidden = !clip;
   // The bounds are in the fields; the label keeps the one thing they do
   // not say, which is how long the clip actually is.
   $("clip-label").textContent = clip ? fmtTime(clip[1] - clip[0]) : "";
   writeClipFields(false);
   renderClipSuggestions();
+  renderClipMarks();
   drawScrubber();
+}
+
+/// Saved ranges for this replay.
+///
+/// Deliberately not a render queue: nothing here fetches anything, nothing
+/// renders on its own, and there is still one Render button aimed at
+/// whichever range is current. What it removes is having to hold the
+/// timestamps of a montage in your head while rendering them one by one.
+function renderClipMarks() {
+  const box = $("clip-marks");
+  const marks = status?.bookmarks || [];
+  box.hidden = marks.length === 0;
+  if (!marks.length) {
+    box.textContent = "";
+    return;
+  }
+  const clip = status?.clip;
+  box.innerHTML = marks
+    .map((b, i) => {
+      const on = clip && Math.abs(clip[0] - b.start_ms) < 1 && Math.abs(clip[1] - b.end_ms) < 1;
+      const title = `${fmtClock(b.start_ms)} to ${fmtClock(b.end_ms)} · ${fmtTime(b.end_ms - b.start_ms)}`;
+      return `<span class="mark${on ? " on" : ""}" data-i="${i}"><span class="go" title="${esc(title)}">${esc(b.name)}</span><button class="del" title="Forget this range" aria-label="Forget ${esc(b.name)}">✕</button></span>`;
+    })
+    .join("");
+  for (const el of box.querySelectorAll(".mark")) {
+    const b = marks[Number(el.dataset.i)];
+    el.querySelector(".go").addEventListener("click", () =>
+      call(() => invoke("set_clip", { startMs: b.start_ms, endMs: b.end_ms })),
+    );
+    el.querySelector(".del").addEventListener("click", () =>
+      call(() => invoke("delete_clip_bookmark", { name: b.name })),
+    );
+  }
 }
 
 /// The clip bounds are editable, so a refresh must not overwrite what is
@@ -2220,6 +2256,24 @@ function initControls() {
   $("btn-clip-clear").addEventListener("click", async () => {
     await call(() => invoke("clear_clip"));
     renderClipRow();
+  });
+
+  // Saving takes the name from the field beside it, the same shape the
+  // layout presets use. An empty field means the backend names it after
+  // its own timestamps, so the button always works.
+  const saveClipMark = async () => {
+    if (!status?.clip) return;
+    const el = $("clip-mark-name");
+    await call(() => invoke("add_clip_bookmark", { name: el.value }));
+    el.value = "";
+    renderClipRow();
+  };
+  $("btn-clip-save").addEventListener("click", saveClipMark);
+  $("clip-mark-name").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      saveClipMark();
+    }
   });
 
   $("recent-list").addEventListener("click", (e) => {

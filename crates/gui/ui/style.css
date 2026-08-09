@@ -140,6 +140,22 @@ code { font-family: ui-monospace, Consolas, monospace; color: var(--accent); fon
 .chip.warn { color: var(--warn); border-color: rgba(242, 193, 78, 0.4); }
 /* Inline warning inside a meta line, where a chip would be too loud. */
 .warnish { color: var(--warn); }
+
+/* Saved clip ranges, under the clip row. */
+#clip-marks { display: flex; flex-wrap: wrap; gap: 0.2667rem; margin-top: 0.2667rem; }
+#clip-marks .mark {
+  display: inline-flex; align-items: center; gap: 0.2667rem;
+  border: 1px solid var(--border); border-radius: 999px;
+  padding: 0.0667rem 0.2667rem 0.0667rem 0.5333rem;
+  font-size: 0.7333rem; background: var(--panel);
+}
+#clip-marks .mark button {
+  background: none; border: 0; color: inherit; cursor: pointer;
+  padding: 0 0.1333rem; font: inherit; opacity: 0.6;
+}
+#clip-marks .mark button:hover { opacity: 1; }
+#clip-marks .mark .go { cursor: pointer; }
+#clip-marks .mark.on { border-color: var(--accent); color: var(--accent); }
 .chip.info { color: var(--accent); border-color: rgba(47, 214, 208, 0.35); }
 
 /* Recent replays and layout presets are the same row in two rails. */

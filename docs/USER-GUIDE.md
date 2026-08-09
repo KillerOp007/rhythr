@@ -58,6 +58,15 @@ endorsed by Rhythia or Capo Games.
 
 - **Preview & timeline**: drag the timeline to scrub through the run.
   The green graph is your health, red ticks are misses.
+- **Clip ranges**: render a slice instead of the whole run by dragging the
+  handles or typing the bounds. **Save range** keeps the current one under
+  a name, so marking a second range no longer destroys the first and
+  neither dies with the session. Saved ranges belong to their replay and
+  reappear whenever it is loaded; click one to make it current, ✕ to
+  forget it. This is not a queue: nothing renders on its own, and it is
+  still one Render button pointed at whichever range is current. What it
+  saves you is holding the timestamps of a montage in your head while you
+  render them one at a time.
 - **Save thumbnail**: saves a shareable score card of the run (cover
   art, grade, stats and mods) as a PNG. The dropdown picks the platform
   format: **Discord** (1200 × 630), **YouTube** (1280 × 720),

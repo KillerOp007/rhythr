@@ -103,6 +103,11 @@ struct Settings {
     /// 0 (the default) means no target: the Quality slider decides, and
     /// the size is whatever it comes out as.
     target_size_mb: f64,
+    /// Named clip ranges, so a second range does not destroy the first and
+    /// neither dies with the session. Deliberately NOT a render queue:
+    /// nothing here touches the network, resolves a map or renders on its
+    /// own. It is the same one Render button, aimed somewhere saved.
+    clip_bookmarks: Vec<ClipBookmark>,
     /// A soundtrack to use instead of the map's own. Empty means the map's
     /// audio, which is silence when the map has none: a cache-JSON map
     /// carries only a file NAME, so those rendered silent with no way to
@@ -179,6 +184,7 @@ impl Default for Settings {
             motion_blur: 0,
             output_speed: 1.0,
             target_size_mb: 0.0,
+            clip_bookmarks: Vec::new(),
             audio_path: None,
             audio_own_speed: false,
             last_render_fps: 0.0,
@@ -656,6 +662,9 @@ struct StatusDto {
     bg_video_duration: Option<f64>,
     /// Session clip range (start_ms, end_ms) if the user set one.
     clip: Option<(f64, f64)>,
+    /// Saved clip ranges for the loaded replay, oldest first. Only that
+    /// replay's: a timestamp from a different run means nothing here.
+    bookmarks: Vec<ClipBookmark>,
     /// Height the live preview renders at (Analyze can raise it).
     preview_height: u32,
     /// The skin renders on a bright background: overlay strokes must go
@@ -1668,6 +1677,20 @@ fn assemble_status(inner: &Inner, rendering: bool) -> StatusDto {
         game_ok,
         bg_video_duration: inner.bg_duration,
         clip: inner.clip,
+        bookmarks: {
+            let replay = inner
+                .replay
+                .as_ref()
+                .map(|(p, _)| p.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            inner
+                .settings
+                .clip_bookmarks
+                .iter()
+                .filter(|b| b.replay == replay)
+                .cloned()
+                .collect()
+        },
         preview_height: if inner.preview_height >= 240 {
             inner.preview_height
         } else {
@@ -2784,6 +2807,87 @@ fn mark_undo(state: tauri::State<'_, App>) -> Result<(), String> {
     let mut inner = app.lock();
     remember_layout(&mut inner);
     Ok(())
+}
+
+/// One saved clip range. Tied to the replay it was marked in, since a
+/// timestamp means nothing on a different run: the list shows only the
+/// ones belonging to what is loaded.
+#[derive(Serialize, Deserialize, Clone, PartialEq)]
+struct ClipBookmark {
+    name: String,
+    start_ms: f64,
+    end_ms: f64,
+    /// Full path of the replay it was marked in.
+    replay: String,
+}
+
+/// Saves the current clip under a name.
+#[tauri::command]
+fn add_clip_bookmark(state: tauri::State<'_, App>, name: String) -> Result<StatusDto, String> {
+    let app = state.inner();
+    let mut inner = app.lock();
+    let Some((start_ms, end_ms)) = inner.clip else {
+        return Err("there is no clip to save: set a start and an end first".into());
+    };
+    let Some((path, _)) = inner.replay.as_ref() else {
+        return Err("no replay loaded".into());
+    };
+    let replay = path.to_string_lossy().into_owned();
+    let name = name.trim().to_string();
+    let name = if name.is_empty() {
+        format!("{} to {}", clock_ms(start_ms), clock_ms(end_ms))
+    } else {
+        name
+    };
+    // Saving over a name replaces that one rather than growing a second
+    // entry with the same label, which nobody could tell apart afterwards.
+    let mark = ClipBookmark {
+        name,
+        start_ms,
+        end_ms,
+        replay: replay.clone(),
+    };
+    let existing = inner
+        .settings
+        .clip_bookmarks
+        .iter()
+        .position(|b| b.replay == replay && b.name == mark.name);
+    match existing {
+        Some(i) => inner.settings.clip_bookmarks[i] = mark,
+        None => inner.settings.clip_bookmarks.push(mark),
+    }
+    inner.settings.save();
+    Ok(assemble_status(
+        &inner,
+        app.rendering.load(Ordering::SeqCst),
+    ))
+}
+
+/// Removes one by name, for the loaded replay.
+#[tauri::command]
+fn delete_clip_bookmark(state: tauri::State<'_, App>, name: String) -> Result<StatusDto, String> {
+    let app = state.inner();
+    let mut inner = app.lock();
+    let replay = inner
+        .replay
+        .as_ref()
+        .map(|(p, _)| p.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    inner
+        .settings
+        .clip_bookmarks
+        .retain(|b| !(b.replay == replay && b.name == name));
+    inner.settings.save();
+    Ok(assemble_status(
+        &inner,
+        app.rendering.load(Ordering::SeqCst),
+    ))
+}
+
+/// mm:ss.ms, for naming a bookmark that was not given one.
+fn clock_ms(ms: f64) -> String {
+    let total = (ms.max(0.0) / 1000.0) as u64;
+    format!("{}:{:02}.{:03}", total / 60, total % 60, (ms as u64) % 1000)
 }
 
 /// Sets the clip range (song ms) rendered instead of the full run.
@@ -5461,6 +5565,8 @@ fn main() {
             toggle_analyze_fullscreen,
             set_clip,
             clear_clip,
+            add_clip_bookmark,
+            delete_clip_bookmark,
             reset_hud_layout,
             set_output,
             suggest_file_name,
@@ -5610,6 +5716,44 @@ mod settings_migration_tests {
         let mut s: Settings = serde_json::from_str(r#"{"socket_chunk_kib":16}"#).expect("parses");
         s.adopt_legacy_quality();
         assert_eq!(s.socket_chunk_kib, 256);
+    }
+
+    /// Ranges are saved per replay, because a timestamp from one run means
+    /// nothing on another, and a file written before they existed has no
+    /// field for them at all.
+    #[test]
+    fn saved_clip_ranges_survive_a_file_that_predates_them() {
+        let mut old: Settings = serde_json::from_str(r#"{"width":1920}"#).expect("parses");
+        old.adopt_legacy_quality();
+        assert!(old.clip_bookmarks.is_empty());
+
+        let json = r#"{"clip_bookmarks":[
+            {"name":"the drop","start_ms":41200.0,"end_ms":48900.0,"replay":"/a.rhr"},
+            {"name":"the drop","start_ms":1000.0,"end_ms":2000.0,"replay":"/b.rhr"}
+        ]}"#;
+        let mut s: Settings = serde_json::from_str(json).expect("parses");
+        s.adopt_legacy_quality();
+        assert_eq!(s.clip_bookmarks.len(), 2);
+        // The same name on two different runs is two different ranges, and
+        // only the loaded one's are ever shown.
+        let for_a: Vec<_> = s
+            .clip_bookmarks
+            .iter()
+            .filter(|b| b.replay == "/a.rhr")
+            .collect();
+        assert_eq!(for_a.len(), 1);
+        assert_eq!(for_a[0].start_ms, 41200.0);
+    }
+
+    /// An unnamed range still needs something to click on.
+    #[test]
+    fn an_unnamed_range_is_labelled_by_its_own_timestamps() {
+        assert_eq!(clock_ms(0.0), "0:00.000");
+        assert_eq!(clock_ms(41_200.0), "0:41.200");
+        assert_eq!(clock_ms(125_007.0), "2:05.007");
+        // Negative cannot happen through the UI, but a hand-edited file
+        // must not produce a label with a minus in the middle of it.
+        assert_eq!(clock_ms(-5.0), "0:00.000");
     }
 
     /// The Analyze window is opened and closed many times in a session,
