@@ -2046,6 +2046,16 @@ function initDragDrop() {
   });
   // Second app instance (e.g. double-clicked .rhr) forwards its file here.
   listen("open-replay", (e) => loadPath(e.payload));
+  // The Analyze window can set the clip now, so this one has to hear about
+  // it: the clip row, the scrubber and the render button's "the clip
+  // (0:12)" all read from status.
+  listen("clip-changed", async () => {
+    try {
+      applyStatus(await invoke("get_status"));
+    } catch {
+      // Nothing to say: the next interaction refreshes anyway.
+    }
+  });
 }
 
 // ------------------------------------------------------------ wiring

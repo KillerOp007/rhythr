@@ -998,6 +998,7 @@ function collectMisses() {
     if (el) el.disabled = !has;
   }
   setMissLoop(false);
+  paintClipButtons();
 }
 
 /// The miss the playhead is at or heading into: the one a loop should
@@ -1052,6 +1053,78 @@ function setMissLoop(on) {
     btn.setAttribute("aria-pressed", missLoop ? "true" : "false");
     btn.classList.toggle("on", !!missLoop);
   }
+}
+
+// ------------------------------------------------------------ clip range
+
+/// The clip the render will cut, as the main window holds it. Mirrored
+/// here so the scrub bar can draw it; the backend stays the one copy that
+/// decides, and every change comes back through refresh().
+const clipRange = () => status?.clip || null;
+
+/// Moves one edge of the render's clip to where the playhead is.
+///
+/// This window is the only place with real playback, and until now the
+/// only place the clip could be set was the main window's still-frame
+/// scrubber: you found the moment here, memorised the timestamp, and
+/// typed it in over there.
+async function setClipEdge(which) {
+  const total = runEnd();
+  const cur = clipRange();
+  let [s, e] = cur ? [cur[0], cur[1]] : [0, total];
+  if (which === "in") s = currentMs;
+  else e = currentMs;
+  // An edge dragged past the other one would be an empty clip. Push the
+  // other edge along instead of refusing, which is what someone means by
+  // marking an out point before the in point.
+  const MIN = 500;
+  if (e - s < MIN) {
+    if (which === "in") e = s + MIN;
+    else s = Math.max(0, e - MIN);
+  }
+  await applyClip(s, e, which === "in" ? "Clip starts here." : "Clip ends here.");
+}
+
+/// The whole point of the miss loop, as a clip: the same lead-in and tail
+/// the loop uses, so what you were just watching is what gets rendered.
+async function clipCurrentMiss() {
+  if (!missTimes.length) return;
+  const t = missTimes[currentMissIndex()];
+  await applyClip(
+    Math.max(0, t - MISS_LEAD_MS),
+    t + MISS_TAIL_MS,
+    "Clip set around this miss.",
+  );
+}
+
+async function applyClip(startMs, endMs, note) {
+  try {
+    status = await invoke("set_clip", { startMs, endMs });
+    paintClipButtons();
+    drawScrub();
+    msgFlash(`${note} ${fmtMs(startMs)} to ${fmtMs(endMs)}`);
+  } catch (e) {
+    msg(String(e));
+  }
+}
+
+async function clearClip() {
+  try {
+    status = await invoke("clear_clip");
+    paintClipButtons();
+    drawScrub();
+    msgFlash("Clip off: the whole run will render.");
+  } catch (e) {
+    msg(String(e));
+  }
+}
+
+function paintClipButtons() {
+  const clip = clipRange();
+  const clear = $("an-clip-clear");
+  if (clear) clear.hidden = !clip;
+  const miss = $("an-clip-miss");
+  if (miss) miss.hidden = !missTimes.length;
 }
 
 /// Wraps the playhead back to the start of the looped miss. Guarded because
@@ -1489,11 +1562,43 @@ function drawScrub() {
   if (!len) return;
   ctx.fillStyle = "rgba(139,152,169,0.18)";
   ctx.fillRect(0, h / 2 - 2, w, 4);
+  // The backend has been sending the health curve and the fail point all
+  // along and this bar drew neither, so the smaller window had the poorer
+  // timeline and a failed run had nothing marking where it died.
+  const health = timeline?.health;
+  if (health?.length) {
+    ctx.beginPath();
+    health.forEach((v, i) => {
+      const x = (w * (i + 1)) / health.length;
+      const y = h - v * (h - 6) - 2;
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    });
+    ctx.strokeStyle = "rgba(47,214,208,0.55)";
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+  }
   if (timeline?.miss_times?.length) {
     ctx.fillStyle = "rgba(255,93,108,0.75)";
     for (const t of timeline.miss_times) {
       ctx.fillRect((t / len) * w, h / 2 - 8, 1.2, 16);
     }
+  }
+  if (timeline?.fail_ms != null) {
+    ctx.fillStyle = "#ff5d6c";
+    ctx.fillRect((timeline.fail_ms / len) * w - 1, 0, 2, h);
+  }
+  // The clip the render will cut, dimmed outside and marked at the edges,
+  // so a range set from in here is visible where it was set.
+  const clip = clipRange();
+  if (clip) {
+    const x0 = (clip[0] / len) * w;
+    const x1 = (clip[1] / len) * w;
+    ctx.fillStyle = "rgba(5,7,10,0.5)";
+    ctx.fillRect(0, 0, Math.max(0, x0), h);
+    ctx.fillRect(x1, 0, Math.max(0, w - x1), h);
+    ctx.fillStyle = ACCENT;
+    ctx.fillRect(x0 - 1, 0, 2, h);
+    ctx.fillRect(x1 - 1, 0, 2, h);
   }
   ctx.fillStyle = ACCENT;
   ctx.fillRect((currentMs / len) * w - 1, 2, 2, h - 4);
@@ -2071,6 +2176,8 @@ function drawSection() {
           ["Shift + ← →", "Jump one second"],
           [", .", "Previous / next miss"],
           ["L", "Loop the current miss"],
+          ["I", "Clip starts here"],
+          ["Shift + O", "Clip ends here"],
           ["O", "Options drawer"],
           ["F8", "Save an overlay snapshot"],
           ["F11", "Fullscreen"],
@@ -2123,7 +2230,7 @@ function drawSection() {
     );
     html += card(
       "Shortcuts",
-      `<div class="an-list"><span>Space: play / pause</span><span>← / →: one frame</span><span>Shift + ← / →: one second</span><span>O: options · Esc: hide options</span><span>F8: save overlay snapshot</span><span>F11: fullscreen</span><span>Click a note: inspect it</span></div>`,
+      `<div class="an-list"><span>Space: play / pause</span><span>← / →: one frame</span><span>Shift + ← / →: one second</span><span>O: options · Esc: hide options</span><span>I / Shift+O: clip in / out</span><span>F8: save overlay snapshot</span><span>F11: fullscreen</span><span>Click a note: inspect it</span></div>`,
     );
   }
 
@@ -2881,6 +2988,10 @@ window.addEventListener("DOMContentLoaded", async () => {
   $("an-miss-prev").addEventListener("click", () => gotoMiss(-1));
   $("an-miss-next").addEventListener("click", () => gotoMiss(1));
   $("an-miss-loop").addEventListener("click", () => setMissLoop(!missLoop));
+  $("an-clip-in").addEventListener("click", () => setClipEdge("in"));
+  $("an-clip-out").addEventListener("click", () => setClipEdge("out"));
+  $("an-clip-miss").addEventListener("click", clipCurrentMiss);
+  $("an-clip-clear").addEventListener("click", clearClip);
   $("an-speed").addEventListener("input", () => setSpeed(Number($("an-speed").value) / 100));
   $("an-speed-num").addEventListener("change", () => {
     const v = parseFloat(String($("an-speed-num").value).replace(",", "."));
@@ -2974,6 +3085,21 @@ window.addEventListener("DOMContentLoaded", async () => {
       snapOverlay();
       return;
     }
+    const plain = !typing && !e.ctrlKey && !e.metaKey && !e.altKey;
+    if (plain && !e.shiftKey && e.key.toLowerCase() === "i") {
+      e.preventDefault();
+      setClipEdge("in");
+      return;
+    }
+    if (plain && e.shiftKey && e.key.toLowerCase() === "o") {
+      // Shift+O for the out point: bare O already opens the options
+      // drawer, and quietly reassigning that would cost more than it
+      // gains. The bare-O handler further down only matches without
+      // Shift, so the two cannot both fire.
+      e.preventDefault();
+      setClipEdge("out");
+      return;
+    }
     if (e.key === "F11") {
       // Through the backend: the page's own window permissions stop short
       // of fullscreen, and widening them for one key is the wrong trade.
@@ -3031,6 +3157,18 @@ window.addEventListener("DOMContentLoaded", async () => {
   }).observe($("an-playbar"));
 
   // The main window drives which replay is loaded; follow its changes.
+  listen("clip-changed", async () => {
+    // Set from the main window: pull the range in so the scrub bar and the
+    // "clip off" button agree with it.
+    try {
+      status = await invoke("get_status");
+      paintClipButtons();
+      drawScrub();
+    } catch {
+      // A status that cannot be read here is not worth a message: the
+      // next refresh tick reports it.
+    }
+  });
   listen("sources-changed", () => {
     geoCache.clear();
     dropSegment();

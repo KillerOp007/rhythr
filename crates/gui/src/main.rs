@@ -2788,28 +2788,43 @@ fn mark_undo(state: tauri::State<'_, App>) -> Result<(), String> {
 
 /// Sets the clip range (song ms) rendered instead of the full run.
 #[tauri::command]
-fn set_clip(state: tauri::State<'_, App>, start_ms: f64, end_ms: f64) -> Result<StatusDto, String> {
+fn set_clip(
+    app_handle: tauri::AppHandle,
+    state: tauri::State<'_, App>,
+    start_ms: f64,
+    end_ms: f64,
+) -> Result<StatusDto, String> {
     let app = state.inner();
     let mut inner = app.lock();
     if end_ms - start_ms < 500.0 {
         return Err("clip is too short: give it at least half a second".into());
     }
     inner.clip = Some((start_ms.max(0.0), end_ms));
-    Ok(assemble_status(
-        &inner,
-        app.rendering.load(Ordering::SeqCst),
-    ))
+    let status = assemble_status(&inner, app.rendering.load(Ordering::SeqCst));
+    drop(inner);
+    notify_clip_changed(&app_handle);
+    Ok(status)
 }
 
 #[tauri::command]
-fn clear_clip(state: tauri::State<'_, App>) -> Result<StatusDto, String> {
+fn clear_clip(
+    app_handle: tauri::AppHandle,
+    state: tauri::State<'_, App>,
+) -> Result<StatusDto, String> {
     let app = state.inner();
     let mut inner = app.lock();
     inner.clip = None;
-    Ok(assemble_status(
-        &inner,
-        app.rendering.load(Ordering::SeqCst),
-    ))
+    let status = assemble_status(&inner, app.rendering.load(Ordering::SeqCst));
+    drop(inner);
+    notify_clip_changed(&app_handle);
+    Ok(status)
+}
+
+/// The clip can now be set from either window, so whichever one did not
+/// ask has to be told. Both simply reload their status; the event carries
+/// nothing, so there is no second copy of the range to disagree with.
+fn notify_clip_changed(app_handle: &tauri::AppHandle) {
+    let _ = app_handle.emit("clip-changed", ());
 }
 
 #[tauri::command]

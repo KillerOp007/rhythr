@@ -338,6 +338,8 @@ body.an-native #an-options {
 
 /* Miss walker in the transport: same weight as the frame steps, with the
    loop button reading as engaged while it is on. */
+.an-clipbox { display: inline-flex; gap: 0.2667rem; align-items: center; }
+.an-clipbox .btn { font-size: 0.7333rem; letter-spacing: 0.02em; white-space: nowrap; }
 .an-missnav { display: inline-flex; gap: 0.2667rem; align-items: center; }
 .an-missnav .btn { font-size: 0.7333rem; letter-spacing: 0.02em; white-space: nowrap; }
 .an-missnav .btn.on {

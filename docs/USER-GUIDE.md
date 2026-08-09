@@ -184,6 +184,14 @@ The replay fills the window; the gear (or `O`) opens an options drawer.
   it was live, and the summary says by how much, on average, and in which
   direction. The dotted line on the picture now runs to the nearest edge
   of the hit area, and disappears entirely when the cursor was inside it.
+- **Cutting a clip from here**: `I` marks the start of the render's clip
+  at the playhead and `Shift + O` marks the end, with buttons for both in
+  the playbar. "Clip this miss" takes the same window the miss loop uses,
+  so what you were just watching is what gets rendered. The range is drawn
+  on the scrub bar and the main window picks it up immediately. Before
+  this the clip could only be typed into the main window's still-frame
+  scrubber, so finding a moment here meant memorising a timestamp and
+  re-entering it there.
 - **Filling the screen**: `F11` goes fullscreen, and the window now
   reopens at the size and position you left it at rather than at
   1280x800 every time.
