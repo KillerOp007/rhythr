@@ -3,6 +3,101 @@
 rhythr is an unofficial community tool and is not affiliated with or
 endorsed by Rhythia or Capo Games.
 
+## Unreleased
+
+Getting what you found out of the tool, and four things that were being
+drawn or measured wrong.
+
+### New
+
+- **Slow motion is a render setting.** The Analyze window plays a run from
+  0.01x to 4x and exports PNG, JSON and CSV, so people found slow motion
+  there and then found no way to get it out as a video. Playback speed now
+  sits in the Output tab (`--speed` on the command line): 0.25x stretches
+  a run over four times the length, music slowed with it. The renderer was
+  always capable of this, since cursor position is interpolated between
+  recorded frames, so a slow render is genuinely smoother rather than the
+  same frames held longer. The run's own speed mod is separate and still
+  applied on top; the two multiply, and everything downstream comes off
+  the product so the picture and the sound cannot disagree.
+
+- **Target file size.** Every encoder branch set a quality level and
+  nothing else, so the only way to learn that a clip had overshot an
+  upload limit was to render it and go and look. Pick a size instead and
+  the encoder is aimed at it: single-pass VBR at a computed rate, the
+  target minus what the audio will take, with a margin, aiming
+  deliberately a little under. Measured on a 20 s 720p clip: 3 MB asked,
+  2.8 MB written; 8 MB asked, 7.1 MB written. A target that cannot be met
+  is reported rather than approximated, and AMF (AMD on Windows) says it
+  cannot do this rather than ignoring it.
+
+- **The finished line says how big the file came out**, which the quality
+  control could never tell you in advance.
+
+- **A soundtrack of your own.** Some map files store the song's *name*
+  rather than the song, and those rendered silent with the map card
+  saying only "audio ✕". Output has a Soundtrack row now, and the card
+  says what to do about it. A chosen track follows the run's speed mod by
+  default (it is standing in for the map's song); there is a tick box for
+  when it is a replacement soundtrack that should play unaltered.
+
+- **Clip ranges can be kept and named.** The clip was one value: marking a
+  second range destroyed the first and neither survived a restart. Saved
+  ranges belong to their replay and come back with it. Not a queue:
+  nothing renders on its own, and it is still one Render button pointed at
+  whichever range is current.
+
+- **The Analyze window can hand a clip to the renderer.** `I` and
+  `Shift + O` set the range at the playhead, and "clip this miss" takes
+  the same window the miss loop uses. Before this, the only place to set
+  a clip was the main window's still-frame scrubber, so finding a moment
+  in the one view with real playback meant memorising a timestamp and
+  typing it in somewhere else. The Analyze scrub bar draws the range, and
+  while it was open it also picked up the health curve and the fail marker
+  it had been sent all along and drew neither.
+
+- **The Analyze window keeps its size and position**, and `F11` fills the
+  screen. It was rebuilt at 1280x800 every time, on the window whose whole
+  point is filling the screen.
+
+### Corrected
+
+- **Song titles are drawn in the alphabet they were written in.** The HUD
+  glyph atlas covered printable ASCII and the layout silently skipped
+  everything else, so a Cyrillic title came out as its punctuation and a
+  Japanese one as nothing. In a 669-map library that is 28 maps. Fonts are
+  a chain now rather than one face (the game ships four and exactly one
+  was ever loaded), and a character none of them has becomes a visible
+  mark instead of a hole. An ASCII render is byte-identical to before.
+
+- **A miss says whether it was timing or aim.** Miss distance was measured
+  from the cursor to the note's centre, in a straight line. The game tests
+  a square: a cursor 0.60 cells away straight up is outside the hit area
+  and 0.60 away diagonally is comfortably inside it, and one number cannot
+  mean both. Misses are now measured against that square and split into
+  timing, aim and lost, with the moment of closest approach kept (it was
+  being computed and thrown away) so a timing miss can say how early or
+  late it was. The line on the picture runs to the nearest edge of the hit
+  area, and disappears when the cursor was inside it.
+
+- **Half Ghost reaches the render.** The client's own mod icons name
+  `mod_ghost` and `mod_half_ghost`; rhythr read `mod_ghost` and
+  `mod_nearsighted`, which is not a mod this client has. So the visibility
+  mod the game actually offers was the one that never arrived. A run
+  recorded with it now renders with it. Separately, a mod rhythr cannot
+  reproduce (chaos) is named rather than passing silently, which it had
+  been doing while stamping its icon on the results screen.
+
+- **The seven grade colours come from the game's own textures.** A failed
+  run's F was #c8282d against the game's #a31719, and correcting it
+  condemned the other six by the same evidence: they had been picked off
+  screenshots that went through a scale and a compressor. A real capture
+  and the shipped texture agree to the byte, so the textures are the
+  source. F also became a proper rung rather than a string in two places.
+  It is NOT an accuracy floor: the game shows F on a 99.23% run that ran
+  out of health, so it means the run died and D really is the bottom of
+  the ladder for a pass.
+
 ## v0.6.0 (2026-08-08)
 
 The default render is measured against the game instead of approximating it,
