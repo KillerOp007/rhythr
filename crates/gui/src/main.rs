@@ -91,6 +91,10 @@ struct Settings {
     results_secs: f64,
     /// Motion blur strength 0-2 (tmix).
     motion_blur: u32,
+    /// How fast the finished video plays the run back: 1.0 is the pace it
+    /// was played at, 0.25 is slow motion over four times the length. The
+    /// run's own speed mod is separate and always applied on top.
+    output_speed: f64,
     /// Render speed of the last completed render, for the time estimate.
     last_render_fps: f64,
     /// Song volume in percent (0-150).
@@ -155,6 +159,7 @@ impl Default for Settings {
             preset: "veryfast".into(),
             results_secs: 4.0,
             motion_blur: 0,
+            output_speed: 1.0,
             last_render_fps: 0.0,
             music_volume: 100,
             hitsound_volume: 50,
@@ -325,6 +330,10 @@ impl Settings {
         let (w, h) = clamp_output_size(self.width, self.height);
         self.width = w;
         self.height = h;
+        // Same again for the playback speed: a hand-edited file can carry a
+        // zero or a negative here, and dividing the whole timeline by it
+        // would produce a render of no length or of infinite length.
+        self.output_speed = rhythia_render::video::clamp_output_speed(self.output_speed);
     }
 
     fn load() -> Settings {
@@ -1457,6 +1466,11 @@ fn diagnostics_report(app: &App) -> String {
         "motion_blur",
         cfg.motion_blur != d.motion_blur,
         cfg.motion_blur.to_string(),
+    );
+    note(
+        "output_speed",
+        (cfg.output_speed - d.output_speed).abs() > f64::EPSILON,
+        format!("{}x", cfg.output_speed),
     );
     note(
         "tcp_feed",
@@ -2812,6 +2826,7 @@ struct OutputUpdate {
     preset: Option<String>,
     results_secs: Option<f64>,
     motion_blur: Option<u32>,
+    output_speed: Option<f64>,
     music_volume: Option<u32>,
     hitsound_volume: Option<u32>,
     output_dir: Option<String>,
@@ -2859,6 +2874,9 @@ fn set_output(state: tauri::State<'_, App>, update: OutputUpdate) -> Result<Stat
     }
     if let Some(v) = update.motion_blur {
         s.motion_blur = v.min(2);
+    }
+    if let Some(v) = update.output_speed {
+        s.output_speed = rhythia_render::video::clamp_output_speed(v);
     }
     if let Some(v) = update.music_volume {
         s.music_volume = v.min(150);
@@ -3091,6 +3109,10 @@ fn prepare_segment(
             });
             let opts = rhythia_render::video::VideoOptions {
                 fps,
+                // The Analyze window has its own playback speed control and
+                // scrubs these segments itself, so they are always rendered
+                // at the run's own pace whatever the render setting says.
+                output_speed: 1.0,
                 start_ms: start,
                 end_ms: end,
                 ffmpeg,
@@ -4289,6 +4311,7 @@ fn start_render(
             width: s.width,
             height: s.height,
             fps: s.fps,
+            output_speed: s.output_speed,
             quality: s.quality,
             tcp_feed: s.tcp_feed,
             socket_chunk_kib: s.socket_chunk_kib,
@@ -4418,6 +4441,9 @@ struct RenderJob {
     preset: String,
     results_secs: f64,
     motion_blur: u32,
+    /// How fast the video plays the run back: 1.0 is the pace it was
+    /// played at, 0.25 is slow motion over four times the length.
+    output_speed: f64,
     music_volume: f32,
     hitsounds: Option<rhythia_render::video::HitsoundOptions>,
     ghost: Option<rhythia_render::video::GhostOptions>,
@@ -4588,6 +4614,7 @@ fn run_render_job(
     let opts = rhythia_render::video::VideoOptions {
         extra_output_args: Vec::new(),
         fps: job.fps,
+        output_speed: job.output_speed,
         start_ms,
         end_ms,
         ffmpeg: job.ffmpeg.clone(),
@@ -5400,6 +5427,32 @@ mod settings_migration_tests {
         let mut s: Settings = serde_json::from_str(r#"{"socket_chunk_kib":16}"#).expect("parses");
         s.adopt_legacy_quality();
         assert_eq!(s.socket_chunk_kib, 256);
+    }
+
+    /// A settings file written before the playback speed existed has no
+    /// field for it, and a hand-edited one can carry something that would
+    /// divide the timeline by zero.
+    #[test]
+    fn a_settings_file_without_a_playback_speed_renders_at_normal_speed() {
+        let mut old: Settings = serde_json::from_str(r#"{"width":1920}"#).expect("parses");
+        old.adopt_legacy_quality();
+        assert_eq!(old.output_speed, 1.0);
+
+        for bad in ["0", "-1", "1e9"] {
+            let mut s: Settings =
+                serde_json::from_str(&format!(r#"{{"output_speed":{bad}}}"#)).expect("parses");
+            s.adopt_legacy_quality();
+            assert!(
+                s.output_speed >= rhythia_render::video::OUTPUT_SPEED_MIN
+                    && s.output_speed <= rhythia_render::video::OUTPUT_SPEED_MAX,
+                "{bad} survived as {}",
+                s.output_speed
+            );
+        }
+
+        let mut good: Settings = serde_json::from_str(r#"{"output_speed":0.25}"#).expect("parses");
+        good.adopt_legacy_quality();
+        assert_eq!(good.output_speed, 0.25, "a valid speed is left alone");
     }
 
     /// Rhythia's terms allow one request per UNCACHED map. A map re-uploaded

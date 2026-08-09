@@ -744,6 +744,7 @@ function renderOutputTab() {
   $("set-encoder").value = s.encoder;
   $("set-results").value = String(Math.round(s.results_secs));
   $("set-mblur").value = String(s.motion_blur);
+  $("set-outspeed").value = String(s.output_speed ?? 1);
   $("set-musicvol").value = String(s.music_volume);
   $("musicvol-val").textContent = `${s.music_volume}%`;
   $("set-hitvol").value = String(s.hitsound_volume);
@@ -1704,10 +1705,18 @@ function updateRenderButton() {
       // runMs is SONG time; a speed mod compresses the video to runMs/speed
       // of wall clock, so it produces that many fewer output frames. Ignoring
       // speed over-estimated the time by exactly the speed factor.
-      const speed = status.replay.speed || 1;
+      // The run's speed and the output speed multiply, exactly as they do
+      // in the renderer: at 0.25x there are four times the frames to draw,
+      // and an estimate that ignored it would be out by that factor.
+      const speed = (status.replay.speed || 1) * (status.settings.output_speed || 1);
       const frames = (runMs / speed / 1000) * (status.settings.fps || 60);
       const est = frames / fps + (clip ? 0 : status.settings.results_secs || 0);
-      readyText = `Ready to render ${what} (~${fmtTime(est * 1000)} at last speed)`;
+      const outLen = runMs / speed + (clip ? 0 : (status.settings.results_secs || 0) * 1000);
+      const slow =
+        Math.abs((status.settings.output_speed || 1) - 1) > 0.001
+          ? `, ${fmtTime(outLen)} of video`
+          : "";
+      readyText = `Ready to render ${what} (~${fmtTime(est * 1000)} at last speed${slow})`;
     }
     // ffmpeg is checked here too: `ready` is only replay+map, while the
     // button is also disabled without ffmpeg, so this line used to promise a
@@ -2280,6 +2289,9 @@ function initControls() {
   });
   $("set-results").addEventListener("change", () => pushOutput({ results_secs: Number($("set-results").value) }));
   $("set-mblur").addEventListener("change", () => pushOutput({ motion_blur: Number($("set-mblur").value) }));
+  $("set-outspeed").addEventListener("change", () =>
+    pushOutput({ output_speed: Number($("set-outspeed").value) }),
+  );
   $("set-musicvol").addEventListener("input", () => { $("musicvol-val").textContent = `${$("set-musicvol").value}%`; });
   $("set-musicvol").addEventListener("change", () => pushOutput({ music_volume: Number($("set-musicvol").value) }));
   $("set-hitvol").addEventListener("input", () => { $("hitvol-val").textContent = `${$("set-hitvol").value}%`; });

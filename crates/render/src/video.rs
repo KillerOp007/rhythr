@@ -72,6 +72,38 @@ pub struct VideoOptions {
     /// backgrounds ride the config's background layers instead.) The
     /// results screen is never touched by it.
     pub background_video: Option<BackgroundVideo>,
+    /// How fast the finished video plays the run back. 1.0 is the pace the
+    /// player played at; 0.25 stretches it over four times as long, 2.0
+    /// halves it.
+    ///
+    /// This is not the speed mod. That one is a fact about the run and is
+    /// already baked into the replay's frame times; this is a choice about
+    /// the video, and the two multiply. Cursor position is interpolated
+    /// between recorded frames, so sampling finer than the recording is
+    /// well defined and slow motion is genuinely smoother rather than the
+    /// same frames held longer.
+    ///
+    /// The results screen keeps its own real-time length: it is an
+    /// appendix, not part of the run.
+    pub output_speed: f64,
+}
+
+/// Slowest and fastest the video may play the run back. The floor keeps a
+/// render from silently becoming hours long (the guard further down would
+/// then blame the replay's timestamps for it); the ceiling is where the
+/// recorded cursor is too sparse for interpolation to mean anything.
+pub const OUTPUT_SPEED_MIN: f64 = 0.1;
+pub const OUTPUT_SPEED_MAX: f64 = 4.0;
+
+/// Output speed as a usable number: out of range is clamped, and anything
+/// that is not a number at all (0, negative, NaN from a bad settings file)
+/// falls back to normal speed rather than dividing the whole timeline by
+/// it.
+pub fn clamp_output_speed(v: f64) -> f64 {
+    if !v.is_finite() || v <= 0.0 {
+        return 1.0;
+    }
+    v.clamp(OUTPUT_SPEED_MIN, OUTPUT_SPEED_MAX)
 }
 
 /// A video background and how the user placed it.
@@ -116,6 +148,7 @@ impl Default for VideoOptions {
             socket_chunk: 256 * 1024,
             discard_output: false,
             background_video: None,
+            output_speed: 1.0,
         }
     }
 }
@@ -267,8 +300,15 @@ pub fn render_video(
     // Results screen only when the clip reaches the end of the run.
     let show_results = opts.results_secs > 0.0 && end_ms >= run_end - 500.0;
     let speed = (replay.speed as f64).clamp(0.25, 3.0);
+    // The run's own speed and the speed the video plays it back at
+    // multiply: a 1.45x run rendered at 0.5x covers song time at 0.725x.
+    // Everything downstream (the clip's wall-clock length, the song time
+    // each frame advances, the audio rate, where the hit sounds land) is
+    // derived from this one number, so the two speeds can never disagree.
+    let out_speed = clamp_output_speed(opts.output_speed);
+    let speed = speed * out_speed;
     let span_ms = (end_ms - opts.start_ms).max(0.0);
-    // Wall-clock length of the clip: song span compressed by the speed mod.
+    // Wall-clock length of the clip: song span compressed by the speed.
     let span_real_ms = span_ms / speed;
     let play_frames = (span_real_ms / 1000.0 * opts.fps as f64).ceil() as u64;
     let play_frames = play_frames.max(1);
@@ -288,9 +328,21 @@ pub fn render_video(
     const MAX_MINUTES: f64 = 240.0;
     let max_frames = (MAX_MINUTES * 60.0 * opts.fps as f64) as u64;
     if total_frames > max_frames {
+        // At 0.1x an ordinary run is still well inside the cap, so this
+        // is almost always a damaged file. Almost: say which of the two it
+        // is rather than blaming the replay for a slow-motion setting.
+        let hint = if out_speed < 1.0 {
+            format!(
+                " (rendering at {out_speed:.2}x makes it {:.0}x longer than the run)",
+                1.0 / out_speed
+            )
+        } else {
+            String::new()
+        };
         return Err(Error::Ffmpeg(format!(
-            "this replay claims to be {:.0} minutes long, which no run is. Its frame timestamps \
-             are damaged; re-export it from the game. (Clip a shorter range to render it anyway.)",
+            "this render would be {:.0} minutes long, which no run is{hint}. If the run really \
+             is short, its frame timestamps are damaged; re-export it from the game. (Clip a \
+             shorter range to render it anyway.)",
             span_real_ms / 60_000.0
         )));
     }
@@ -1524,6 +1576,56 @@ pub fn encoder_error(ffmpeg: &str, encoder: &str) -> Option<String> {
         // not support the required nvenc API version…").
         Ok(out) => Some(last_meaningful_line(&out.stderr)),
         Err(e) => Some(format!("could not run ffmpeg: {e}")),
+    }
+}
+
+#[cfg(test)]
+mod output_speed_tests {
+    use super::*;
+
+    /// A settings file, a script or a text field can all hand this a value
+    /// that would divide the whole timeline by zero or by NaN. Falling back
+    /// to normal speed is the only answer that still produces a video.
+    #[test]
+    fn a_speed_that_is_not_a_speed_becomes_normal_speed() {
+        assert_eq!(clamp_output_speed(0.0), 1.0);
+        assert_eq!(clamp_output_speed(-2.0), 1.0);
+        assert_eq!(clamp_output_speed(f64::NAN), 1.0);
+        assert_eq!(clamp_output_speed(f64::INFINITY), 1.0);
+    }
+
+    #[test]
+    fn out_of_range_is_clamped_rather_than_refused() {
+        assert_eq!(clamp_output_speed(0.001), OUTPUT_SPEED_MIN);
+        assert_eq!(clamp_output_speed(100.0), OUTPUT_SPEED_MAX);
+        assert_eq!(clamp_output_speed(0.25), 0.25);
+        assert_eq!(clamp_output_speed(1.0), 1.0);
+    }
+
+    /// The run's speed mod and the output speed multiply, and every derived
+    /// quantity has to come off the product. Deriving one of them from the
+    /// replay speed alone is exactly how a video ends up with picture and
+    /// sound at different speeds.
+    #[test]
+    fn both_speeds_multiply_into_one_timeline() {
+        // A 1.45x run rendered at half speed.
+        let replay_speed = 1.45f64;
+        let out = clamp_output_speed(0.5);
+        let eff = replay_speed * out;
+        assert!((eff - 0.725).abs() < 1e-9);
+
+        let span_ms = 60_000.0;
+        let fps = 60.0;
+        let span_real_ms = span_ms / eff;
+        let song_dt_ms = 1000.0 / fps * eff;
+        // The clip covers the same song time however it is played back.
+        let frames = (span_real_ms / 1000.0 * fps).ceil();
+        assert!(
+            (frames * song_dt_ms - span_ms).abs() < song_dt_ms,
+            "frames x song step must add back up to the span"
+        );
+        // And half speed really is twice as long as full speed.
+        assert!((span_real_ms - 2.0 * (span_ms / replay_speed)).abs() < 1e-6);
     }
 }
 

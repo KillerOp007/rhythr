@@ -261,6 +261,20 @@
           </select>
         </label>
         <label class="field">
+          <span>Playback speed</span>
+          <select id="set-outspeed">
+            <option value="0.1">0.1x (ten times as long)</option>
+            <option value="0.25">0.25x (four times as long)</option>
+            <option value="0.5">0.5x (twice as long)</option>
+            <option value="0.75">0.75x</option>
+            <option value="1" selected>1x (as played)</option>
+            <option value="1.5">1.5x</option>
+            <option value="2">2x (half as long)</option>
+            <option value="4">4x (a quarter as long)</option>
+          </select>
+          <span class="sub">How fast the video plays the run back. Slow motion draws more frames from the same run, so it takes proportionally longer to render, and the music is slowed with it. The run's own speed mod is a separate thing and is always applied on top of this.</span>
+        </label>
+        <label class="field">
           <span>Music volume <em id="musicvol-val" class="mono">100%</em></span>
           <input type="range" id="set-musicvol" min="0" max="150" step="5" value="100" />
         </label>

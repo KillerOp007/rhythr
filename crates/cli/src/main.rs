@@ -117,6 +117,11 @@ enum Command {
         /// Frames per second (24-240).
         #[arg(long, default_value_t = 60, value_parser = clap::value_parser!(u32).range(24..=240))]
         fps: u32,
+        /// How fast the video plays the run back (0.1-4.0). 0.25 is slow
+        /// motion over four times the length; the run's own speed mod is a
+        /// separate thing and is always applied on top of this.
+        #[arg(long, default_value_t = 1.0)]
+        speed: f64,
         /// Output width in pixels (320-7680).
         #[arg(long, default_value_t = 1920, value_parser = clap::value_parser!(u32).range(320..=7680))]
         width: u32,
@@ -584,6 +589,7 @@ fn run() -> anyhow::Result<bool> {
             start,
             end,
             fps,
+            speed,
             width,
             height,
             quality,
@@ -806,9 +812,23 @@ fn run() -> anyhow::Result<bool> {
             if let Some(g) = &ghost {
                 renderer.ensure_hud_text(&g.replay.player_name);
             }
+            // Clamping in silence would produce a video at a speed nobody
+            // asked for and no way to tell.
+            let speed = {
+                let usable = rhythia_render::video::clamp_output_speed(speed);
+                if (usable - speed).abs() > 1e-9 {
+                    eprintln!(
+                        "note: --speed {speed} is outside {}-{}, rendering at {usable}x",
+                        rhythia_render::video::OUTPUT_SPEED_MIN,
+                        rhythia_render::video::OUTPUT_SPEED_MAX
+                    );
+                }
+                usable
+            };
             let opts = rhythia_render::video::VideoOptions {
                 extra_output_args: Vec::new(),
                 fps,
+                output_speed: speed,
                 start_ms,
                 end_ms,
                 ffmpeg,
@@ -848,14 +868,21 @@ fn run() -> anyhow::Result<bool> {
                 background_video,
             };
 
+            // The two numbers people check before walking away: how much
+            // song is being rendered, and how long the file will be. They
+            // are the same only at 1.00x.
+            let song_secs = (end_ms - start_ms) / 1000.0;
+            let video_secs = song_secs / (r.speed as f64 * speed).max(1e-9);
             println!(
-                "rendering {:.1}s of {} @ {}x{}/{} (speed {:.2}) -> {}",
-                (end_ms - start_ms) / 1000.0,
+                "rendering {song_secs:.1}s of {} @ {}x{}/{} (run {:.2}x, output {:.2}x) -> {:.1}s \
+                 video -> {}",
                 replay.file_name().unwrap_or_default().to_string_lossy(),
                 width,
                 height,
                 fps,
                 r.speed,
+                speed,
+                video_secs,
                 out.display()
             );
             let start_t = std::time::Instant::now();
