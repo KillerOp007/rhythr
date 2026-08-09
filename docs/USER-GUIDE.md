@@ -175,6 +175,15 @@ The replay fills the window; the gear (or `O`) opens an options drawer.
 - **Not sure what you are looking at?** The Overlays tab opens with a
   legend for every colour, box, dot and line on the picture, and the
   View tab lists every keyboard shortcut the window has.
+- **Why a note was missed**: the Misses tab splits them into timing, aim
+  and lost, measured against the game's own hit area rather than against
+  the distance to the note's middle. That matters more than it sounds: the
+  hit area is a *square*, so a cursor 0.6 cells away straight up is
+  outside it while 0.6 away diagonally is comfortably inside. A timing
+  miss means the cursor did cover the note and simply was not there while
+  it was live, and the summary says by how much, on average, and in which
+  direction. The dotted line on the picture now runs to the nearest edge
+  of the hit area, and disappears entirely when the cursor was inside it.
 - **Filling the screen**: `F11` goes fullscreen, and the window now
   reopens at the size and position you left it at rather than at
   1280x800 every time.

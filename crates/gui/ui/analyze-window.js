@@ -659,6 +659,21 @@ let renderBusy = false;
 
 const fmt1 = (v) => (Math.round(v * 10) / 10).toLocaleString("en-US");
 const fmt2 = (v) => (Math.round(v * 100) / 100).toLocaleString("en-US");
+
+/// Why a note was missed, in a word. Comes from the backend, which
+/// measures against the square the game tests rather than the distance to
+/// the note's centre.
+const MISS_KIND_LABEL = { timing: "timing", aim: "aim", far: "not near it" };
+const missKindLabel = (n) => MISS_KIND_LABEL[n.miss_kind] || "miss";
+
+/// The gap to the hit box, phrased so the sign is not something to work
+/// out: inside the box and mistimed reads differently from outside it.
+function missGapText(n) {
+  if (n.near_gap == null) return "-";
+  return n.near_gap <= 0
+    ? `on the note, ${fmt1(Math.abs(n.near_ms - n.t))} ms ${n.near_ms - n.t < 0 ? "early" : "late"}`
+    : `${fmt2(n.near_gap)} cells outside the box`;
+}
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 const esc = (s) =>
   String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -1145,6 +1160,51 @@ function pathFrom(ctx, pts) {
   ctx.closePath();
 }
 
+/// Closest point to (px,py) on the segment a-b.
+function closestOnSegment(ax, ay, bx, by, px, py) {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const len2 = dx * dx + dy * dy;
+  if (len2 <= 1e-9) return [ax, ay];
+  const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / len2));
+  return [ax + dx * t, ay + dy * t];
+}
+
+/// Closest point on a polygon's OUTLINE. The miss line goes here rather
+/// than to the note's centre: what decided the miss was the edge of the
+/// hit area, and a line to the middle draws a distance that never
+/// mattered (and reads as further than the miss actually was).
+function nearestOnOutline(pts, px, py) {
+  let best = null;
+  let bestD = Infinity;
+  for (let i = 0; i < pts.length; i++) {
+    const a = pts[i];
+    const b = pts[(i + 1) % pts.length];
+    const q = closestOnSegment(a[0], a[1], b[0], b[1], px, py);
+    const d = (q[0] - px) ** 2 + (q[1] - py) ** 2;
+    if (d < bestD) {
+      bestD = d;
+      best = q;
+    }
+  }
+  return best;
+}
+
+/// Whether a point is inside a polygon (ray casting). A cursor inside the
+/// hit area at the deciding moment means the miss was about timing, and
+/// there is no distance to draw.
+function pointInPoly(pts, px, py) {
+  let inside = false;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const [xi, yi] = pts[i];
+    const [xj, yj] = pts[j];
+    if (yi > py !== yj > py && px < ((xj - xi) * (py - yi)) / (yj - yi) + xi) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
 function drawOverlay() {
   const cv = $("an-canvas");
   const ctx = cv.getContext("2d");
@@ -1271,12 +1331,16 @@ function drawOverlay() {
             ctx.globalAlpha = 0.9 * fade;
             // For a miss, a thin line shows HOW FAR the cursor was from
             // the area at the deciding moment.
-            if (!hit) {
-              const cxm = (q.pts[0][0] + q.pts[1][0] + q.pts[2][0] + q.pts[3][0]) / 4;
-              const cym = (q.pts[0][1] + q.pts[1][1] + q.pts[2][1] + q.pts[3][1]) / 4;
+            // To the nearest EDGE of the hit area, not to its centre: the
+            // edge is what the game tests against, and a line to the middle
+            // draws a gap that is always bigger than the one that decided
+            // the miss. Inside the area there is no gap at all, and the dot
+            // sitting in the box already says the miss was about timing.
+            if (!hit && !pointInPoly(q.pts, cp[0], cp[1])) {
+              const edge = nearestOnOutline(q.pts, cp[0], cp[1]);
               ctx.beginPath();
               ctx.moveTo(cp[0], cp[1]);
-              ctx.lineTo(cxm, cym);
+              ctx.lineTo(edge[0], edge[1]);
               ctx.lineWidth = Math.max(1, lw * 0.4);
               ctx.strokeStyle = pal.boxMiss;
               ctx.setLineDash([lw * 1.5, lw * 1.5]);
@@ -1792,7 +1856,7 @@ function drawSection() {
         ${swatch(pal.raw, "dot")}<span>Raw cursor: the recorded position before that clamp. Tablets record beyond the field; no hit ever happened out there.</span>
         ${swatch(pal.approach, "box")}<span>A note's hit area on approach. Neutral on purpose: nothing has been decided yet.</span>
         ${swatch(pal.box, "box")}<span>The note was taken. The box freezes at the plane and stays until the hit, plus the linger time you set.</span>
-        ${swatch(pal.boxMiss, "box")}<span>The note was missed. It survives to the end of the hit window, then the line shows how far the cursor stayed away.</span>
+        ${swatch(pal.boxMiss, "box")}<span>The note was missed. It survives to the end of the hit window, then a line shows the gap from the cursor to the nearest EDGE of the hit area, which is what the game tests. No line means the cursor was inside the area and the miss was about timing.</span>
         ${swatch(pal.main, "dot")}<span>Verdict dot: where the cursor sat at the exact moment the note resolved.</span>
       </div>`,
     );
@@ -1883,15 +1947,31 @@ function drawSection() {
     }
   } else if (opt.section === "misses") {
     const ms = a.misses;
+    // Sorted by the gap to the hit BOX, which is what decided them, not by
+    // the distance to the note's centre.
     const worst = a.notes
-      .filter((n) => !n.hit && n.near_dist != null)
-      .sort((x, y) => x.near_dist - y.near_dist)
+      .filter((n) => !n.hit && n.near_gap != null)
+      .sort((x, y) => x.near_gap - y.near_gap)
       .slice(0, 20);
+    const early = ms.timing_median_ms < 0;
     html += card(
       "Summary",
       kv("Total", `${ms.count}`) +
         (ms.count
-          ? kv("Barely / lost", `${Math.round(ms.barely_pct)}% / ${Math.round(ms.lost_pct)}%`, "Barely: within 0.65 cells · lost: never within 1.2") +
+          ? kv(
+              "Timing / aim / lost",
+              `${Math.round(ms.timing_pct)}% / ${Math.round(ms.aim_pct)}% / ${Math.round(ms.far_pct)}%`,
+              "Timing: the cursor did cover the note, just not while it was live. " +
+                "Aim: it came within half a cell of the hit box and never covered it. " +
+                "Lost: it was not in the area.",
+            ) +
+            (ms.timing_pct > 0
+              ? kv(
+                  "Timing misses were",
+                  `${fmt1(Math.abs(ms.timing_median_ms))} ms ${early ? "early" : "late"} (median)`,
+                  "How far the closest approach sat from the note's own time.",
+                )
+              : "") +
             kv("Context", `${ms.on_fast_jumps} fast jumps · ${ms.on_streams} streams · ${ms.other} other`)
           : ""),
     );
@@ -1901,7 +1981,7 @@ function drawSection() {
         `<div class="an-list">${worst
           .map(
             (n) =>
-              `<a class="an-jump" data-t="${n.t}" data-note="${n.i}">${fmtMs(n.t)} · ${fmt2(n.near_dist)} cells away</a>`,
+              `<a class="an-jump" data-t="${n.t}" data-note="${n.i}">${fmtMs(n.t)} · ${missGapText(n)}</a>`,
           )
           .join("")}</div>`,
       );
@@ -1916,7 +1996,21 @@ function drawSection() {
             (n.hit
               ? kv("Timing", `${n.err_ms >= 0 ? "+" : ""}${fmt1(n.err_ms)} ms (${n.err_ms >= 0 ? "late" : "early"})`) +
                 kv("Hit offset", `${fmt2(n.dist)} cells (${fmt2(n.off_x)}, ${fmt2(n.off_y)})`)
-              : kv("Closest approach", n.near_dist != null ? `${fmt2(n.near_dist)} cells` : "-")) +
+              : kv(
+                  "Why it missed",
+                  n.near_gap != null
+                    ? `${missKindLabel(n)} · ${missGapText(n)}`
+                    : "-",
+                  "Measured against the game's own hit area, which is a square: " +
+                    "a cursor 0.6 cells away straight up is outside it, and 0.6 " +
+                    "away diagonally is well inside.",
+                ) +
+                (n.near_ms != null
+                  ? kv(
+                      "Closest approach",
+                      `${n.near_ms - n.t >= 0 ? "+" : ""}${fmt1(n.near_ms - n.t)} ms · ${fmt2(n.near_dist)} cells from the centre`,
+                    )
+                  : "")) +
             kv("Approach speed", `${fmt1(n.approach_v)} cells/s`)
         : `<p class="hint">Click a note in the replay to inspect it. Pause first (Space) and step with ← / → to catch a single frame.</p>`,
     );
@@ -2333,7 +2427,10 @@ async function exportJson() {
 async function exportCsv() {
   const p = await dialog.save({ defaultPath: `${expBase()}.csv`, filters: [{ name: "CSV", extensions: ["csv"] }] });
   if (!p) return;
-  const rows = ["side,note,time_ms,grid_x,grid_y,hit,hit_ms,err_ms,off_x,off_y,dist_cells,near_dist_cells,approach_speed"];
+  const rows = [
+    "side,note,time_ms,grid_x,grid_y,hit,hit_ms,err_ms,off_x,off_y,dist_cells," +
+      "near_dist_cells,near_gap_cells,near_ms,miss_kind,approach_speed",
+  ];
   const emit = (side, notes) => {
     for (const n of notes) {
       rows.push(
@@ -2350,6 +2447,9 @@ async function exportCsv() {
           n.off_y != null ? n.off_y.toFixed(4) : "",
           n.dist != null ? n.dist.toFixed(4) : "",
           n.near_dist != null ? n.near_dist.toFixed(4) : "",
+          n.near_gap != null ? n.near_gap.toFixed(4) : "",
+          n.near_ms != null ? n.near_ms.toFixed(1) : "",
+          n.miss_kind || "",
           n.approach_v.toFixed(2),
         ].join(","),
       );

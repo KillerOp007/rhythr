@@ -12,7 +12,7 @@
 
 use rhythia_formats::map::Map;
 use rhythia_formats::rhr::Replay;
-use rhythia_sim::hitreg::{hit_window_ms, match_hits};
+use rhythia_sim::hitreg::{hit_window_ms, match_hits, HITBOX_HALF};
 use rhythia_sim::integrity;
 use serde::Serialize;
 
@@ -159,20 +159,64 @@ pub struct NoteAnalysis {
     pub off_x: Option<f32>,
     pub off_y: Option<f32>,
     pub dist: Option<f32>,
-    /// Misses: closest the cursor came within ±250 ms of the note time.
+    /// Misses: closest the cursor came to the note CENTRE within ±250 ms
+    /// of the note time (Euclidean, cells). Useful as a distance; useless
+    /// as a verdict, because the game's hit area is a square.
     pub near_dist: Option<f32>,
+    /// Misses: how far outside the hit BOX the cursor stayed at its
+    /// closest, in cells. Zero or below means it was inside the box at
+    /// some point and the miss was about timing, not aim.
+    ///
+    /// This is the number that answers the question. The game tests
+    /// `|dx| <= 0.56875 && |dy| <= 0.56875` (Chebyshev), so 0.60 cells
+    /// away straight up is just outside while 0.60 away diagonally is
+    /// comfortably inside, and a Euclidean figure cannot tell them apart.
+    pub near_gap: Option<f32>,
+    /// Misses: song time of that closest approach. Compare with `t` for
+    /// how early or late it was.
+    pub near_ms: Option<f64>,
+    /// Misses: whether the cursor got there at the wrong time, missed the
+    /// box, or was never near it.
+    pub miss_kind: Option<MissKind>,
     /// Mean cursor speed in the 150 ms before the note (cells/s).
     pub approach_v: f32,
 }
+
+/// Why a note was missed, from the cursor's closest approach to the hit
+/// box rather than to the note's centre.
+#[derive(Serialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[serde(rename_all = "lowercase")]
+pub enum MissKind {
+    /// The cursor covered the note, just not while the note was live.
+    /// `near_ms` says whether that was early or late.
+    Timing,
+    /// It came close but never covered the note.
+    Aim,
+    /// It was not in the area at all.
+    Far,
+}
+
+/// How far outside the box still counts as an aim miss rather than a lost
+/// note. Half a cell past the edge is a hand that was going for it; more
+/// than that and the note was never being attempted.
+pub const AIM_MISS_CELLS: f32 = 0.5;
 
 #[derive(Serialize, Clone, Default)]
 pub struct MissSummary {
     pub count: u32,
     pub avg_near_dist: f64,
-    /// Near misses: cursor got within 0.65 cells but the hit didn't land.
-    pub barely_pct: f64,
-    /// Lost: cursor never came within 1.2 cells.
-    pub lost_pct: f64,
+    /// Share of misses where the cursor DID cover the note, just not while
+    /// it was live. These are timing, and no amount of aim practice
+    /// touches them.
+    pub timing_pct: f64,
+    /// Share where the cursor came within half a cell of the box and never
+    /// covered it.
+    pub aim_pct: f64,
+    /// Share where it was not in the area at all.
+    pub far_pct: f64,
+    /// Median offset of the closest approach from the note's own time, for
+    /// the timing misses. Negative is early.
+    pub timing_median_ms: f64,
     pub on_fast_jumps: u32,
     pub on_streams: u32,
     pub other: u32,
@@ -414,6 +458,9 @@ pub fn analyze(map: &Map, replay: &Replay) -> Analysis {
             off_y: None,
             dist: None,
             near_dist: None,
+            near_gap: None,
+            near_ms: None,
+            miss_kind: None,
             approach_v,
         };
         if let Some(h) = r.hit_ms {
@@ -424,7 +471,13 @@ pub fn analyze(map: &Map, replay: &Replay) -> Analysis {
             na.dist = Some((ox * ox + oy * oy).sqrt());
         } else {
             // Closest approach within ±250 ms (sampled at frame times).
+            // Measured two ways, because they answer different questions:
+            // the Euclidean distance to the centre is how far away the
+            // cursor was, and the Chebyshev distance is whether it was ON
+            // the note, which is the test the game actually applies.
             let mut best = f32::MAX;
+            let mut best_cheb = f32::MAX;
+            let mut best_cheb_ms = 0.0f64;
             let lo = f.partition_point(|fr| fr.ms < t - 250.0);
             for fr in &f[lo..] {
                 if fr.ms > t + 250.0 {
@@ -432,9 +485,26 @@ pub fn analyze(map: &Map, replay: &Replay) -> Analysis {
                 }
                 let (dx, dy) = (fr.x - nx, fr.y - ny);
                 best = best.min((dx * dx + dy * dy).sqrt());
+                let cheb = dx.abs().max(dy.abs());
+                if cheb < best_cheb {
+                    best_cheb = cheb;
+                    best_cheb_ms = fr.ms;
+                }
             }
             if best < f32::MAX {
                 na.near_dist = Some(best);
+            }
+            if best_cheb < f32::MAX {
+                let gap = best_cheb - HITBOX_HALF;
+                na.near_gap = Some(gap);
+                na.near_ms = Some(best_cheb_ms);
+                na.miss_kind = Some(if gap <= 0.0 {
+                    MissKind::Timing
+                } else if gap <= AIM_MISS_CELLS {
+                    MissKind::Aim
+                } else {
+                    MissKind::Far
+                });
             }
         }
         notes.push(na);
@@ -801,19 +871,29 @@ pub fn analyze(map: &Map, replay: &Replay) -> Analysis {
             other += 1;
         }
     }
+    // Classified against the box the game actually tests, not against
+    // invented distances from the note's centre.
+    let kinds: Vec<MissKind> = miss_notes.iter().filter_map(|n| n.miss_kind).collect();
+    let share = |k: MissKind| {
+        finite(if kinds.is_empty() {
+            0.0
+        } else {
+            kinds.iter().filter(|x| **x == k).count() as f64 / kinds.len() as f64 * 100.0
+        })
+    };
+    let mut timing_offsets: Vec<f64> = miss_notes
+        .iter()
+        .filter(|n| n.miss_kind == Some(MissKind::Timing))
+        .filter_map(|n| Some(n.near_ms? - n.t))
+        .collect();
+    timing_offsets.sort_by(f64::total_cmp);
     let misses = MissSummary {
         count: miss_notes.len() as u32,
         avg_near_dist: finite(mean(&near)),
-        barely_pct: finite(if near.is_empty() {
-            0.0
-        } else {
-            near.iter().filter(|d| **d < 0.65).count() as f64 / near.len() as f64 * 100.0
-        }),
-        lost_pct: finite(if near.is_empty() {
-            0.0
-        } else {
-            near.iter().filter(|d| **d >= 1.2).count() as f64 / near.len() as f64 * 100.0
-        }),
+        timing_pct: share(MissKind::Timing),
+        aim_pct: share(MissKind::Aim),
+        far_pct: share(MissKind::Far),
+        timing_median_ms: finite(percentile(&timing_offsets, 0.5)),
         on_fast_jumps: on_fast,
         on_streams: on_stream,
         other,
@@ -1192,6 +1272,95 @@ mod tests {
 
     fn test_replay(frames: Vec<Frame>) -> Replay {
         replay_for(frames, 0)
+    }
+
+    /// The bug: a miss was judged by the Euclidean distance to the note's
+    /// CENTRE, while the game tests a SQUARE. The same 0.60 cells is
+    /// outside the box straight up and comfortably inside it diagonally,
+    /// so one number was being asked to mean two different things.
+    #[test]
+    fn a_diagonal_miss_and_a_straight_one_are_told_apart() {
+        // Note at the centre cell, so its world position is the origin.
+        let map = test_map(vec![Note {
+            time_ms: 1000,
+            x: 1.0,
+            y: 1.0,
+        }]);
+        // Parked 0.60 cells straight up: outside the box (half 0.56875),
+        // and never covering the note. That is an aim miss.
+        let straight: Vec<Frame> = (0..200)
+            .map(|i| frame(i as f64 * 10.0, 0.0, 0.60, false))
+            .collect();
+        let a = analyze(&map, &replay_for(straight, 1));
+        let n = &a.notes[0];
+        assert!(!n.hit);
+        assert_eq!(n.miss_kind, Some(MissKind::Aim), "gap {:?}", n.near_gap);
+        assert!(n.near_gap.unwrap() > 0.0);
+
+        // The same 0.60 cells away, on the diagonal: both axes are inside
+        // 0.56875, so the cursor WAS on the note and the miss is timing.
+        let d = 0.60f32 / std::f32::consts::SQRT_2;
+        let diagonal: Vec<Frame> = (0..200)
+            .map(|i| frame(i as f64 * 10.0, d, d, false))
+            .collect();
+        let a = analyze(&map, &replay_for(diagonal, 1));
+        let n = &a.notes[0];
+        assert!(!n.hit);
+        assert_eq!(n.miss_kind, Some(MissKind::Timing), "gap {:?}", n.near_gap);
+        assert!(n.near_gap.unwrap() <= 0.0);
+
+        // And the Euclidean figure, which used to decide this, is the same
+        // to three decimals in both runs. That is the whole point.
+        assert!((n.near_dist.unwrap() - 0.60).abs() < 0.01);
+    }
+
+    /// The time of closest approach was computed and thrown away, so the
+    /// one question a miss raises (too early, too late, or never there)
+    /// could not be answered.
+    #[test]
+    fn the_moment_of_closest_approach_is_kept() {
+        let map = test_map(vec![Note {
+            time_ms: 1000,
+            x: 1.0,
+            y: 1.0,
+        }]);
+        // Sweeps across the note, passing over it 120 ms before it is due.
+        let frames: Vec<Frame> = (0..300)
+            .map(|i| {
+                let ms = i as f64 * 5.0;
+                let x = (ms - 880.0) as f32 / 200.0;
+                frame(ms, x, 0.0, false)
+            })
+            .collect();
+        let a = analyze(&map, &replay_for(frames, 1));
+        let n = &a.notes[0];
+        assert_eq!(n.miss_kind, Some(MissKind::Timing));
+        let off = n.near_ms.unwrap() - n.t;
+        assert!(
+            (-125.0..=-115.0).contains(&off),
+            "closest approach was {off} ms from the note, expected about -120"
+        );
+        assert!(a.misses.timing_pct > 99.0);
+        assert!(a.misses.timing_median_ms < 0.0, "it was early");
+    }
+
+    /// A cursor on the far side of the field is neither a timing problem
+    /// nor a near miss, and lumping it in with them would flatter every
+    /// summary.
+    #[test]
+    fn a_note_never_attempted_is_not_a_near_miss() {
+        let map = test_map(vec![Note {
+            time_ms: 1000,
+            x: 1.0,
+            y: 1.0,
+        }]);
+        let frames: Vec<Frame> = (0..200)
+            .map(|i| frame(i as f64 * 10.0, 1.3, 1.3, false))
+            .collect();
+        let a = analyze(&map, &replay_for(frames, 1));
+        assert_eq!(a.notes[0].miss_kind, Some(MissKind::Far));
+        assert!(a.misses.far_pct > 99.0);
+        assert_eq!(a.misses.timing_pct, 0.0);
     }
 
     /// Straight move from (−1,0) to (1,0) over one second: 2 cells/s.
