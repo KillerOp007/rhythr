@@ -138,6 +138,8 @@ code { font-family: ui-monospace, Consolas, monospace; color: var(--accent); fon
 .chip.ok { color: var(--ok); border-color: rgba(88, 214, 139, 0.35); }
 .chip.bad { color: var(--danger); border-color: rgba(255, 93, 108, 0.4); }
 .chip.warn { color: var(--warn); border-color: rgba(242, 193, 78, 0.4); }
+/* Inline warning inside a meta line, where a chip would be too loud. */
+.warnish { color: var(--warn); }
 .chip.info { color: var(--accent); border-color: rgba(47, 214, 208, 0.35); }
 
 /* Recent replays and layout presets are the same row in two rails. */

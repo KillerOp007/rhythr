@@ -164,11 +164,20 @@ function renderMapCard() {
   const warn = m.hash_mismatch
     ? `<span class="chip warn" title="The online map changed since this replay was recorded.">map updated since replay</span>`
     : "";
+  // "audio ✕" used to be the whole story, and the render then came out
+  // silent with nothing having said what to do about it. A map file that
+  // stores only the song's NAME is the usual cause, and it is fixable.
+  const custom = status?.settings?.audio_path;
+  const audioLine = m.has_audio
+    ? "audio ✓"
+    : custom
+      ? `audio from ${esc(custom.split(/[\\/]/).pop())}`
+      : `<span class="warnish" title="This map file stores the song's name, not the song. Pick a Soundtrack in the Output tab, or the render is silent.">audio ✕ (silent: set a Soundtrack in Output)</span>`;
   body.innerHTML = `
     <div class="src-title">${esc(m.title || m.song_name)}</div>
     <div class="src-meta">
       ${m.note_count.toLocaleString()} notes · ${fmtTime(m.duration_ms)}<br>
-      audio ${m.has_audio ? "✓" : "✕"} · cover ${m.has_cover ? "✓" : "✕"}
+      ${audioLine} · cover ${m.has_cover ? "✓" : "✕"}
     </div>
     <span class="chip info">${esc(src)}</span> ${warn}`;
 }
@@ -745,6 +754,14 @@ function renderOutputTab() {
   $("set-results").value = String(Math.round(s.results_secs));
   $("set-mblur").value = String(s.motion_blur);
   $("set-outspeed").value = String(s.output_speed ?? 1);
+  // The map's audio is the default and needs no explaining; a chosen file
+  // does, and so does the choice about its speed.
+  const audio = s.audio_path || "";
+  $("set-audio").value = audio;
+  $("set-audio").title = audio;
+  $("btn-audio-clear").hidden = !audio;
+  $("audio-ownspeed-row").hidden = !audio;
+  $("set-audio-ownspeed").checked = !!s.audio_own_speed;
   const target = s.target_size_mb || 0;
   // A value from a settings file (or the CLI) that is not one of the
   // offered sizes must still show as itself rather than snapping to "no
@@ -2321,6 +2338,22 @@ function initControls() {
   );
   $("set-targetsize").addEventListener("change", () =>
     pushOutput({ target_size_mb: Number($("set-targetsize").value) }),
+  );
+  $("btn-audio").addEventListener("click", async () => {
+    const p = await dialog.open({
+      filters: [
+        { name: "Audio", extensions: ["mp3", "ogg", "wav", "flac", "m4a", "aac", "opus", "webm"] },
+        { name: "All files", extensions: ["*"] },
+      ],
+    });
+    if (!p) return;
+    pushOutput({ audio_path: p });
+  });
+  // An empty string is the clear: null would read as "no change" on the way
+  // through, and leave the old track in place.
+  $("btn-audio-clear").addEventListener("click", () => pushOutput({ audio_path: "" }));
+  $("set-audio-ownspeed").addEventListener("change", () =>
+    pushOutput({ audio_own_speed: $("set-audio-ownspeed").checked }),
   );
   $("set-musicvol").addEventListener("input", () => { $("musicvol-val").textContent = `${$("set-musicvol").value}%`; });
   $("set-musicvol").addEventListener("change", () => pushOutput({ music_volume: Number($("set-musicvol").value) }));

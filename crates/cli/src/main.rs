@@ -108,6 +108,11 @@ enum Command {
         /// carries embedded audio.
         #[arg(long)]
         audio: Option<PathBuf>,
+        /// Mux --audio at its own rate instead of rate-shifting it with the
+        /// run's speed mod. Use it when the track is a replacement
+        /// soundtrack rather than the map's song.
+        #[arg(long)]
+        audio_own_speed: bool,
         /// Clip start (ms or mm:ss); default 0.
         #[arg(long)]
         start: Option<String>,
@@ -591,6 +596,7 @@ fn run() -> anyhow::Result<bool> {
             map,
             out,
             audio,
+            audio_own_speed,
             start,
             end,
             fps,
@@ -840,6 +846,7 @@ fn run() -> anyhow::Result<bool> {
                 end_ms,
                 ffmpeg,
                 audio: audio_path,
+                audio_follows_run: !audio_own_speed,
                 tcp_feed: !no_tcp_feed,
                 socket_chunk,
                 discard_output: dry_run,

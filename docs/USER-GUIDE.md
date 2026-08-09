@@ -105,6 +105,13 @@ endorsed by Rhythia or Capo Games.
   file the next render will write is named under the render button, and
   if something is already there the app asks before overwriting it:
   **Replace**, or **Keep both**, which writes `name (2).mp4` alongside.
+- **Soundtrack**: renders with a file you choose instead of the map's own
+  audio. Some map files store only the song's *name* rather than the song,
+  and those used to render silent with nothing saying why; the map card now
+  says so and this is the fix. Leave "Keep this track at its own speed"
+  unticked when the file is the map's song, so it follows a speed mod the
+  way the game does. Tick it when the track is a replacement soundtrack
+  that should play unaltered.
 - **Target file size**: aims the encoder at a size instead of a quality
   level, for anywhere with an upload limit. Frames reach the encoder in a
   single pass and cannot be re-encoded, so it lands *near* the target

@@ -72,6 +72,16 @@ pub struct VideoOptions {
     /// backgrounds ride the config's background layers instead.) The
     /// results screen is never touched by it.
     pub background_video: Option<BackgroundVideo>,
+    /// Whether [`Self::audio`] is the map's own song, and so has to be
+    /// rate-shifted along with the run.
+    ///
+    /// True for the map's embedded audio and for a file standing in for
+    /// it, which is the usual case. False when the track is a replacement
+    /// soundtrack that happens to be playing over the video: then it is
+    /// muxed at its own rate and simply trimmed to length, because
+    /// pitching somebody's chosen music up 45% to match a speed mod is
+    /// never what they meant.
+    pub audio_follows_run: bool,
     /// Aim for a file of about this many MB instead of a quality level.
     ///
     /// Frames arrive over a pipe, so ffmpeg cannot rewind and two-pass is
@@ -195,6 +205,7 @@ impl Default for VideoOptions {
             socket_chunk: 256 * 1024,
             discard_output: false,
             background_video: None,
+            audio_follows_run: true,
             target_size_mb: None,
             output_speed: 1.0,
         }
@@ -605,7 +616,7 @@ pub fn render_video(
         // Speed mod: rate-shift the song like the game does (faster AND
         // higher-pitched). Resample to a known rate first so asetrate
         // scales from a fixed base.
-        let rate = if (speed - 1.0).abs() > 0.001 {
+        let rate = if (speed - 1.0).abs() > 0.001 && opts.audio_follows_run {
             format!(
                 "aresample=48000,asetrate={:.0},aresample=48000,",
                 48000.0 * speed
@@ -1763,6 +1774,21 @@ pub fn encoder_error(ffmpeg: &str, encoder: &str) -> Option<String> {
         // not support the required nvenc API version…").
         Ok(out) => Some(last_meaningful_line(&out.stderr)),
         Err(e) => Some(format!("could not run ffmpeg: {e}")),
+    }
+}
+
+#[cfg(test)]
+mod audio_tests {
+    use super::*;
+
+    /// The map's own song IS the run's song, so it has to follow a speed
+    /// mod the way the game does. Only a deliberately chosen replacement
+    /// track opts out, and the default has to stay on that side: a build
+    /// that defaulted the other way would leave every speed-modded render
+    /// with its music out of sync and nothing on screen to explain it.
+    #[test]
+    fn audio_follows_the_run_unless_something_says_otherwise() {
+        assert!(VideoOptions::default().audio_follows_run);
     }
 }
 

@@ -99,6 +99,15 @@ struct Settings {
     /// 0 (the default) means no target: the Quality slider decides, and
     /// the size is whatever it comes out as.
     target_size_mb: f64,
+    /// A soundtrack to use instead of the map's own. Empty means the map's
+    /// audio, which is silence when the map has none: a cache-JSON map
+    /// carries only a file NAME, so those rendered silent with no way to
+    /// fix it from in here even though the CLI has had --audio all along.
+    audio_path: Option<String>,
+    /// Mux that file at its own rate rather than shifting it with the
+    /// run's speed mod. Off means it stands in for the map's song and
+    /// follows the run, which is what a missing map audio wants.
+    audio_own_speed: bool,
     /// Render speed of the last completed render, for the time estimate.
     last_render_fps: f64,
     /// Song volume in percent (0-150).
@@ -165,6 +174,8 @@ impl Default for Settings {
             motion_blur: 0,
             output_speed: 1.0,
             target_size_mb: 0.0,
+            audio_path: None,
+            audio_own_speed: false,
             last_render_fps: 0.0,
             music_volume: 100,
             hitsound_volume: 50,
@@ -2833,6 +2844,10 @@ struct OutputUpdate {
     motion_blur: Option<u32>,
     output_speed: Option<f64>,
     target_size_mb: Option<f64>,
+    /// An empty string clears the override and goes back to the map's own
+    /// audio, which is how the UI's "Use the map's audio" button works.
+    audio_path: Option<String>,
+    audio_own_speed: Option<bool>,
     music_volume: Option<u32>,
     hitsound_volume: Option<u32>,
     output_dir: Option<String>,
@@ -2883,6 +2898,12 @@ fn set_output(state: tauri::State<'_, App>, update: OutputUpdate) -> Result<Stat
     }
     if let Some(v) = update.output_speed {
         s.output_speed = rhythia_render::video::clamp_output_speed(v);
+    }
+    if let Some(v) = update.audio_path {
+        s.audio_path = (!v.trim().is_empty()).then_some(v);
+    }
+    if let Some(v) = update.audio_own_speed {
+        s.audio_own_speed = v;
     }
     if let Some(v) = update.target_size_mb {
         // Anything not a positive number means "no target", which is the
@@ -3131,6 +3152,9 @@ fn prepare_segment(
                 // And at the preview's own fixed quality: a scrub segment is
                 // not the artefact anyone is sizing.
                 target_size_mb: None,
+                // Silent anyway (audio: None below), so this is only here
+                // to keep the struct honest.
+                audio_follows_run: true,
                 start_ms: start,
                 end_ms: end,
                 ffmpeg,
@@ -4331,6 +4355,8 @@ fn start_render(
             fps: s.fps,
             output_speed: s.output_speed,
             target_size_mb: (s.target_size_mb > 0.0).then_some(s.target_size_mb),
+            audio_path: s.audio_path.clone(),
+            audio_own_speed: s.audio_own_speed,
             quality: s.quality,
             tcp_feed: s.tcp_feed,
             socket_chunk_kib: s.socket_chunk_kib,
@@ -4466,6 +4492,10 @@ struct RenderJob {
     output_speed: f64,
     /// Size target in MB, or None to let the quality setting decide.
     target_size_mb: Option<f64>,
+    /// A soundtrack file to use instead of the map's own audio.
+    audio_path: Option<String>,
+    /// Mux that file at its own rate instead of following the run.
+    audio_own_speed: bool,
     music_volume: f32,
     hitsounds: Option<rhythia_render::video::HitsoundOptions>,
     ghost: Option<rhythia_render::video::GhostOptions>,
@@ -4539,7 +4569,7 @@ fn render_detail(app: &App, job: &RenderJob, encoder: &str, nth: u64) -> String 
     format!(
         "{}{}x{} @{} fps · quality {} (x264 {} / hw {}) · {} · {}
          {} · frame write {} · ghost {} · blur {} · background {} · hitsounds {}
-         replay {} · map {}{} · render #{} since start",
+         replay {} · map {}{} · audio {} · render #{} since start",
         if job.dry_run {
             "DIAGNOSTIC: nothing encoded, no file written\n"
         } else {
@@ -4574,6 +4604,12 @@ fn render_detail(app: &App, job: &RenderJob, encoder: &str, nth: u64) -> String 
         },
         map_source,
         if mismatch { " (HASH MISMATCH)" } else { "" },
+        match (&job.audio_path, job.map.audio.is_some()) {
+            (Some(_), _) if job.audio_own_speed => "chosen file, own speed",
+            (Some(_), _) => "chosen file",
+            (None, true) => "the map's own",
+            (None, false) => "NONE (silent render)",
+        },
         nth,
     )
 }
@@ -4611,9 +4647,18 @@ fn run_render_job(
     let nth = app.renders_done.fetch_add(1, Ordering::SeqCst) + 1;
     let detail = render_detail(app, &job, &encoder, nth);
 
-    // Embedded map audio goes through a temp file for ffmpeg.
+    // A chosen soundtrack wins over the map's own; without one the map's
+    // embedded audio goes through a temp file for ffmpeg. A cache-JSON map
+    // has neither, which is the case this override exists for.
     let mut _audio_tmp: Option<tempfile::NamedTempFile> = None;
-    let audio = if let Some(bytes) = &job.map.audio {
+    let chosen = job
+        .audio_path
+        .as_ref()
+        .map(PathBuf::from)
+        .filter(|p| p.is_file());
+    let audio = if let Some(p) = chosen {
+        Some(p)
+    } else if let Some(bytes) = &job.map.audio {
         let mut tmp = tempfile::Builder::new()
             .prefix("rhythia-audio-")
             .suffix(".mp3")
@@ -4625,6 +4670,9 @@ fn run_render_job(
     } else {
         None
     };
+    // Only a chosen track can ask to keep its own rate: the map's own song
+    // is the run's song by definition.
+    let audio_follows_run = job.audio_path.is_none() || !job.audio_own_speed;
 
     let run_end = if job.replay.failed() {
         f64::from(job.replay.fail_time_ms)
@@ -4646,6 +4694,7 @@ fn run_render_job(
         end_ms,
         ffmpeg: job.ffmpeg.clone(),
         audio,
+        audio_follows_run,
         quality: job.quality,
         tcp_feed: job.tcp_feed,
         socket_chunk: job.socket_chunk_kib as usize * 1024,
