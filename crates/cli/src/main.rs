@@ -551,8 +551,10 @@ fn run() -> anyhow::Result<bool> {
             }
 
             let mut params = rhythia_render::scene::SceneParams::from(&cfg);
-            let renderer = rhythia_render::Renderer::new(width, height, cfg.hud_font.as_deref())
-                .context("initialising GPU renderer")?;
+            let mut renderer =
+                rhythia_render::Renderer::new(width, height, cfg.hud_fonts().as_slice())
+                    .context("initialising GPU renderer")?;
+            renderer.ensure_hud_text(&rhythia_render::hud::atlas_text(&m, &r));
             let skin = renderer.prepare_skin(&cfg);
             // Show the field the player actually saw (mirror/hardrock).
             warn_unreproducible_mods(&r);
@@ -741,8 +743,11 @@ fn run() -> anyhow::Result<bool> {
             };
 
             let params = rhythia_render::scene::SceneParams::from(&cfg);
-            let renderer = rhythia_render::Renderer::new(width, height, cfg.hud_font.as_deref())
-                .context("initialising GPU renderer")?;
+            let mut renderer =
+                rhythia_render::Renderer::new(width, height, cfg.hud_fonts().as_slice())
+                    .context("initialising GPU renderer")?;
+            // The glyph atlas holds ASCII until a title asks for more.
+            renderer.ensure_hud_text(&rhythia_render::hud::atlas_text(&m, &r));
 
             // Pick the fastest working encoder: probe the hardware encoders
             // (NVIDIA, Intel, then VAAPI) unless the user forced a choice.
@@ -798,6 +803,9 @@ fn run() -> anyhow::Result<bool> {
                 }
                 None => None,
             };
+            if let Some(g) = &ghost {
+                renderer.ensure_hud_text(&g.replay.player_name);
+            }
             let opts = rhythia_render::video::VideoOptions {
                 extra_output_args: Vec::new(),
                 fps,

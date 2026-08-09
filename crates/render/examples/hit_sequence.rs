@@ -16,7 +16,7 @@ fn main() {
     let mut params = rhythia_render::scene::SceneParams::from(&cfg);
     params.apply_mods(&mods);
     params.apply_speed(replay.speed);
-    let r = rhythia_render::Renderer::new(1280, 720, cfg.hud_font.as_deref()).unwrap();
+    let r = rhythia_render::Renderer::new(1280, 720, cfg.hud_fonts().as_slice()).unwrap();
     let skin = r.prepare_skin(&cfg);
     let hud = rhythia_render::hud::HudState::new(&map, &replay);
 

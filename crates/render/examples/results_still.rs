@@ -12,7 +12,7 @@ fn main() {
     let mut params = rhythia_render::scene::SceneParams::from(&cfg);
     params.apply_mods(&mods);
     params.apply_speed(replay.speed);
-    let r = rhythia_render::Renderer::new(w, h, cfg.hud_font.as_deref()).unwrap();
+    let r = rhythia_render::Renderer::new(w, h, cfg.hud_fonts().as_slice()).unwrap();
     let hud = rhythia_render::hud::HudState::new(&map, &replay);
     let px = r.render_results(&replay, &map, &hud, &cfg, None).unwrap();
     rhythia_render::write_png(std::path::Path::new(&a[2]), &px, w, h).unwrap();

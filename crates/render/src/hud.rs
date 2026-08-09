@@ -60,30 +60,111 @@ struct Glyph {
     present: bool,
 }
 
-/// A coverage atlas of printable ASCII plus the metrics to lay text out.
+/// The character an atlas draws where none of its fonts has the real one.
+const MISSING_GLYPH: char = '\u{fffd}';
+
+/// A coverage atlas plus the metrics to lay text out.
+///
+/// Printable ASCII is always present. Anything else is added on demand by
+/// [`FontAtlas::ensure_chars`], because song titles are not ASCII: one map
+/// in twenty-five carries Cyrillic, Japanese, Greek or an accented Latin
+/// letter in its title, difficulty or mapper name, and those used to be
+/// dropped one character at a time with nothing said, so `Б.А.У. - Гнида`
+/// rendered as `..`.
 pub struct FontAtlas {
     pub width: usize,
     pub height: usize,
     pub pixels: Vec<u8>, // R8 coverage, row-major
-    glyphs: [Glyph; 128],
+    glyphs: std::collections::HashMap<char, Glyph>,
+    /// Tried in order per character. The game ships three (a default, a
+    /// second one, and a Japanese face) and the bundled approximation is
+    /// always last, so a title reaches for the real font first and still
+    /// gets drawn when the game's assets are not available.
+    fonts: Vec<Font>,
+    /// Everything currently rasterised, so a rebuild can start from what
+    /// the atlas already had rather than losing it.
+    chars: std::collections::BTreeSet<char>,
 }
 
 impl FontAtlas {
-    /// Rasterise the HUD font once into a packed coverage atlas. `custom`
-    /// is the game's own font (Nunito, extracted from the user's install);
-    /// the bundled DejaVu approximation is the fallback.
+    /// Rasterise the HUD font into a packed coverage atlas. `custom` is the
+    /// game's own font (extracted from the user's install); the bundled
+    /// DejaVu approximation is the fallback.
     pub fn new(custom: Option<&[u8]>) -> FontAtlas {
-        let font = custom
-            .and_then(|b| Font::from_bytes(b, FontSettings::default()).ok())
-            .unwrap_or_else(|| {
-                Font::from_bytes(FONT_BYTES, FontSettings::default()).expect("bundled HUD font")
-            });
+        FontAtlas::with_fonts(custom.into_iter().collect::<Vec<_>>().as_slice())
+    }
 
-        // Rasterise every printable ASCII glyph at the base size.
-        let mut cells: Vec<(usize, fontdue::Metrics, Vec<u8>)> = Vec::new();
-        for c in 32u8..127 {
-            let (m, bm) = font.rasterize(c as char, BASE_PX);
-            cells.push((c as usize, m, bm));
+    /// As [`FontAtlas::new`], but with a whole fallback chain: each
+    /// character is drawn by the first font that actually has it, and the
+    /// bundled face is appended as the last resort.
+    pub fn with_fonts(custom: &[&[u8]]) -> FontAtlas {
+        let mut fonts: Vec<Font> = custom
+            .iter()
+            .filter_map(|b| Font::from_bytes(*b, FontSettings::default()).ok())
+            .collect();
+        fonts
+            .push(Font::from_bytes(FONT_BYTES, FontSettings::default()).expect("bundled HUD font"));
+
+        let mut atlas = FontAtlas {
+            width: ATLAS_W,
+            height: 1,
+            pixels: Vec::new(),
+            glyphs: std::collections::HashMap::new(),
+            fonts,
+            chars: (32u8..127).map(|c| c as char).collect(),
+        };
+        atlas.chars.insert(MISSING_GLYPH);
+        atlas.rebuild();
+        atlas
+    }
+
+    /// Adds every character of `text` that is not in the atlas yet, and
+    /// returns whether anything changed (the caller has to re-upload the
+    /// texture if so).
+    ///
+    /// Call it with the strings about to be drawn before drawing them.
+    /// Doing it per render rather than per frame is deliberate: the work is
+    /// a full repack, and the set of strings a render draws is fixed before
+    /// the first frame.
+    pub fn ensure_chars(&mut self, text: &str) -> bool {
+        let added: Vec<char> = text.chars().filter(|c| !self.chars.contains(c)).collect();
+        if added.is_empty() {
+            return false;
+        }
+        self.chars.extend(added);
+        self.rebuild();
+        true
+    }
+
+    /// The first font in the chain that has this character, or None when
+    /// none of them does (CJK without the game's Japanese face, say).
+    fn font_for(&self, ch: char) -> Option<&Font> {
+        self.fonts
+            .iter()
+            .find(|f| f.lookup_glyph_index(ch) != 0)
+            // A space has no outline and legitimately maps to glyph 0 in
+            // some faces; it still has to be measured, so fall back to the
+            // first font rather than treating it as missing.
+            .or_else(|| (ch == ' ').then(|| &self.fonts[0]))
+    }
+
+    /// Rasterises `self.chars` into a freshly packed atlas.
+    fn rebuild(&mut self) {
+        let mut cells: Vec<(char, fontdue::Metrics, Vec<u8>)> =
+            Vec::with_capacity(self.chars.len());
+        for &c in &self.chars {
+            // A character no font covers is drawn as the replacement mark
+            // rather than skipped, so a title that cannot be rendered says
+            // "something was here" instead of quietly closing the gap.
+            let (font, glyph) = match self.font_for(c) {
+                Some(f) => (f, c),
+                None => match self.font_for(MISSING_GLYPH) {
+                    Some(f) => (f, MISSING_GLYPH),
+                    None => (&self.fonts[0], '?'),
+                },
+            };
+            let (m, bm) = font.rasterize(glyph, BASE_PX);
+            cells.push((c, m, bm));
         }
 
         // Shelf-pack into a fixed-width atlas.
@@ -102,36 +183,40 @@ impl FontAtlas {
         let height = (y + row_h + 1).max(1).next_power_of_two();
 
         let mut pixels = vec![0u8; ATLAS_W * height];
-        let mut glyphs = [Glyph::default(); 128];
-        for ((code, m, bm), (px, py)) in cells.iter().zip(placed.iter()) {
+        let mut glyphs = std::collections::HashMap::with_capacity(cells.len());
+        for ((ch, m, bm), (px, py)) in cells.iter().zip(placed.iter()) {
             for row in 0..m.height {
                 let dst = (py + row) * ATLAS_W + px;
                 let src = row * m.width;
                 pixels[dst..dst + m.width].copy_from_slice(&bm[src..src + m.width]);
             }
-            glyphs[*code] = Glyph {
-                ax: *px as f32,
-                ay: *py as f32,
-                aw: m.width as f32,
-                ah: m.height as f32,
-                xmin: m.xmin as f32,
-                ymin: m.ymin as f32,
-                advance: m.advance_width,
-                present: true,
-            };
+            glyphs.insert(
+                *ch,
+                Glyph {
+                    ax: *px as f32,
+                    ay: *py as f32,
+                    aw: m.width as f32,
+                    ah: m.height as f32,
+                    xmin: m.xmin as f32,
+                    ymin: m.ymin as f32,
+                    advance: m.advance_width,
+                    present: true,
+                },
+            );
         }
 
-        FontAtlas {
-            width: ATLAS_W,
-            height,
-            pixels,
-            glyphs,
-        }
+        self.height = height;
+        self.pixels = pixels;
+        self.glyphs = glyphs;
     }
 
     fn glyph(&self, ch: char) -> Option<&Glyph> {
-        let g = self.glyphs.get(ch as usize)?;
-        g.present.then_some(g)
+        // Falling back to the replacement mark keeps a caller that forgot
+        // ensure_chars from silently shortening the string instead.
+        self.glyphs
+            .get(&ch)
+            .or_else(|| self.glyphs.get(&MISSING_GLYPH))
+            .filter(|g| g.present)
     }
 
     /// Advance width of `text` at pixel size `px`.
@@ -148,6 +233,24 @@ impl Default for FontAtlas {
     fn default() -> Self {
         Self::new(None)
     }
+}
+
+/// Every string a render draws that did not come from a number: the song,
+/// its difficulty name, its mappers and the player. Hand this to
+/// [`crate::Renderer::ensure_hud_text`] before rendering so the atlas has
+/// the characters they are written in.
+///
+/// A ghost race draws two players, so pass its replay through here too.
+pub fn atlas_text(map: &Map, replay: &Replay) -> String {
+    let mut s = String::new();
+    s.push_str(&map.meta.song_name);
+    s.push_str(&map.meta.title);
+    s.push_str(&map.meta.custom_difficulty_name);
+    for m in &map.meta.mappers {
+        s.push_str(m);
+    }
+    s.push_str(&replay.player_name);
+    s
 }
 
 /// Horizontal anchor for a laid-out string.
@@ -1406,6 +1509,88 @@ mod tests {
         assert!(atlas.glyph('5').is_some());
         // A wider string measures wider.
         assert!(atlas.measure("SCORE", 40.0) > atlas.measure("S", 40.0));
+    }
+
+    /// The bug: the atlas was an array of 128 slots over `32..127` and the
+    /// layout skipped anything outside it, so `Б.А.У. - Гнида` came out as
+    /// `..`. One map in twenty-five in an ordinary library carries such a
+    /// title, and it is the artefact people post.
+    #[test]
+    fn a_cyrillic_title_is_drawn_rather_than_dropped() {
+        let mut atlas = FontAtlas::new(None);
+        let title = "Б.А.У. - Гнида";
+        assert!(atlas.ensure_chars(title), "the atlas had to grow");
+        for c in "БАУГнида".chars() {
+            // The bundled face covers this alphabet, so every one of these
+            // is the real letter and not the replacement mark standing in.
+            assert!(atlas.font_for(c).is_some(), "no font has {c}");
+            let g = atlas.glyph(c).unwrap_or_else(|| panic!("{c} is missing"));
+            assert!(g.advance > 0.0 && g.aw > 0.0, "{c} rasterised to nothing");
+        }
+        // Each further letter adds width. Under the old array atlas every
+        // one of them added exactly zero, which is how a title turned into
+        // its punctuation.
+        assert!(atlas.measure("Гн", 40.0) > atlas.measure("Г", 40.0));
+        assert!(atlas.measure(title, 40.0) > atlas.measure("Б", 40.0));
+    }
+
+    /// Ensuring the same text twice must not rebuild: the rebuild is a full
+    /// repack, and a caller that ensures per frame would otherwise pay it
+    /// every frame of a render.
+    #[test]
+    fn ensuring_the_same_text_twice_changes_nothing() {
+        let mut atlas = FontAtlas::new(None);
+        assert!(!atlas.ensure_chars("SCORE 100%"), "ASCII is already there");
+        assert!(atlas.ensure_chars("Гнида"));
+        assert!(!atlas.ensure_chars("Гнида"), "second pass rebuilt anyway");
+        let h = atlas.height;
+        assert!(!atlas.ensure_chars(""), "empty text rebuilt the atlas");
+        assert_eq!(atlas.height, h);
+    }
+
+    /// A character no font in the chain covers still occupies its place.
+    /// Drawing nothing would silently shorten the title, which is the
+    /// failure this whole change exists to end; a visible mark is the
+    /// honest outcome.
+    #[test]
+    fn a_character_no_font_has_becomes_a_visible_mark() {
+        let mut atlas = FontAtlas::new(None);
+        // Japanese: the bundled face has no CJK, and the game's own
+        // Japanese font is only present when the user's assets are.
+        let title = "プロポーズ";
+        atlas.ensure_chars(title);
+        for c in title.chars() {
+            let g = atlas.glyph(c).expect("no glyph at all");
+            assert!(g.advance > 0.0, "{c} takes no width");
+        }
+        assert!(atlas.measure(title, 40.0) > 0.0);
+    }
+
+    /// And a caller that never ensured anything still gets something drawn
+    /// rather than a string with holes in it.
+    #[test]
+    fn text_never_ensured_falls_back_instead_of_vanishing() {
+        let atlas = FontAtlas::new(None);
+        assert!(atlas.glyph('Ж').is_some(), "fell through to nothing");
+        assert!(atlas.measure("ЖЖЖ", 40.0) > 0.0);
+    }
+
+    /// The string handed to the atlas has to contain every field the HUD
+    /// actually draws, or the check passes and the render still loses
+    /// characters.
+    #[test]
+    fn atlas_text_covers_every_drawn_field() {
+        let (mut map, mut replay) = missed_note_at(1.0);
+        map.meta.song_name = "Ж song".into();
+        map.meta.title = "Ю title".into();
+        map.meta.custom_difficulty_name = "Ф diff".into();
+        map.meta.mappers = vec!["Э one".into(), "Я two".into()];
+        replay.player_name = "Ц player".into();
+
+        let text = atlas_text(&map, &replay);
+        for c in "ЖЮФЭЯЦ".chars() {
+            assert!(text.contains(c), "{c} was not collected");
+        }
     }
 }
 

@@ -123,6 +123,16 @@ impl SkinConfig {
         if self.hud_font.is_none() {
             self.hud_font = assets.texture("fonts", "default.ttf");
         }
+        if self.hud_font_fallbacks.is_empty() {
+            // The installation ships more than one face and the HUD used to
+            // load exactly the first. A Japanese song title needs the third
+            // (one map in eighty in an ordinary library has one), and the
+            // second covers characters the first happens to miss.
+            self.hud_font_fallbacks = ["default2.ttf", "notosans_jp_extrabold.ttf", "arial.ttf"]
+                .iter()
+                .filter_map(|f| assets.texture("fonts", f))
+                .collect();
+        }
         if self.mod_icons.is_empty() {
             self.mod_icons = assets.mod_icons();
         }

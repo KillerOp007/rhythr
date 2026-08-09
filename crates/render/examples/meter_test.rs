@@ -9,7 +9,7 @@ fn main() {
     cfg.hud.aim_meter.enabled = true;
     let at: f64 = a[3].parse().unwrap();
     let params = rhythia_render::scene::SceneParams::from(&cfg);
-    let r = rhythia_render::Renderer::new(1280, 720, cfg.hud_font.as_deref()).unwrap();
+    let r = rhythia_render::Renderer::new(1280, 720, cfg.hud_fonts().as_slice()).unwrap();
     let skin = r.prepare_skin(&cfg);
     let hud = rhythia_render::hud::HudState::new(&map, &replay);
     let px = r

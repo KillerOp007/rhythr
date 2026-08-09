@@ -3079,10 +3079,12 @@ fn prepare_segment(
                     serde_json::json!({"token": token, "message": msg}),
                 );
             };
-            let renderer = match rhythia_render::Renderer::new(w, h, cfg.hud_font.as_deref()) {
+            let mut renderer = match rhythia_render::Renderer::new(w, h, cfg.hud_fonts().as_slice())
+            {
                 Ok(r) => r,
                 Err(e) => return emit_err(gpu_err(&e)),
             };
+            renderer.ensure_hud_text(&rhythia_render::hud::atlas_text(&map, &replay));
             let ghost_opts = ghost.map(|g| rhythia_render::video::GhostOptions {
                 replay: g,
                 color: GHOST_COLOR,
@@ -3628,8 +3630,9 @@ fn ensure_preview_ctx(app: &App, _time_ms: f64) -> Result<(), String> {
             } else {
                 (base_h * PREVIEW_W / PREVIEW_H, base_h)
             };
-            let renderer = rhythia_render::Renderer::new(pw.max(64), ph, cfg.hud_font.as_deref())
-                .map_err(|e| gpu_err(&e))?;
+            let renderer =
+                rhythia_render::Renderer::new(pw.max(64), ph, cfg.hud_fonts().as_slice())
+                    .map_err(|e| gpu_err(&e))?;
             let mut params = SceneParams::from(&cfg);
             let skin = renderer.prepare_skin(&cfg);
             let (_, r) = inner.replay.as_ref().unwrap();
@@ -4123,8 +4126,9 @@ async fn export_frame(
         let cfg = render_config(&inner);
         let (w, h) = (inner.settings.width, inner.settings.height);
         let mut params = SceneParams::from(&cfg);
-        let renderer = rhythia_render::Renderer::new(w, h, cfg.hud_font.as_deref())
+        let mut renderer = rhythia_render::Renderer::new(w, h, cfg.hud_fonts().as_slice())
             .map_err(|e| gpu_err(&e))?;
+        renderer.ensure_hud_text(&rhythia_render::hud::atlas_text(m, r));
         let skin = renderer.prepare_skin(&cfg);
         let (m, mods) = rhythia_render::mods::map_for_replay(m, r);
         params.apply_mods(&mods);
@@ -4158,8 +4162,9 @@ async fn export_card(
         let (_, r) = inner.replay.as_ref().ok_or("no replay loaded")?;
         let (_, m) = inner.map.as_ref().ok_or("no map loaded")?;
         let cfg = render_config(&inner);
-        let renderer = rhythia_render::Renderer::new(w, h, cfg.hud_font.as_deref())
+        let mut renderer = rhythia_render::Renderer::new(w, h, cfg.hud_fonts().as_slice())
             .map_err(|e| gpu_err(&e))?;
+        renderer.ensure_hud_text(&rhythia_render::hud::atlas_text(m, r));
         let hud = rhythia_render::hud::HudState::new(m, r);
         let pixels = renderer.render_card(r, m, &hud, &cfg).map_err(err_str)?;
         rhythia_render::write_png(Path::new(&path), &pixels, w, h).map_err(err_str)
@@ -4527,8 +4532,14 @@ fn run_render_job(
     job: RenderJob,
 ) -> Result<(PathBuf, rhythia_render::video::RenderStats, String), rhythia_render::Error> {
     let _ = handle.emit("render-stage", "starting GPU renderer");
-    let renderer =
-        rhythia_render::Renderer::new(job.width, job.height, job.cfg.hud_font.as_deref())?;
+    let mut renderer =
+        rhythia_render::Renderer::new(job.width, job.height, job.cfg.hud_fonts().as_slice())?;
+    // The atlas is ASCII until something asks for more, and a song title is
+    // the usual something.
+    renderer.ensure_hud_text(&rhythia_render::hud::atlas_text(&job.map, &job.replay));
+    if let Some(g) = &job.ghost {
+        renderer.ensure_hud_text(&g.replay.player_name);
+    }
     let params = SceneParams::from(&job.cfg);
 
     // Probe hardware encoders unless one was forced.

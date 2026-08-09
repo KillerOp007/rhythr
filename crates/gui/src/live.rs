@@ -161,7 +161,7 @@ pub fn spawn(
             &surface,
             rw,
             rh,
-            init.cfg.hud_font.as_deref(),
+            init.cfg.hud_fonts().as_slice(),
         ) {
             Ok(r) => r,
             Err(e) => return emit_err(format!("live renderer: {e}")),
@@ -192,6 +192,10 @@ pub fn spawn(
 
         let skin = renderer.prepare_skin(&cfg);
         let replay = init.replay;
+        renderer.ensure_hud_text(&rhythia_render::hud::atlas_text(&init.map, &replay));
+        if let Some(g) = &init.ghost {
+            renderer.ensure_hud_text(&g.player_name);
+        }
         let (main_map, main_mods) = rhythia_render::mods::map_for_replay(&init.map, &replay);
         let mut params = SceneParams::from(&cfg);
         params.apply_mods(&main_mods);

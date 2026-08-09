@@ -172,8 +172,8 @@ const COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
 impl Renderer {
-    pub fn new(width: u32, height: u32, hud_font: Option<&[u8]>) -> Result<Renderer, Error> {
-        pollster::block_on(Self::new_async(width, height, hud_font, None, None))
+    pub fn new(width: u32, height: u32, hud_fonts: &[&[u8]]) -> Result<Renderer, Error> {
+        pollster::block_on(Self::new_async(width, height, hud_fonts, None, None))
     }
 
     /// Renderer for the LIVE path: created against an existing Instance
@@ -185,12 +185,12 @@ impl Renderer {
         surface: &wgpu::Surface<'static>,
         width: u32,
         height: u32,
-        hud_font: Option<&[u8]>,
+        hud_fonts: &[&[u8]],
     ) -> Result<Renderer, Error> {
         pollster::block_on(Self::new_async(
             width,
             height,
-            hud_font,
+            hud_fonts,
             Some(instance),
             Some(surface),
         ))
@@ -340,7 +340,7 @@ impl Renderer {
     async fn new_async(
         width: u32,
         height: u32,
-        hud_font: Option<&[u8]>,
+        hud_fonts: &[&[u8]],
         instance: Option<wgpu::Instance>,
         surface: Option<&wgpu::Surface<'static>>,
     ) -> Result<Renderer, Error> {
@@ -594,7 +594,7 @@ impl Renderer {
         });
 
         // --- HUD overlay pipeline ---------------------------------------
-        let hud_atlas = crate::hud::FontAtlas::new(hud_font);
+        let hud_atlas = crate::hud::FontAtlas::with_fonts(hud_fonts);
         let atlas_tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("hud-atlas"),
             size: wgpu::Extent3d {
@@ -951,6 +951,82 @@ impl Renderer {
 
     pub fn dimensions(&self) -> (u32, u32) {
         (self.width, self.height)
+    }
+
+    /// Makes sure every character in `text` can be drawn, rasterising and
+    /// re-uploading the glyph atlas if any of them is new.
+    ///
+    /// Call it once with the strings a render is about to draw (see
+    /// [`crate::hud::atlas_text`]). The atlas starts as printable ASCII
+    /// because that is all a HUD full of numbers needs, and song titles are
+    /// the exception rather than the rule: without this, a Cyrillic or
+    /// Japanese title lost one character at a time and said nothing.
+    ///
+    /// Cheap to call repeatedly: it early-outs unless something was
+    /// missing, and a render's text is fixed before its first frame.
+    pub fn ensure_hud_text(&mut self, text: &str) {
+        if !self.hud_atlas.ensure_chars(text) {
+            return;
+        }
+        let atlas_tex = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("hud-atlas"),
+            size: wgpu::Extent3d {
+                width: self.hud_atlas.width as u32,
+                height: self.hud_atlas.height as u32,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        self.queue.write_texture(
+            atlas_tex.as_image_copy(),
+            &self.hud_atlas.pixels,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(self.hud_atlas.width as u32),
+                rows_per_image: Some(self.hud_atlas.height as u32),
+            },
+            wgpu::Extent3d {
+                width: self.hud_atlas.width as u32,
+                height: self.hud_atlas.height as u32,
+                depth_or_array_layers: 1,
+            },
+        );
+        self.hud_atlas_view = atlas_tex.create_view(&Default::default());
+        // The bind group holds the old view by value, so it has to be
+        // rebuilt too. Results-screen bind groups are built per use from
+        // hud_atlas_view and pick the new one up on their own.
+        let dummy_view = self.dummy_tex.create_view(&Default::default());
+        self.hud_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("hud-bind"),
+            layout: &self.hud_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.hud_screen_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&self.hud_atlas_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&self.hud_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&dummy_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(&dummy_view),
+                },
+            ],
+        });
     }
 
     /// Uploads a skin's bundled textures (from an imported `.rhs`) to the GPU

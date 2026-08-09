@@ -315,6 +315,11 @@ pub struct SkinConfig {
     /// The game's HUD font (Nunito ExtraBold) from the user's own
     /// installation; the bundled DejaVu is the fallback.
     pub hud_font: Option<Vec<u8>>,
+    /// Further faces to try, in order, for characters `hud_font` has not
+    /// got. The game ships a second face and a Japanese one, which is what
+    /// a CJK song title needs: without them such a title reaches the last
+    /// resort and draws as replacement marks.
+    pub hud_font_fallbacks: Vec<Vec<u8>>,
     /// Playfield background colour (`BackgroundRed/Green/Blue`).
     pub background_color: [f32; 3],
     pub cursor_opacity: f32,
@@ -419,6 +424,7 @@ impl Default for SkinConfig {
             hud: HudConfig::default(),
             mod_icons: Vec::new(),
             hud_font: None,
+            hud_font_fallbacks: Vec::new(),
             background_color: [0.0, 0.0, 0.0],
             cursor_opacity: 1.0,
             cursor_rotation_deg: 0.0,
@@ -511,6 +517,18 @@ fn parse_colorset(text: &str) -> Vec<[f32; 3]> {
 }
 
 impl SkinConfig {
+    /// The HUD font chain, in the order a character should be looked for:
+    /// the game's own face first, then whatever else the installation
+    /// ships. The bundled fallback is appended by the atlas itself, so it
+    /// is deliberately not in here.
+    pub fn hud_fonts(&self) -> Vec<&[u8]> {
+        self.hud_font
+            .iter()
+            .chain(self.hud_font_fallbacks.iter())
+            .map(|v| v.as_slice())
+            .collect()
+    }
+
     /// Loads from a `config.json` or an exported/downloaded `.rhs` skin, by
     /// extension. A `.rhs` may bundle textures and a colorset (see
     /// `docs/reference/rhs-skin-format.md`); those are extracted and rendered
@@ -694,6 +712,7 @@ impl SkinConfig {
         Ok(SkinConfig {
             mod_icons: Vec::new(),
             hud_font: None,
+            hud_font_fallbacks: Vec::new(),
             // App/CLI-only, never part of a skin.
             custom_bg_dim: None,
             custom_bg_video: false,
