@@ -280,7 +280,8 @@ pub struct HudStats {
     pub ring_fill_at_miss: f32,
 }
 
-/// Accuracy letter grade. Thresholds are Rhythia/SS-style on final accuracy.
+/// Letter grade. Six rungs come from the final accuracy; F is separate and
+/// means the run died, which is why it is not in `from_accuracy`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Grade {
     SS,
@@ -289,11 +290,17 @@ pub enum Grade {
     B,
     C,
     D,
+    /// The run failed. Not an accuracy band: the game's own results screen
+    /// shows F on a 99.23% run that ran out of health, so a passed run
+    /// never gets one however low it scored.
+    F,
 }
 
 impl Grade {
     /// Grade from an accuracy percentage (0..100). Official thresholds:
     /// SS 100%, S ≥99%, A 95-98.99%, B 90-94.99%, C 85-89.99%, D below.
+    /// D really is the floor. F is [`Grade::F`] and comes from failing, not
+    /// from scoring badly, so it is deliberately unreachable from here.
     pub fn from_accuracy(acc: f32) -> Grade {
         match acc {
             a if a >= 100.0 => Grade::SS,
@@ -305,7 +312,7 @@ impl Grade {
         }
     }
 
-    fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             Grade::SS => "SS",
             Grade::S => "S",
@@ -313,18 +320,27 @@ impl Grade {
             Grade::B => "B",
             Grade::C => "C",
             Grade::D => "D",
+            Grade::F => "F",
         }
     }
 
-    /// sRGB colour, pixel-picked from game/site screenshots of every grade.
-    fn color(self) -> [u8; 3] {
+    /// sRGB colour, read out of the game's own rating textures
+    /// (`Textures/Game/ratings/score_*.png`) rather than off a screenshot.
+    /// The two agree exactly where both exist: a real results-screen capture
+    /// draws its F in #a31719, which is score_F.png's own colour to the
+    /// byte, so the game tints these badges with nothing. That is what
+    /// makes the textures authoritative here, and it is why every value
+    /// below changed slightly from the screenshot-picked set that preceded
+    /// it (a screenshot had been through a scale and a compressor).
+    pub fn color(self) -> [u8; 3] {
         match self {
-            Grade::SS => [144, 80, 224], // #9050e0 deep purple
-            Grade::S => [144, 136, 248], // #9088f8 blue-violet
-            Grade::A => [144, 248, 144], // #90f890 green
-            Grade::B => [224, 248, 184], // #e0f8b8 pale lime
-            Grade::C => [248, 240, 176], // #f8f0b0 pale yellow
-            Grade::D => [248, 208, 176], // #f8d0b0 pale orange
+            Grade::SS => [150, 82, 227], // #9652e3 deep purple
+            Grade::S => [152, 145, 255], // #9891ff blue-violet
+            Grade::A => [145, 255, 146], // #91ff92 green
+            Grade::B => [231, 255, 192], // #e7ffc0 pale lime
+            Grade::C => [252, 247, 179], // #fcf7b3 pale yellow
+            Grade::D => [252, 208, 179], // #fcd0b3 pale orange
+            Grade::F => [163, 23, 25],   // #a31719 dark red
         }
     }
 }
@@ -1200,6 +1216,39 @@ mod tests {
         assert_eq!(Grade::from_accuracy(92.31), Grade::B);
     }
 
+    /// F is the fail grade, not the bottom of the accuracy ladder. A real
+    /// results screen shows F on a 99.23% run that died at 3:14, and a
+    /// passed run at 44% still shows D, so no accuracy can produce one.
+    /// Getting this backwards would restamp 30% of an ordinary score
+    /// history with a grade the game never gave it.
+    #[test]
+    fn accuracy_alone_never_produces_an_f() {
+        for pct in [0.0, 12.5, 44.44, 77.94, 79.99, 80.0, 84.99] {
+            assert_eq!(
+                Grade::from_accuracy(pct),
+                Grade::D,
+                "{pct}% is a low pass, which the game grades D"
+            );
+        }
+    }
+
+    /// Read out of the shipped rating textures, and confirmed against a
+    /// real capture: the F on the game's own results screen is #a31719,
+    /// which is score_F.png's own colour, so nothing tints these.
+    #[test]
+    fn grade_colours_are_the_shipped_ones() {
+        assert_eq!(Grade::F.color(), [0xa3, 0x17, 0x19]);
+        assert_eq!(Grade::SS.color(), [0x96, 0x52, 0xe3]);
+        assert_eq!(Grade::S.color(), [0x98, 0x91, 0xff]);
+        assert_eq!(Grade::A.color(), [0x91, 0xff, 0x92]);
+        assert_eq!(Grade::B.color(), [0xe7, 0xff, 0xc0]);
+        assert_eq!(Grade::C.color(), [0xfc, 0xf7, 0xb3]);
+        assert_eq!(Grade::D.color(), [0xfc, 0xd0, 0xb3]);
+        // S and SS are deliberately different colours, which a "same
+        // family, close enough" simplification would quietly undo.
+        assert_ne!(Grade::S.color(), Grade::SS.color());
+    }
+
     /// Feeds hits 100 ms apart starting at t=0; returns (state, end time).
     fn ring_after_hits(n: usize) -> (RingState, f64) {
         let mut r = RingState::new();
@@ -1660,11 +1709,10 @@ pub fn build_results(
         format_ticks(replay.timestamp_ticks)
     );
     let failed = replay.failed();
-    let (glabel, gcol) = if failed {
-        ("F", [200u8, 40, 45])
-    } else {
-        (stats.grade.label(), stats.grade.color())
-    };
+    // A failed run is graded F whatever it scored, so the accuracy grade
+    // is not consulted at all here.
+    let grade = if failed { Grade::F } else { stats.grade };
+    let (glabel, gcol) = (grade.label(), grade.color());
     match part {
         ResultsPart::Full => {
             if portrait {
@@ -1890,11 +1938,10 @@ pub fn build_card(
         .to_string()
     };
     let failed = replay.failed();
-    let (glabel, gcol) = if failed {
-        ("F", [200u8, 40, 45])
-    } else {
-        (stats.grade.label(), stats.grade.color())
-    };
+    // A failed run is graded F whatever it scored, so the accuracy grade
+    // is not consulted at all here.
+    let grade = if failed { Grade::F } else { stats.grade };
+    let (glabel, gcol) = (grade.label(), grade.color());
     let grade_col = srgb8_to_linear(gcol, 1.0);
     let acc = {
         let s = format!("{:.2}", stats.accuracy_pct);
