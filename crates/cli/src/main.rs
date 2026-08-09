@@ -122,6 +122,11 @@ enum Command {
         /// separate thing and is always applied on top of this.
         #[arg(long, default_value_t = 1.0)]
         speed: f64,
+        /// Aim for a file of about this many MB instead of a quality level.
+        /// Single-pass, so it lands near the target rather than exactly on
+        /// it; --quality is ignored when this is given.
+        #[arg(long)]
+        target_size_mb: Option<f64>,
         /// Output width in pixels (320-7680).
         #[arg(long, default_value_t = 1920, value_parser = clap::value_parser!(u32).range(320..=7680))]
         width: u32,
@@ -590,6 +595,7 @@ fn run() -> anyhow::Result<bool> {
             end,
             fps,
             speed,
+            target_size_mb,
             width,
             height,
             quality,
@@ -829,6 +835,7 @@ fn run() -> anyhow::Result<bool> {
                 extra_output_args: Vec::new(),
                 fps,
                 output_speed: speed,
+                target_size_mb,
                 start_ms,
                 end_ms,
                 ffmpeg,
@@ -913,14 +920,46 @@ fn run() -> anyhow::Result<bool> {
                     start_t.elapsed().as_secs_f64()
                 );
             } else {
+                // A size target that was quietly not applied would leave a
+                // file that looks like it was meant to come out that big.
+                if let Some(t) = &stats.size_target {
+                    match t.warning() {
+                        Some(w) => eprintln!("warning: {w}"),
+                        None => {
+                            if let rhythia_render::video::SizeTarget::Aimed { mb, kbps } = t {
+                                eprintln!("  aimed at {mb} MB ({kbps:.0} kbit/s video)");
+                            }
+                        }
+                    }
+                }
+                let size = std::fs::metadata(&out)
+                    .ok()
+                    .map(|m| format!(" ({})", format_bytes(m.len())))
+                    .unwrap_or_default();
                 println!(
-                    "done in {:.1}s -> {}",
+                    "done in {:.1}s -> {}{size}",
                     start_t.elapsed().as_secs_f64(),
                     out.display()
                 );
             }
             Ok(true)
         }
+    }
+}
+
+/// Bytes in the units an upload limit is quoted in. Mirrors format_bytes
+/// in the desktop app so the two agree.
+fn format_bytes(n: u64) -> String {
+    const MB: f64 = 1_048_576.0;
+    let mb = n as f64 / MB;
+    if mb >= 1024.0 {
+        format!("{:.2} GB", mb / 1024.0)
+    } else if mb >= 100.0 {
+        format!("{mb:.0} MB")
+    } else if mb >= 1.0 {
+        format!("{mb:.1} MB")
+    } else {
+        format!("{:.0} KB", n as f64 / 1024.0)
     }
 }
 

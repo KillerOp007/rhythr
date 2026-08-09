@@ -72,6 +72,16 @@ pub struct VideoOptions {
     /// backgrounds ride the config's background layers instead.) The
     /// results screen is never touched by it.
     pub background_video: Option<BackgroundVideo>,
+    /// Aim for a file of about this many MB instead of a quality level.
+    ///
+    /// Frames arrive over a pipe, so ffmpeg cannot rewind and two-pass is
+    /// impossible; this is single-pass VBR at a computed bitrate with
+    /// headroom, which lands near the target rather than exactly on it.
+    /// None keeps the quality setting, which is the better choice whenever
+    /// there is no size limit to satisfy.
+    ///
+    /// Not every encoder can do it: see [`supports_target_size`].
+    pub target_size_mb: Option<f64>,
     /// How fast the finished video plays the run back. 1.0 is the pace the
     /// player played at; 0.25 stretches it over four times as long, 2.0
     /// halves it.
@@ -86,6 +96,43 @@ pub struct VideoOptions {
     /// The results screen keeps its own real-time length: it is an
     /// appendix, not part of the run.
     pub output_speed: f64,
+}
+
+/// Bitrate the audio track is encoded at, and the only figure the size
+/// calculation needs from it: whatever the song is, it comes out at this.
+const AUDIO_KBPS: f64 = 192.0;
+
+/// Below this the picture is mush at any resolution, so a target that
+/// would need less is reported as impossible rather than attempted.
+pub const MIN_TARGET_KBPS: f64 = 150.0;
+
+/// Whether an encoder can be aimed at a file size.
+///
+/// AMF is the exception, and deliberately: it is the one encoder that
+/// cannot be tested here, and the safety net that catches a wrong flag
+/// ([`encoder_error`]) probes with the quality arguments, so a bitrate
+/// path added there would be unprobed and would fail at encode time
+/// instead of at selection time. An AMD owner gets the quality setting
+/// and is told so.
+pub fn supports_target_size(encoder: &str) -> bool {
+    matches!(encoder, "x264" | "nvenc" | "vaapi" | "qsv")
+}
+
+/// Video bitrate in kbit/s for a target size, or None when the target
+/// cannot be met at a watchable rate.
+///
+/// The audio is subtracted because it is part of the file, and a few
+/// percent is left for the container and for rate control overshooting on
+/// a single pass. Aiming at exactly the limit is how a 10.0 MB target
+/// produces a 10.2 MB file that the upload still refuses.
+pub fn target_bitrate_kbps(target_mb: f64, secs: f64, has_audio: bool) -> Option<f64> {
+    if !target_mb.is_finite() || target_mb <= 0.0 || !secs.is_finite() || secs <= 0.1 {
+        return None;
+    }
+    let total_kbit = target_mb * 1_048_576.0 * 8.0 / 1000.0;
+    let audio_kbit = if has_audio { AUDIO_KBPS * secs } else { 0.0 };
+    let video_kbps = (total_kbit * 0.96 - audio_kbit) / secs;
+    (video_kbps >= MIN_TARGET_KBPS).then_some(video_kbps.floor())
 }
 
 /// Slowest and fastest the video may play the run back. The floor keeps a
@@ -148,6 +195,7 @@ impl Default for VideoOptions {
             socket_chunk: 256 * 1024,
             discard_output: false,
             background_video: None,
+            target_size_mb: None,
             output_speed: 1.0,
         }
     }
@@ -185,6 +233,55 @@ pub struct RenderStats {
     /// read off. A desktop app has no console to print it to, which is
     /// exactly how an environment variable failed at the job.
     pub transport: String,
+    /// What became of a requested size target. None when none was asked
+    /// for; otherwise it says whether it was aimed at, and if not, why.
+    /// A target that is silently ignored is worse than no target at all,
+    /// because the file looks like it was meant to come out that size.
+    pub size_target: Option<SizeTarget>,
+}
+
+/// The outcome of a [`VideoOptions::target_size_mb`].
+#[derive(Debug, Clone, PartialEq)]
+pub enum SizeTarget {
+    /// Encoded at this video bitrate (kbit/s) to land near the target.
+    Aimed { mb: f64, kbps: f64 },
+    /// The clip is too long for that size: the rate it would need is below
+    /// anything watchable, so the quality setting was used instead.
+    TooSmall { mb: f64, needed_kbps: f64 },
+    /// This encoder has no rate-target path here, so the quality setting
+    /// was used instead. See [`supports_target_size`].
+    EncoderCannot { mb: f64, encoder: String },
+}
+
+impl SizeTarget {
+    /// A sentence for whoever asked for the target, or None when it was
+    /// simply met.
+    pub fn warning(&self) -> Option<String> {
+        match self {
+            SizeTarget::Aimed { .. } => None,
+            SizeTarget::TooSmall { mb, needed_kbps } => {
+                // Below zero means the soundtrack alone is over the target,
+                // and telling someone their video needs minus 152 kbit/s
+                // helps nobody.
+                let why = if *needed_kbps <= 0.0 {
+                    format!("the soundtrack alone is bigger than {mb} MB")
+                } else {
+                    format!(
+                        "the picture would get {needed_kbps:.0} kbit/s, under the \
+                         {MIN_TARGET_KBPS:.0} kbit/s floor"
+                    )
+                };
+                Some(format!(
+                    "{mb} MB is too small for a clip this long: {why}. Rendered at the quality \
+                     setting instead. Shorten the clip, lower the resolution or raise the target."
+                ))
+            }
+            SizeTarget::EncoderCannot { mb, encoder } => Some(format!(
+                "the {encoder} encoder cannot be aimed at a file size here, so the {mb} MB target \
+                 was ignored and the quality setting was used. Choose x264 to render to a size."
+            )),
+        }
+    }
 }
 
 impl RenderStats {
@@ -431,6 +528,38 @@ pub fn render_video(
         }
     }
 
+    // A size target becomes a bitrate here, where the finished length is
+    // finally known: frames divided by fps, results screen included, since
+    // that is part of the file too.
+    let size_target = opts.target_size_mb.map(|mb| {
+        let secs = total_frames as f64 / opts.fps.max(1) as f64;
+        if !supports_target_size(&opts.encoder) {
+            SizeTarget::EncoderCannot {
+                mb,
+                encoder: opts.encoder.clone(),
+            }
+        } else if let Some(kbps) = target_bitrate_kbps(mb, secs, opts.audio.is_some()) {
+            SizeTarget::Aimed { mb, kbps }
+        } else {
+            // Recompute without the floor so the message can say how far
+            // off it was, which is the number that tells someone whether to
+            // shorten the clip or just raise the target.
+            let audio = if opts.audio.is_some() {
+                AUDIO_KBPS * secs
+            } else {
+                0.0
+            };
+            SizeTarget::TooSmall {
+                mb,
+                needed_kbps: ((mb * 1_048_576.0 * 8.0 / 1000.0) * 0.96 - audio) / secs.max(0.001),
+            }
+        }
+    });
+    let target_kbps = match &size_target {
+        Some(SizeTarget::Aimed { kbps, .. }) => Some(*kbps),
+        _ => None,
+    };
+
     // Optional motion blur: tmix averages neighbouring frames (free at
     // encode time, no extra rendering). It must run before any hardware
     // upload in the filter chain.
@@ -452,6 +581,7 @@ pub fn render_video(
             &opts.preset,
             feed_nv12,
             vaapi_icq_supported(&opts.ffmpeg, opts.encoder == "vaapi"),
+            target_kbps,
         );
         let chain = match (&tmix, enc.filter.is_empty()) {
             (Some(t), true) => t.clone(),
@@ -758,6 +888,7 @@ pub fn render_video(
             } else {
                 "pipe".to_string()
             },
+            size_target: size_target.clone(),
         }
     };
     for j in play_frames.saturating_sub(DEPTH.min(play_frames))..play_frames {
@@ -1278,6 +1409,13 @@ struct EncoderArgs {
     args: Vec<String>,
 }
 
+/// The three numbers a single-pass rate target needs, pre-formatted.
+struct RateArgs {
+    bitrate: String,
+    maxrate: String,
+    bufsize: String,
+}
+
 /// Builds them for one encoder.
 ///
 /// [`encoder_error`] runs this SAME function, which is the point of it
@@ -1293,8 +1431,26 @@ fn video_encoder_args(
     preset: &str,
     feed_nv12: bool,
     vaapi_icq: bool,
+    target_kbps: Option<f64>,
 ) -> EncoderArgs {
     let hw = crate::quality::hardware_q(quality).to_string();
+    // Aiming at a size means a rate, so the quality knob is replaced rather
+    // than joined: every encoder here treats a bitrate and a quality target
+    // as alternatives, and passing both lets the driver decide which one it
+    // honours (QuickSync silently drops out of ICQ, for one).
+    let rate = target_kbps
+        .filter(|_| supports_target_size(encoder))
+        .map(|k| {
+            let peak = (k * 1.5).round() as u64;
+            // A buffer of two seconds of video: big enough that a busy
+            // passage can borrow bits from a quiet one, small enough that
+            // the average still lands near the target on a single pass.
+            RateArgs {
+                bitrate: format!("{}k", k.round() as u64),
+                maxrate: format!("{peak}k"),
+                bufsize: format!("{}k", peak * 2),
+            }
+        });
     let mut filter = String::new();
     let mut args: Vec<String> = Vec::new();
     let mut add = |v: &[&str]| args.extend(v.iter().map(|s| (*s).to_string()));
@@ -1308,7 +1464,11 @@ fn video_encoder_args(
             }
             .into();
             add(&["-c:v", "h264_vaapi", "-profile:v", "high"]);
-            if vaapi_icq {
+            if let Some(r) = &rate {
+                add(&[
+                    "-rc_mode", "VBR", "-b:v", &r.bitrate, "-maxrate", &r.maxrate,
+                ]);
+            } else if vaapi_icq {
                 // Intelligent constant quality: the driver varies the
                 // quantiser with the picture the way x264's CRF does. This
                 // used to send a flat -qp, which spends bits on still frames
@@ -1328,7 +1488,16 @@ fn video_encoder_args(
             // Constant quality on nvenc is VBR with no average target: the
             // -b:v 0 is not decoration, without it ffmpeg's default 2 Mbit/s
             // average applies and 4K falls apart.
-            add(&["-rc", "vbr", "-cq", &hw, "-b:v", "0"]);
+            match &rate {
+                // Same VBR mode, but with an average to hit: the -cq goes
+                // away with it, since a quality target and a rate target
+                // are alternatives.
+                Some(r) => add(&[
+                    "-rc", "vbr", "-b:v", &r.bitrate, "-maxrate", &r.maxrate, "-bufsize",
+                    &r.bufsize,
+                ]),
+                None => add(&["-rc", "vbr", "-cq", &hw, "-b:v", "0"]),
+            }
         }
         "qsv" => {
             add(&["-c:v", "h264_qsv", "-pix_fmt", "nv12", "-profile:v", "high"]);
@@ -1336,7 +1505,13 @@ fn video_encoder_args(
             // ICQ, which is what QuickSync picks when global_quality is set
             // and no bitrate cap is. Never add -maxrate or -b:v here: either
             // silently demotes this to plain VBR.
-            add(&["-global_quality", &hw]);
+            match &rate {
+                // The demotion the comment above warns about is exactly
+                // what a size target wants: plain VBR at a stated average,
+                // rather than a quality level with an unknown size.
+                Some(r) => add(&["-b:v", &r.bitrate, "-maxrate", &r.maxrate]),
+                None => add(&["-global_quality", &hw]),
+            }
         }
         "amf" => {
             // AMD on Windows. Without this an AMD owner falls all the way
@@ -1356,8 +1531,16 @@ fn video_encoder_args(
                 "-profile:v",
                 "high",
             ]);
-            let crf = crate::quality::x264_crf(quality).to_string();
-            add(&["-crf", &crf, "-preset", preset]);
+            match &rate {
+                Some(r) => add(&[
+                    "-b:v", &r.bitrate, "-maxrate", &r.maxrate, "-bufsize", &r.bufsize, "-preset",
+                    preset,
+                ]),
+                None => {
+                    let crf = crate::quality::x264_crf(quality).to_string();
+                    add(&["-crf", &crf, "-preset", preset]);
+                }
+            }
         }
     }
     EncoderArgs { filter, args }
@@ -1560,6 +1743,10 @@ pub fn encoder_error(ffmpeg: &str, encoder: &str) -> Option<String> {
         "medium",
         false,
         vaapi_icq_supported(ffmpeg, encoder == "vaapi"),
+        // The probe answers "does this encoder work at all", so it uses the
+        // quality path. A size target only ever swaps which rate-control
+        // flags are sent, never whether the encoder exists.
+        None,
     );
     if !enc.filter.is_empty() {
         cmd.args(["-vf", &enc.filter]);
@@ -1576,6 +1763,112 @@ pub fn encoder_error(ffmpeg: &str, encoder: &str) -> Option<String> {
         // not support the required nvenc API version…").
         Ok(out) => Some(last_meaningful_line(&out.stderr)),
         Err(e) => Some(format!("could not run ffmpeg: {e}")),
+    }
+}
+
+#[cfg(test)]
+mod target_size_tests {
+    use super::*;
+
+    /// The point of the whole feature is landing UNDER a limit, so the
+    /// arithmetic has to subtract the audio (it is in the file too) and
+    /// keep a margin (a single pass overshoots).
+    #[test]
+    fn the_rate_leaves_room_for_the_audio_and_for_overshoot() {
+        // 10 MB over 60 s with a soundtrack.
+        let kbps = target_bitrate_kbps(10.0, 60.0, true).expect("achievable");
+        let file_kbit = (kbps + AUDIO_KBPS) * 60.0;
+        let file_mb = file_kbit * 1000.0 / 8.0 / 1_048_576.0;
+        assert!(
+            file_mb < 10.0,
+            "aiming at {file_mb:.2} MB for a 10 MB limit is aiming to fail"
+        );
+        assert!(file_mb > 9.0, "{file_mb:.2} MB wastes most of the budget");
+
+        // Without audio the whole budget is the picture, so the rate is
+        // higher for the same target.
+        let silent = target_bitrate_kbps(10.0, 60.0, false).expect("achievable");
+        assert!(silent > kbps);
+    }
+
+    /// A target that cannot be met must be reported, not approximated:
+    /// rendering 400 kbit/s of mush and calling it a 1 MB file helps
+    /// nobody.
+    #[test]
+    fn an_impossible_target_is_refused_rather_than_approximated() {
+        assert_eq!(target_bitrate_kbps(1.0, 600.0, true), None);
+        assert_eq!(target_bitrate_kbps(0.0, 60.0, false), None);
+        assert_eq!(target_bitrate_kbps(-5.0, 60.0, false), None);
+        assert_eq!(target_bitrate_kbps(f64::NAN, 60.0, false), None);
+        // A zero-length clip cannot have a rate at all.
+        assert_eq!(target_bitrate_kbps(10.0, 0.0, false), None);
+    }
+
+    /// And it says which of the two things went wrong, in a sentence.
+    #[test]
+    fn a_missed_target_explains_itself() {
+        let audio_alone = SizeTarget::TooSmall {
+            mb: 0.1,
+            needed_kbps: -152.0,
+        };
+        let w = audio_alone.warning().expect("a warning");
+        assert!(w.contains("soundtrack"), "{w}");
+        assert!(!w.contains("-152"), "a negative rate is not an explanation");
+
+        let thin = SizeTarget::TooSmall {
+            mb: 2.0,
+            needed_kbps: 40.0,
+        };
+        assert!(thin.warning().expect("a warning").contains("40"));
+
+        let cannot = SizeTarget::EncoderCannot {
+            mb: 10.0,
+            encoder: "amf".into(),
+        };
+        assert!(cannot.warning().expect("a warning").contains("amf"));
+
+        // A target that was met says nothing at all.
+        assert!(SizeTarget::Aimed {
+            mb: 10.0,
+            kbps: 1000.0
+        }
+        .warning()
+        .is_none());
+    }
+
+    /// AMF has no rate path here on purpose (it cannot be tested and the
+    /// probe would not catch a wrong flag), and that has to stay a
+    /// deliberate exception rather than drifting into "nothing works".
+    #[test]
+    fn every_testable_encoder_can_be_aimed_at_a_size() {
+        for e in ["x264", "nvenc", "vaapi", "qsv"] {
+            assert!(supports_target_size(e), "{e}");
+        }
+        assert!(!supports_target_size("amf"));
+    }
+
+    /// The quality knob and the rate target are alternatives at every
+    /// encoder: sending both lets the driver pick, and QuickSync in
+    /// particular drops out of ICQ without saying so.
+    #[test]
+    fn a_rate_target_replaces_the_quality_flags() {
+        for enc in ["x264", "nvenc", "vaapi", "qsv"] {
+            let a = video_encoder_args(enc, 70, "veryfast", false, true, Some(1500.0));
+            let joined = a.args.join(" ");
+            assert!(joined.contains("1500k"), "{enc}: {joined}");
+            for flag in ["-crf", "-cq", "-global_quality", "-qp"] {
+                assert!(
+                    !a.args.iter().any(|x| x == flag),
+                    "{enc} still sends {flag}: {joined}"
+                );
+            }
+            // nvenc's constant-quality mode needs -b:v 0; a rate target
+            // must not leave that behind, or the average is zero.
+            assert!(
+                !joined.contains("-b:v 0"),
+                "{enc} kept the unlimited average: {joined}"
+            );
+        }
     }
 }
 

@@ -231,6 +231,18 @@
           <span class="sub" id="quality-hint">Recommended. Good for YouTube.</span>
         </label>
         <label class="field">
+          <span>Target file size</span>
+          <select id="set-targetsize">
+            <option value="0" selected>No limit (use Quality)</option>
+            <option value="10">10 MB</option>
+            <option value="25">25 MB</option>
+            <option value="50">50 MB</option>
+            <option value="100">100 MB</option>
+            <option value="500">500 MB</option>
+          </select>
+          <span class="sub" id="targetsize-note">Aims the encoder at a size instead of a quality level, for somewhere with an upload limit. Frames reach the encoder in one pass, so it lands near the target rather than exactly on it, and it aims a little under on purpose. Overrides Quality while it is set.</span>
+        </label>
+        <label class="field">
           <span>Encoder</span>
           <select id="set-encoder">
             <option value="auto" selected>Auto (fastest available)</option>

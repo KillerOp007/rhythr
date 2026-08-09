@@ -745,6 +745,26 @@ function renderOutputTab() {
   $("set-results").value = String(Math.round(s.results_secs));
   $("set-mblur").value = String(s.motion_blur);
   $("set-outspeed").value = String(s.output_speed ?? 1);
+  const target = s.target_size_mb || 0;
+  // A value from a settings file (or the CLI) that is not one of the
+  // offered sizes must still show as itself rather than snapping to "no
+  // limit", which would read as "the target is off" while it is on.
+  const sel = $("set-targetsize");
+  if (target > 0 && ![...sel.options].some((o) => Number(o.value) === target)) {
+    const extra = document.createElement("option");
+    extra.value = String(target);
+    extra.textContent = `${target} MB`;
+    sel.appendChild(extra);
+  }
+  sel.value = String(target);
+  // The two controls are alternatives, and a live slider under a size
+  // target invites the reasonable belief that it still does something.
+  $("set-quality").disabled = target > 0;
+  if (target > 0) {
+    $("quality-hint").textContent = `Not used: the ${target} MB target sets the rate instead.`;
+  } else {
+    paintQuality();
+  }
   $("set-musicvol").value = String(s.music_volume);
   $("musicvol-val").textContent = `${s.music_volume}%`;
   $("set-hitvol").value = String(s.hitsound_volume);
@@ -1636,6 +1656,13 @@ function initRenderEvents() {
     // was too big to upload was to go and look at it.
     const size = e.payload.size != null ? ` · ${fmtBytes(e.payload.size)}` : "";
     $("render-text").textContent = `Done: ${e.payload.path}${size}`;
+    // A size target that could not be met is the one thing about a
+    // finished render worth interrupting for: the file is good, it is just
+    // not the size it was asked to be.
+    if (e.payload.note) {
+      $("render-text").textContent += ` · ${e.payload.note}`;
+      $("render-text").title = e.payload.note;
+    }
     $("btn-open-out").hidden = false;
     setWindowNotice("Render finished");
   });
@@ -2292,6 +2319,9 @@ function initControls() {
   $("set-outspeed").addEventListener("change", () =>
     pushOutput({ output_speed: Number($("set-outspeed").value) }),
   );
+  $("set-targetsize").addEventListener("change", () =>
+    pushOutput({ target_size_mb: Number($("set-targetsize").value) }),
+  );
   $("set-musicvol").addEventListener("input", () => { $("musicvol-val").textContent = `${$("set-musicvol").value}%`; });
   $("set-musicvol").addEventListener("change", () => pushOutput({ music_volume: Number($("set-musicvol").value) }));
   $("set-hitvol").addEventListener("input", () => { $("hitvol-val").textContent = `${$("set-hitvol").value}%`; });
@@ -2465,6 +2495,9 @@ function paintQuality() {
   const step = qualitySteps.find((s) => s.q === q);
   const hint = $("quality-hint");
   if (!step || !hint) return;
+  // While a size target is set the rate comes from it, and this hint would
+  // otherwise paint a quality description over the line saying so.
+  if (Number($("set-targetsize")?.value || 0) > 0) return;
   const enc = $("set-encoder")?.value || "auto";
   const native =
     enc === "x264"

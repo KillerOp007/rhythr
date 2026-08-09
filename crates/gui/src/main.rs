@@ -95,6 +95,10 @@ struct Settings {
     /// was played at, 0.25 is slow motion over four times the length. The
     /// run's own speed mod is separate and always applied on top.
     output_speed: f64,
+    /// Aim for a file of about this many MB rather than a quality level.
+    /// 0 (the default) means no target: the Quality slider decides, and
+    /// the size is whatever it comes out as.
+    target_size_mb: f64,
     /// Render speed of the last completed render, for the time estimate.
     last_render_fps: f64,
     /// Song volume in percent (0-150).
@@ -160,6 +164,7 @@ impl Default for Settings {
             results_secs: 4.0,
             motion_blur: 0,
             output_speed: 1.0,
+            target_size_mb: 0.0,
             last_render_fps: 0.0,
             music_volume: 100,
             hitsound_volume: 50,
@@ -2827,6 +2832,7 @@ struct OutputUpdate {
     results_secs: Option<f64>,
     motion_blur: Option<u32>,
     output_speed: Option<f64>,
+    target_size_mb: Option<f64>,
     music_volume: Option<u32>,
     hitsound_volume: Option<u32>,
     output_dir: Option<String>,
@@ -2877,6 +2883,15 @@ fn set_output(state: tauri::State<'_, App>, update: OutputUpdate) -> Result<Stat
     }
     if let Some(v) = update.output_speed {
         s.output_speed = rhythia_render::video::clamp_output_speed(v);
+    }
+    if let Some(v) = update.target_size_mb {
+        // Anything not a positive number means "no target", which is the
+        // state the Quality slider governs.
+        s.target_size_mb = if v.is_finite() && v > 0.0 {
+            v.min(100_000.0)
+        } else {
+            0.0
+        };
     }
     if let Some(v) = update.music_volume {
         s.music_volume = v.min(150);
@@ -3113,6 +3128,9 @@ fn prepare_segment(
                 // scrubs these segments itself, so they are always rendered
                 // at the run's own pace whatever the render setting says.
                 output_speed: 1.0,
+                // And at the preview's own fixed quality: a scrub segment is
+                // not the artefact anyone is sizing.
+                target_size_mb: None,
                 start_ms: start,
                 end_ms: end,
                 ffmpeg,
@@ -4312,6 +4330,7 @@ fn start_render(
             height: s.height,
             fps: s.fps,
             output_speed: s.output_speed,
+            target_size_mb: (s.target_size_mb > 0.0).then_some(s.target_size_mb),
             quality: s.quality,
             tcp_feed: s.tcp_feed,
             socket_chunk_kib: s.socket_chunk_kib,
@@ -4397,6 +4416,7 @@ fn start_render(
                         timing: stats.summary(),
                         detail,
                         size,
+                        note: stats.size_target.as_ref().and_then(|t| t.warning()),
                     },
                 );
             }
@@ -4444,6 +4464,8 @@ struct RenderJob {
     /// How fast the video plays the run back: 1.0 is the pace it was
     /// played at, 0.25 is slow motion over four times the length.
     output_speed: f64,
+    /// Size target in MB, or None to let the quality setting decide.
+    target_size_mb: Option<f64>,
     music_volume: f32,
     hitsounds: Option<rhythia_render::video::HitsoundOptions>,
     ghost: Option<rhythia_render::video::GhostOptions>,
@@ -4467,6 +4489,10 @@ struct RenderDone {
     path: String,
     timing: String,
     detail: String,
+    /// Set when a size target could not be honoured. The file is fine; it
+    /// is simply not the size that was asked for, and a render that says
+    /// nothing about that looks like it obeyed.
+    note: Option<String>,
     /// Size of the finished file in bytes, or None if it could not be
     /// stat'd (which should not happen, the rename just succeeded).
     size: Option<u64>,
@@ -4615,6 +4641,7 @@ fn run_render_job(
         extra_output_args: Vec::new(),
         fps: job.fps,
         output_speed: job.output_speed,
+        target_size_mb: job.target_size_mb,
         start_ms,
         end_ms,
         ffmpeg: job.ffmpeg.clone(),

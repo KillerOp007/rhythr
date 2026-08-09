@@ -105,6 +105,21 @@ endorsed by Rhythia or Capo Games.
   file the next render will write is named under the render button, and
   if something is already there the app asks before overwriting it:
   **Replace**, or **Keep both**, which writes `name (2).mp4` alongside.
+- **Target file size**: aims the encoder at a size instead of a quality
+  level, for anywhere with an upload limit. Frames reach the encoder in a
+  single pass and cannot be re-encoded, so it lands *near* the target
+  rather than exactly on it, and it deliberately aims a little under: a
+  10 MB target typically writes 8 to 9 MB. It overrides the Quality
+  slider while it is set. If the clip is too long for the size you asked
+  for, the render still happens at the Quality setting and the finished
+  line says so rather than quietly writing a bigger file. AMF (AMD on
+  Windows) cannot be aimed at a size; choose x264 there.
+- **Playback speed**: how fast the video plays the run back. 0.25x
+  stretches it over four times the length, which is the way to get the
+  slow motion the Analyze window shows you out as a video. The music is
+  slowed with it. Slow motion draws more frames from the same run, so it
+  takes proportionally longer to render. The run's own speed mod is a
+  separate thing and is always applied on top of this.
 - **Encoder**: "Auto" picks the fastest working encoder (NVENC on
   NVIDIA, Quick Sync on Intel, AMF for AMD on Windows, VAAPI for AMD and
   Intel on Linux, otherwise x264 software). Each one is checked by actually
