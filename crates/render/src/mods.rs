@@ -26,9 +26,54 @@ pub struct ResolvedMods {
     /// Ghost: notes fade to nothing before reaching the plane
     /// (`NoteManager.gd:425-428`, fade_out_base stays 1).
     pub ghost: bool,
+    /// Half Ghost: notes fade toward a fifth opacity near the plane rather
+    /// than to nothing. The client also carries this as a `HalfGhost`
+    /// setting in its config, which is why the render ORs the two rather
+    /// than letting either win: a run recorded with the mod always shows
+    /// it, and a viewer who has it switched on still gets what they asked
+    /// for.
+    pub half_ghost: bool,
     /// Nearsighted: notes stay invisible until late in the approach
     /// (`NoteManager.gd:436-438`).
+    ///
+    /// No shipped build is known to write this: the client's own mod icons
+    /// cover ghost and half ghost and there is no nearsighted among them.
+    /// The branch stays because it is correct and costs nothing, but do not
+    /// read a render as having exercised it.
     pub nearsighted: bool,
+}
+
+/// Mods that change the run in a way rhythr cannot reproduce, so a video
+/// of one is not what the player played. Anything not listed here is
+/// either applied ([`map_for_replay`]) or genuinely cosmetic to the render
+/// (nofail and sudden death change no geometry; the speed mods are already
+/// baked into the replay's frame times).
+///
+/// Returned as the raw strings so an unknown future mod surfaces as itself
+/// rather than being silently swallowed.
+pub fn unsupported_mods(replay: &Replay) -> Vec<String> {
+    const HANDLED: [&str; 8] = [
+        "mod_mirror",
+        "mod_double_mirror",
+        "mod_hardrock",
+        "mod_ghost",
+        "mod_half_ghost",
+        "mod_nearsighted",
+        "mod_nofail",
+        "mod_sudden_death",
+    ];
+    mod_list(replay)
+        .into_iter()
+        .filter(|m| {
+            // The speed mods are named for their percentage (mod_87, mod_125)
+            // and need no handling: the replay's frame times are song time,
+            // so the speed is already in the data.
+            let speed = m
+                .strip_prefix("mod_")
+                .is_some_and(|r| !r.is_empty() && r.chars().all(|c| c.is_ascii_digit()));
+            !speed && !HANDLED.contains(&m.as_str())
+        })
+        .collect()
 }
 
 impl ResolvedMods {
@@ -37,6 +82,7 @@ impl ResolvedMods {
             grid_scale: 1.0,
             flip: (false, false),
             ghost: false,
+            half_ghost: false,
             nearsighted: false,
         }
     }
@@ -122,6 +168,7 @@ pub fn map_for_replay(map: &Map, replay: &Replay) -> (Map, ResolvedMods) {
     // they can be seen, but a render that ignores them shows a comfortable
     // read of a run that was played half blind.
     resolved.ghost = has("mod_ghost");
+    resolved.half_ghost = has("mod_half_ghost");
     resolved.nearsighted = has("mod_nearsighted");
 
     // Only the mods that MOVE notes force a rebuilt map: mirror flips and
@@ -254,5 +301,64 @@ mod tests {
         };
         let (_, r) = map_for_replay(&map, &replay_with("[\"mod_double_mirror\"]", vec![]));
         assert_eq!(r.flip, (true, true));
+    }
+
+    /// Half ghost is the visibility mod the shipped client actually offers
+    /// (its own icon set has `mod_ghost` and `mod_half_ghost` and no
+    /// nearsighted at all), and it used to be read by nothing.
+    #[test]
+    fn half_ghost_is_resolved_from_the_replay() {
+        let map = Map {
+            notes: vec![note(100, 0.0, 1.0)],
+            ..Default::default()
+        };
+        let (_, r) = map_for_replay(&map, &replay_with("[\"mod_half_ghost\"]", vec![]));
+        assert!(r.half_ghost);
+        assert!(!r.ghost, "half ghost is not the full one");
+
+        // And the full ghost must not be triggered by a prefix match.
+        let (_, r) = map_for_replay(&map, &replay_with("[\"mod_ghost\"]", vec![]));
+        assert!(r.ghost && !r.half_ghost);
+    }
+
+    /// A mod rhythr cannot reproduce has to be nameable, or a video of a
+    /// chaos run looks like an ordinary one with an extra icon on the
+    /// results screen.
+    #[test]
+    fn only_the_mods_that_change_nothing_are_treated_as_covered() {
+        let unsupported = |m: &str| unsupported_mods(&replay_with(m, vec![]));
+
+        // Applied, or genuinely nothing to do.
+        for m in [
+            "mod_mirror",
+            "mod_double_mirror",
+            "mod_hardrock",
+            "mod_ghost",
+            "mod_half_ghost",
+            "mod_nofail",
+            "mod_sudden_death",
+        ] {
+            assert!(
+                unsupported(&format!("[\"{m}\"]")).is_empty(),
+                "{m} is handled and should not be reported"
+            );
+        }
+
+        // Speed is baked into the frame times, whatever the percentage.
+        for m in ["mod_15", "mod_87", "mod_100", "mod_145"] {
+            assert!(unsupported(&format!("[\"{m}\"]")).is_empty(), "{m}");
+        }
+
+        // Chaos randomises note positions with a seed the replay does not
+        // store, so the render is provably not the run that was played.
+        assert_eq!(unsupported("[\"mod_chaos\"]"), vec!["mod_chaos"]);
+        assert_eq!(unsupported("[\"mod_practice\"]"), vec!["mod_practice"]);
+        // An unknown future mod surfaces as itself rather than vanishing.
+        assert_eq!(unsupported("[\"mod_whatever\"]"), vec!["mod_whatever"]);
+        // "mod_" with nothing after it is not a speed mod.
+        assert_eq!(unsupported("[\"mod_\"]"), vec!["mod_"]);
+
+        assert!(unsupported("[]").is_empty());
+        assert!(unsupported("not json at all").is_empty());
     }
 }

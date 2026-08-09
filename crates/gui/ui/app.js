@@ -42,6 +42,16 @@ function fmtTime(ms) {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
 
+/// Bytes in the units an upload limit is quoted in. Mirrors format_bytes in
+/// main.rs so the finished line and the diagnostics file agree.
+function fmtBytes(n) {
+  const mb = n / 1048576;
+  if (mb >= 1024) return `${(mb / 1024).toFixed(2)} GB`;
+  if (mb >= 100) return `${mb.toFixed(0)} MB`;
+  if (mb >= 1) return `${mb.toFixed(1)} MB`;
+  return `${(n / 1024).toFixed(0)} KB`;
+}
+
 /// mm:ss.ms (the clip fields need the milliseconds fmtTime rounds away).
 function fmtClock(ms) {
   const t = Math.max(0, ms);
@@ -101,6 +111,19 @@ function renderReplayCard() {
   const outcome = r.failed
     ? `<span class="chip bad">failed at ${fmtTime(r.fail_time_ms)}</span>`
     : `<span class="chip info">passed</span>`;
+  // A mod rhythr cannot reproduce is the one case where the video is not
+  // the run. Chaos moves every note with a seed the replay never stored,
+  // so a render of one is an ordinary chart wearing the mod's icon. Saying
+  // nothing would let that pass for the real thing.
+  const unsupported = (r.unsupported_mods || []).map((m) => m.replace(/^mod_/, ""));
+  const modWarn = unsupported.length
+    ? `<span class="chip warn" title="${esc(
+        "rhythr cannot reproduce " +
+          unsupported.join(", ") +
+          ".\n\nThe render will show the chart as it is stored, so it is not " +
+          "what this player saw. Everything else about the run is genuine."
+      )}">${esc(unsupported.join(", "))} not reproduced</span>`
+    : "";
   body.innerHTML = `
     <div class="src-title">${esc(r.player)}</div>
     <div class="src-meta">
@@ -109,7 +132,7 @@ function renderReplayCard() {
       speed <b>${fmtSpeed(r.speed)}</b> · mods: ${esc(mods)}<br>
       ${esc(date)}
     </div>
-    ${outcome} ${chip}`;
+    ${outcome} ${chip} ${modWarn}`;
 }
 
 function renderMapCard() {
@@ -1604,10 +1627,14 @@ function initRenderEvents() {
     // Clear any error tooltip left from a previous failed render; a Done line
     // carrying the last error's hover text is worse than none.
     $("render-text").title = "";
-    // Just where the file went. The stage timings and the job description
-    // were on screen while the transport was being tuned; they belong in
-    // "Save diagnostics", not in front of someone who only wants their video.
-    $("render-text").textContent = `Done: ${e.payload.path}`;
+    // Where the file went, and how big it came out. The stage timings and
+    // the job description were on screen while the transport was being
+    // tuned; they belong in "Save diagnostics", not in front of someone who
+    // only wants their video. The size does not: the quality control sets a
+    // rate rather than a size, so until now the only way to learn a clip
+    // was too big to upload was to go and look at it.
+    const size = e.payload.size != null ? ` · ${fmtBytes(e.payload.size)}` : "";
+    $("render-text").textContent = `Done: ${e.payload.path}${size}`;
     $("btn-open-out").hidden = false;
     setWindowNotice("Render finished");
   });

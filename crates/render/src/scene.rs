@@ -176,6 +176,12 @@ impl SceneParams {
     pub fn apply_mods(&mut self, mods: &crate::mods::ResolvedMods) {
         self.grid_scale = mods.grid_scale;
         self.ghost = mods.ghost;
+        // OR, not assignment: half ghost reaches the scene from two places
+        // that mean different things. The config's `HalfGhost` is what the
+        // viewer wants to look at; the replay's `mod_half_ghost` is what
+        // the player actually played through. Neither should be able to
+        // switch the other off.
+        self.half_ghost |= mods.half_ghost;
         self.nearsighted = mods.nearsighted;
     }
 }
@@ -396,13 +402,47 @@ mod tests {
             grid_scale: 1.4,
             flip: (true, false),
             ghost: true,
+            half_ghost: true,
             nearsighted: true,
         };
         let mut p = SceneParams::default();
         p.apply_mods(&mods);
         assert_eq!(p.grid_scale, 1.4);
         assert!(p.ghost, "ghost did not reach the scene");
+        assert!(p.half_ghost, "half ghost did not reach the scene");
         assert!(p.nearsighted, "nearsighted did not reach the scene");
+    }
+
+    /// Half ghost arrives from two places and neither may cancel the other:
+    /// a replay that recorded the mod renders with it whatever the viewer's
+    /// config says, and a viewer who switched it on keeps it on a run that
+    /// did not use it.
+    #[test]
+    fn half_ghost_survives_both_ways_round() {
+        let mut from_replay = SceneParams::default();
+        assert!(!from_replay.half_ghost, "default is off");
+        from_replay.apply_mods(&crate::mods::ResolvedMods {
+            half_ghost: true,
+            ..crate::mods::ResolvedMods::none()
+        });
+        assert!(from_replay.half_ghost, "the replay's mod was dropped");
+
+        let mut from_config = SceneParams {
+            half_ghost: true,
+            ..SceneParams::default()
+        };
+        from_config.apply_mods(&crate::mods::ResolvedMods::none());
+        assert!(
+            from_config.half_ghost,
+            "an unmodded replay switched off the viewer's own setting"
+        );
+
+        // And it has to change the picture, not just the flag.
+        let plain = SceneParams::default();
+        let dimmer = (1..40)
+            .map(|i| i as f32 * 0.25)
+            .any(|d| from_replay.note_opacity(d) < plain.note_opacity(d) - 0.01);
+        assert!(dimmer, "half ghost changed no opacity anywhere");
     }
 
     /// And the flag has to change what is drawn, not merely be stored: ghost

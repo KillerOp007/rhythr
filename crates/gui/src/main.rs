@@ -565,6 +565,11 @@ struct ReplayDto {
     speed: f32,
     mods: Vec<String>,
     passed: bool,
+    /// Mods rhythr cannot reproduce. Empty for every ordinary run; when it
+    /// is not, the video is not what the player played and the UI has to
+    /// say so rather than stamping the mod's icon on the results screen
+    /// and leaving it at that.
+    unsupported_mods: Vec<String>,
     failed: bool,
     fail_time_ms: i32,
     length_ms: f64,
@@ -1552,6 +1557,7 @@ fn assemble_status(inner: &Inner, rendering: bool) -> StatusDto {
             speed: r.speed,
             mods,
             passed: r.passed,
+            unsupported_mods: rhythia_render::mods::unsupported_mods(r),
             failed: r.failed(),
             fail_time_ms: r.fail_time_ms,
             length_ms: r.length_ms(),
@@ -4342,12 +4348,18 @@ fn start_render(
                 // Kept for "Save diagnostics": this is what someone needs when
                 // they report a render that was slow or came out wrong, and
                 // asking them to reproduce it is a poor substitute.
+                // What the file actually came out at. The quality control
+                // sets a rate, not a size, so this is the first moment the
+                // number exists at all, and it is the one that decides
+                // whether the clip fits wherever it is going.
+                let size = std::fs::metadata(&path).ok().map(|m| m.len());
                 if let Ok(mut slot) = thread_app.last_render.lock() {
                     *slot = Some(format!(
-                        "{}\n{}\nwrote {}",
+                        "{}\n{}\nwrote {} ({})",
                         stats.summary(),
                         detail,
-                        path.display()
+                        path.display(),
+                        size.map_or("size unknown".to_string(), format_bytes)
                     ));
                 }
                 let _ = app_handle.emit(
@@ -4356,6 +4368,7 @@ fn start_render(
                         path: path.to_string_lossy().into_owned(),
                         timing: stats.summary(),
                         detail,
+                        size,
                     },
                 );
             }
@@ -4423,6 +4436,26 @@ struct RenderDone {
     path: String,
     timing: String,
     detail: String,
+    /// Size of the finished file in bytes, or None if it could not be
+    /// stat'd (which should not happen, the rename just succeeded).
+    size: Option<u64>,
+}
+
+/// Bytes in the units an upload limit is quoted in. Two significant
+/// decimals below 100 MB, none above, because "1.4 GB" is the answer and
+/// "1.42 GB" is noise.
+fn format_bytes(n: u64) -> String {
+    const MB: f64 = 1_048_576.0;
+    let mb = n as f64 / MB;
+    if mb >= 1024.0 {
+        format!("{:.2} GB", mb / 1024.0)
+    } else if mb >= 100.0 {
+        format!("{mb:.0} MB")
+    } else if mb >= 1.0 {
+        format!("{mb:.1} MB")
+    } else {
+        format!("{:.0} KB", n as f64 / 1024.0)
+    }
 }
 
 /// Everything about a render that could plausibly explain its speed.
@@ -5269,6 +5302,30 @@ fn main() {
                 }
             }
         });
+}
+
+#[cfg(test)]
+mod format_bytes_tests {
+    use super::*;
+
+    /// The number exists to answer "will this upload", so the units have to
+    /// be the ones the limits are quoted in, and the boundaries have to
+    /// round the way a person reads them rather than the way a float
+    /// divides.
+    #[test]
+    fn sizes_read_the_way_an_upload_limit_is_quoted() {
+        assert_eq!(format_bytes(0), "0 KB");
+        assert_eq!(format_bytes(512 * 1024), "512 KB");
+        assert_eq!(format_bytes(1_048_576), "1.0 MB");
+        assert_eq!(format_bytes(10 * 1_048_576 + 500_000), "10.5 MB");
+        // Discord's free limit, the reason this is on screen at all.
+        assert_eq!(format_bytes(10_485_760), "10.0 MB");
+        // Two decimals stop at 100 MB, where they stop being information.
+        assert_eq!(format_bytes(99 * 1_048_576), "99.0 MB");
+        assert_eq!(format_bytes(100 * 1_048_576), "100 MB");
+        assert_eq!(format_bytes(1024 * 1_048_576), "1.00 GB");
+        assert_eq!(format_bytes(3 * 1024 * 1_048_576), "3.00 GB");
+    }
 }
 
 #[cfg(test)]

@@ -427,6 +427,22 @@ fn parse_time_ms(text: &str) -> anyhow::Result<f64> {
     }
 }
 
+/// Says so once when a run used something the render cannot show. The
+/// video is otherwise genuine, so this is a note rather than a refusal:
+/// chaos in particular moves every note with a seed the replay never
+/// stored, and a render of one is an ordinary chart with the mod's icon on
+/// the results screen, which is exactly what a viewer would misread.
+fn warn_unreproducible_mods(r: &rhythia_formats::rhr::Replay) {
+    let names = rhythia_render::mods::unsupported_mods(r);
+    if !names.is_empty() {
+        eprintln!(
+            "warning: this run used {}, which rhythr cannot reproduce. The chart is \
+             rendered as stored, so the video is not the field this player saw",
+            names.join(", ")
+        );
+    }
+}
+
 fn main() -> ExitCode {
     match run() {
         Ok(ok) => {
@@ -539,6 +555,7 @@ fn run() -> anyhow::Result<bool> {
                 .context("initialising GPU renderer")?;
             let skin = renderer.prepare_skin(&cfg);
             // Show the field the player actually saw (mirror/hardrock).
+            warn_unreproducible_mods(&r);
             let (m, mods) = rhythia_render::mods::map_for_replay(&m, &r);
             params.apply_mods(&mods);
             params.apply_speed(r.speed);
@@ -662,6 +679,7 @@ fn run() -> anyhow::Result<bool> {
             let mut r = r;
             rhythia_sim::timebase::normalize(&mut r, &m);
 
+            warn_unreproducible_mods(&r);
             let report = integrity::verify_replay(&r, &m);
             if !report.consistent() {
                 // Loading the wrong chart is a mistake, not tampering, and it
@@ -883,6 +901,13 @@ fn print_info(r: &Replay) {
     );
     println!("passed         {}", r.passed);
     println!("mods           {}", r.mods);
+    let unreproducible = rhythia_render::mods::unsupported_mods(r);
+    if !unreproducible.is_empty() {
+        println!(
+            "               ^ rhythr cannot reproduce {}",
+            unreproducible.join(", ")
+        );
+    }
     println!("speed          {}", r.speed);
     println!("total score    {}", r.total_score);
     println!("accuracy       {:.4} %", r.accuracy_pct);
@@ -918,6 +943,7 @@ fn print_info_json(r: &Replay) {
         "unix_ms": r.unix_ms(),
         "passed": r.passed,
         "mods": r.mods,
+        "unsupported_mods": rhythia_render::mods::unsupported_mods(r),
         "spin": r.spin,
         "speed": r.speed,
         "total_score": r.total_score,
