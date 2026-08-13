@@ -46,6 +46,10 @@ echo "  the AUR is up and this key owns rhythr-bin"
 # install fails validation. Cheap to verify, and only possible from here.
 DEB_URL=$(grep -oP '^\s+"\K[^"]*\.deb' packaging/aur/PKGBUILD | head -1)
 DEB_URL=${DEB_URL//\$url/https://github.com/KillerOp007/rhythr}
+# Both spellings: the PKGBUILD uses $pkgver in the path and ${pkgver}
+# inside the file name, and the braced one survived substitution before,
+# which turned the verification URL into a 404 whose body was hashed.
+DEB_URL=${DEB_URL//\$\{pkgver\}/$PKGVER}
 DEB_URL=${DEB_URL//\$pkgver/$PKGVER}
 WANT=$(grep -A 1 '^sha256sums=' packaging/aur/PKGBUILD | head -1 | grep -oP "[0-9a-f]{64}")
 echo "verifying the published .deb against the PKGBUILD checksum"
