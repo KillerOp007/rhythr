@@ -673,6 +673,9 @@ struct StatusDto {
     rendering: bool,
     /// The configured game-assets folder exists and holds an extraction.
     game_ok: bool,
+    /// The extraction predates the fonts the HUD's fallback chain needs
+    /// (non-Latin titles): connected, but worth re-connecting once.
+    game_assets_stale: bool,
     /// Duration of the current video background, for the start slider.
     bg_video_duration: Option<f64>,
     /// Session clip range (start_ms, end_ms) if the user set one.
@@ -1676,6 +1679,20 @@ fn assemble_status(inner: &Inner, rendering: bool) -> StatusDto {
             d.join("builtin_colorsets.json").is_file() || d.join("builtin_assets").is_dir()
         })
         .unwrap_or(false);
+    // An extraction made before the fonts were routed serves everything
+    // else fine and silently starves the HUD's font chain, so a Cyrillic
+    // or Japanese title still comes out as replacement marks. Nothing here
+    // re-extracts on its own; the card asks for one click instead.
+    let game_assets_stale = game_ok
+        && inner
+            .settings
+            .game_assets
+            .as_ref()
+            .map(|p| {
+                let d = Path::new(p).join("builtin_assets");
+                d.is_dir() && !d.join("fonts").join("default.ttf").is_file()
+            })
+            .unwrap_or(false);
     StatusDto {
         replay,
         ghost,
@@ -1691,13 +1708,14 @@ fn assemble_status(inner: &Inner, rendering: bool) -> StatusDto {
         settings: inner.settings.clone(),
         rendering,
         game_ok,
+        game_assets_stale,
         bg_video_duration: inner.bg_duration,
         clip: inner.clip,
         bookmarks: {
             let replay = inner
                 .replay
                 .as_ref()
-                .map(|(p, _)| p.to_string_lossy().into_owned())
+                .map(|(p, _)| replay_key(p))
                 .unwrap_or_default();
             inner
                 .settings
@@ -2837,6 +2855,23 @@ struct ClipBookmark {
     replay: String,
 }
 
+/// The key a bookmark files its replay under. Canonicalised so the same
+/// file reached through different spellings compares equal: on Windows a
+/// path is case-insensitive and takes either separator, so `C:\Replays`
+/// and `c:/replays` are one folder, and plain string equality would file
+/// the bookmark under whichever spelling happened to load the replay and
+/// then never show it again.
+fn replay_key(p: &std::path::Path) -> String {
+    let c = std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let s = c.to_string_lossy().into_owned();
+    #[cfg(windows)]
+    {
+        s.to_lowercase()
+    }
+    #[cfg(not(windows))]
+    s
+}
+
 /// Saves the current clip under a name.
 #[tauri::command]
 fn add_clip_bookmark(state: tauri::State<'_, App>, name: String) -> Result<StatusDto, String> {
@@ -2848,7 +2883,7 @@ fn add_clip_bookmark(state: tauri::State<'_, App>, name: String) -> Result<Statu
     let Some((path, _)) = inner.replay.as_ref() else {
         return Err("no replay loaded".into());
     };
-    let replay = path.to_string_lossy().into_owned();
+    let replay = replay_key(path);
     let name = name.trim().to_string();
     let name = if name.is_empty() {
         format!("{} to {}", clock_ms(start_ms), clock_ms(end_ms))
@@ -2887,7 +2922,7 @@ fn delete_clip_bookmark(state: tauri::State<'_, App>, name: String) -> Result<St
     let replay = inner
         .replay
         .as_ref()
-        .map(|(p, _)| p.to_string_lossy().into_owned())
+        .map(|(p, _)| replay_key(p))
         .unwrap_or_default();
     inner
         .settings
@@ -4212,12 +4247,16 @@ async fn open_analyze_window(app_handle: tauri::AppHandle) -> Result<(), String>
     // transparent so the wgpu frame shows through.
     .transparent(native_capable);
     let restore = saved.filter(|(_, _, w, h)| *w >= ANALYZE_MIN.0 && *h >= ANALYZE_MIN.1);
-    builder = match restore {
-        Some((_, _, w, h)) => builder.inner_size(w as f64, h as f64),
-        None => builder.inner_size(1280.0, 800.0),
-    };
+    builder = builder.inner_size(1280.0, 800.0);
     let win = builder.build().map_err(err_str)?;
-    if let Some((x, y, _, _)) = restore {
+    // The saved rect is PHYSICAL pixels (inner_size() reports them), while
+    // the builder's inner_size takes LOGICAL ones. Feeding one into the
+    // other multiplies the window by the display scale on every reopen:
+    // 1280 wide becomes 1600 at Windows 125%, then 2000, until it dwarfs
+    // the monitor. The main window's restore had this right (a typed
+    // set_size after creation); this now matches it.
+    if let Some((x, y, w, h)) = restore {
+        let _ = win.set_size(tauri::PhysicalSize::new(w, h));
         if window_pos_visible(&win, x, y) {
             let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
         }
@@ -4235,7 +4274,14 @@ async fn open_analyze_window(app_handle: tauri::AppHandle) -> Result<(), String>
             ) {
                 return;
             }
-            if geom.is_minimized().unwrap_or(false) || geom.is_maximized().unwrap_or(false) {
+            // Fullscreen too, not just minimized/maximized: F11 is a
+            // window state of its own, and recording its monitor-sized
+            // rect would make a close-while-fullscreen the remembered
+            // geometry.
+            if geom.is_minimized().unwrap_or(false)
+                || geom.is_maximized().unwrap_or(false)
+                || geom.is_fullscreen().unwrap_or(false)
+            {
                 return;
             }
             let (Ok(pos), Ok(size)) = (geom.outer_position(), geom.inner_size()) else {
@@ -4789,7 +4835,7 @@ fn format_bytes(n: u64) -> String {
 }
 
 /// Everything about a render that could plausibly explain its speed.
-fn render_detail(app: &App, job: &RenderJob, encoder: &str, nth: u64) -> String {
+fn render_detail(app: &App, job: &RenderJob, encoder: &str, nth: u64, audio_src: &str) -> String {
     let (restored, map_source, mismatch) = {
         let inner = app.lock();
         (
@@ -4847,12 +4893,7 @@ fn render_detail(app: &App, job: &RenderJob, encoder: &str, nth: u64) -> String 
         },
         map_source,
         if mismatch { " (HASH MISMATCH)" } else { "" },
-        match (&job.audio_path, job.map.audio.is_some()) {
-            (Some(_), _) if job.audio_own_speed => "chosen file, own speed",
-            (Some(_), _) => "chosen file",
-            (None, true) => "the map's own",
-            (None, false) => "NONE (silent render)",
-        },
+        audio_src,
         nth,
     )
 }
@@ -4885,20 +4926,31 @@ fn run_render_job(
     };
     let _ = handle.emit("render-stage", format!("encoder: {encoder}"));
 
-    // Built here, before the job is taken apart into VideoOptions, and kept
-    // for the finished-render message.
-    let nth = app.renders_done.fetch_add(1, Ordering::SeqCst) + 1;
-    let detail = render_detail(app, &job, &encoder, nth);
-
     // A chosen soundtrack wins over the map's own; without one the map's
     // embedded audio goes through a temp file for ffmpeg. A cache-JSON map
     // has neither, which is the case this override exists for.
+    //
+    // Resolved BEFORE the diagnostics line is built, because everything
+    // downstream has to describe what was actually used: the chosen file
+    // can have been moved or deleted since it was set (the setting
+    // persists across sessions), and a silent fallback that still claimed
+    // "chosen file, own speed" both desynced the audio (the own-speed flag
+    // applied to a track that was not there) and lied to whoever read the
+    // diagnostics.
     let mut _audio_tmp: Option<tempfile::NamedTempFile> = None;
     let chosen = job
         .audio_path
         .as_ref()
         .map(PathBuf::from)
         .filter(|p| p.is_file());
+    let override_missing = job.audio_path.is_some() && chosen.is_none();
+    if override_missing {
+        let _ = handle.emit(
+            "render-stage",
+            "warning: the chosen soundtrack file is missing, using the map's audio",
+        );
+    }
+    let override_used = chosen.is_some();
     let audio = if let Some(p) = chosen {
         Some(p)
     } else if let Some(bytes) = &job.map.audio {
@@ -4913,9 +4965,24 @@ fn run_render_job(
     } else {
         None
     };
-    // Only a chosen track can ask to keep its own rate: the map's own song
-    // is the run's song by definition.
-    let audio_follows_run = job.audio_path.is_none() || !job.audio_own_speed;
+    // Only a chosen track that is actually IN USE can ask to keep its own
+    // rate: the map's own song is the run's song by definition.
+    let audio_follows_run = !override_used || !job.audio_own_speed;
+    let audio_src = match (override_used, job.map.audio.is_some()) {
+        (true, _) if job.audio_own_speed => "chosen file, own speed",
+        (true, _) => "chosen file",
+        (false, _) if override_missing && job.map.audio.is_some() => {
+            "the map's own (CHOSEN FILE MISSING)"
+        }
+        (false, _) if override_missing => "NONE (chosen file missing, map silent)",
+        (false, true) => "the map's own",
+        (false, false) => "NONE (silent render)",
+    };
+
+    // Built here, before the job is taken apart into VideoOptions, and kept
+    // for the finished-render message.
+    let nth = app.renders_done.fetch_add(1, Ordering::SeqCst) + 1;
+    let detail = render_detail(app, &job, &encoder, nth, audio_src);
 
     let run_end = if job.replay.failed() {
         f64::from(job.replay.fail_time_ms)
@@ -5531,7 +5598,10 @@ fn main() {
                     };
                     // Skip minimised/maximised states: restoring those
                     // coordinates would reopen the window somewhere useless.
-                    if w.is_minimized().unwrap_or(false) || w.is_maximized().unwrap_or(false) {
+                    if w.is_minimized().unwrap_or(false)
+                        || w.is_maximized().unwrap_or(false)
+                        || w.is_fullscreen().unwrap_or(false)
+                    {
                         return;
                     }
                     let (Ok(pos), Ok(size)) = (w.outer_position(), w.inner_size()) else {

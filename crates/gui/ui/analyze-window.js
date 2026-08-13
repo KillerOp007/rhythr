@@ -1072,14 +1072,17 @@ async function setClipEdge(which) {
   const total = runEnd();
   const cur = clipRange();
   let [s, e] = cur ? [cur[0], cur[1]] : [0, total];
-  if (which === "in") s = currentMs;
-  else e = currentMs;
+  const MIN = 500;
+  // The playhead parks at the very end after playback finishes, and a clip
+  // whose in-point sits there would render zero gameplay. Clamp the edge
+  // into the run instead of pushing the out-point past its end.
+  if (which === "in") s = Math.min(currentMs, Math.max(0, total - MIN));
+  else e = Math.min(currentMs, total);
   // An edge dragged past the other one would be an empty clip. Push the
   // other edge along instead of refusing, which is what someone means by
   // marking an out point before the in point.
-  const MIN = 500;
   if (e - s < MIN) {
-    if (which === "in") e = s + MIN;
+    if (which === "in") e = Math.min(total, s + MIN);
     else s = Math.max(0, e - MIN);
   }
   await applyClip(s, e, which === "in" ? "Clip starts here." : "Clip ends here.");

@@ -173,7 +173,9 @@ function renderMapCard() {
   // stores only the song's NAME is the usual cause, and it is fixable.
   const custom = status?.settings?.audio_path;
   const audioLine = m.has_audio
-    ? "audio ✓"
+    ? custom
+      ? `<span class="warnish" title="A Soundtrack override is set in the Output tab, so this map's own music will NOT be used. Clear the override there to hear the map's audio.">audio replaced by ${esc(custom.split(/[\\/]/).pop())}</span>`
+      : "audio ✓"
     : custom
       ? `audio from ${esc(custom.split(/[\\/]/).pop())}`
       : `<span class="warnish" title="This map file stores the song's name, not the song. Pick a Soundtrack in the Output tab, or the render is silent.">audio ✕ (silent: set a Soundtrack in Output)</span>`;
@@ -828,8 +830,10 @@ function renderOutputTab() {
   $("set-hitvol").value = String(s.hitsound_volume);
   $("hitvol-val").textContent = `${s.hitsound_volume}%`;
   $("set-outdir").value = s.output_dir || "";
-  $("set-filename").value = s.file_name || "";
-  $("set-ffmpeg").value = s.ffmpeg || "";
+  // Typed-into fields own their value: a background status refresh landing
+  // mid-keystroke used to wipe what was being typed.
+  put("set-filename", s.file_name || "");
+  put("set-ffmpeg", s.ffmpeg || "");
   if (status?.replay && !s.file_name) {
     invoke("suggest_file_name").then((n) => { $("set-filename").placeholder = n; });
   }
@@ -857,6 +861,12 @@ function renderGameCard(note) {
   if (ok) {
     html += `<span class="chip ok">game connected</span>`;
     html += `<div class="src-meta" style="margin-top:6px" title="${esc(path || "")}">Built-in skins use the exact textures and colors.</div>`;
+    if (status?.game_assets_stale) {
+      // The extraction predates the game's fonts: everything else works,
+      // but non-Latin song titles fall back to replacement marks until a
+      // re-extraction picks the fonts up. One click on Detect/Locate.
+      html += `<div class="src-meta warnish" style="margin-top:6px">This extraction is from an older rhythr and lacks the game's fonts (needed for non-Latin song titles). Re-connect once via Detect or Locate to update it.</div>`;
+    }
   } else {
     html += `<span class="chip warn">not connected</span>`;
     html += `<div class="src-meta" style="margin-top:6px">Built-in skins are approximated until rhythr reads your Rhythia install. Use Detect, or Locate the game's executable.</div>`;
@@ -2145,7 +2155,12 @@ function initControls() {
   $("btn-bg").addEventListener("click", async () => {
     const p = await dialog.open({
       filters: [
-        { name: "Image or video", extensions: ["png", "jpg", "jpeg", "webp", "bmp", "gif", "mp4", "webm", "mkv", "mov", "avi", "m4v", "wmv", "flv", "ts"] },
+        {
+          name: "Image or video",
+          extensions: ["png", "jpg", "jpeg", "webp", "bmp", "gif", "mp4", "webm", "mkv", "mov", "avi", "m4v", "wmv", "flv", "ts"].flatMap(
+            (e) => [e, e.toUpperCase()],
+          ),
+        },
         { name: "All files", extensions: ["*"] },
       ],
     });
@@ -2411,7 +2426,14 @@ function initControls() {
   $("btn-audio").addEventListener("click", async () => {
     const p = await dialog.open({
       filters: [
-        { name: "Audio", extensions: ["mp3", "ogg", "wav", "flac", "m4a", "aac", "opus", "webm"] },
+        // Both cases: Linux file dialogs filter case-sensitively, and
+        // SONG.MP3 is a real file name.
+        {
+          name: "Audio",
+          extensions: ["mp3", "ogg", "wav", "flac", "m4a", "aac", "opus", "webm"].flatMap(
+            (e) => [e, e.toUpperCase()],
+          ),
+        },
         { name: "All files", extensions: ["*"] },
       ],
     });

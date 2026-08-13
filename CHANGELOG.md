@@ -82,6 +82,38 @@ drawn or measured wrong.
   screen. It was rebuilt at 1280x800 every time, on the window whose whole
   point is filling the screen.
 
+### From a cross-platform review before release
+
+A six-lens adversarial review (Windows, macOS and Linux each got their own
+pass) confirmed and fixed, among smaller things:
+
+- **On HiDPI displays the Analyze window grew every time it was reopened.**
+  Its remembered size was saved in physical pixels and restored through an
+  API that reads logical ones, so every open/close cycle multiplied the
+  window by the display scale: 25 percent bigger each time at Windows 125
+  percent scaling, doubled on Retina. Closing it while in F11 fullscreen
+  also overwrote the remembered size with the whole monitor.
+- **Hit sounds on a map without audio produced a silent file.** The hits
+  track was only built when a song existed, which dropped it on exactly the
+  maps where hit sounds are the only sound available. They are now the
+  render's audio when there is no song.
+- **A chosen soundtrack whose file had been moved fell back silently**, kept
+  applying its own-speed choice to audio that was not there (desynced on
+  speed-modded runs), and the diagnostics still claimed the chosen file was
+  used. The fallback now warns, and everything derives from what actually
+  played.
+- **Clip bookmarks on Windows** were keyed by exact path spelling, so the
+  same replay reached via a different case or separator hid its bookmarks.
+- **Slow motion** now slows a video background with the render instead of
+  letting it drift ahead, and the file-name field no longer loses what you
+  are typing when a status refresh lands mid-keystroke.
+- **A size target on VAAPI is probed first**: a driver without VBR rate
+  control now falls back to the quality setting with a message, instead of
+  failing the encode after the wait.
+- Upgrading users with a connected game get a one-line note that their
+  extraction predates the game's fonts (non-Latin titles need them), with
+  re-connecting once as the fix.
+
 ### Corrected
 
 - **Song titles are drawn in the alphabet they were written in.** The HUD

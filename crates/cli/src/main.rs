@@ -896,9 +896,22 @@ fn run() -> anyhow::Result<bool> {
 
             // The two numbers people check before walking away: how much
             // song is being rendered, and how long the file will be. They
-            // are the same only at 1.00x.
+            // are the same only at 1.00x. The results screen counts toward
+            // the file (same gate as the renderer: only when the clip
+            // reaches the end of the run), and it is real time, untouched
+            // by any speed.
             let song_secs = (end_ms - start_ms) / 1000.0;
-            let video_secs = song_secs / (r.speed as f64 * speed).max(1e-9);
+            let run_end = if r.failed() {
+                f64::from(r.fail_time_ms)
+            } else {
+                r.length_ms()
+            };
+            let tail_secs = if results_secs > 0.0 && end_ms >= run_end - 500.0 {
+                results_secs
+            } else {
+                0.0
+            };
+            let video_secs = song_secs / (r.speed as f64 * speed).max(1e-9) + tail_secs;
             println!(
                 "rendering {song_secs:.1}s of {} @ {}x{}/{} (run {:.2}x, output {:.2}x) -> {:.1}s \
                  video -> {}",

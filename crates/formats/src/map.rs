@@ -134,6 +134,15 @@ impl Map {
                 .get("Time")
                 .and_then(|v| v.as_f64())
                 .ok_or(Error::BadMapField("Notes[].Time"))?;
+            // A NaN or an absurd magnitude would otherwise saturate the
+            // i64 cast silently (NaN casts to 0, 1e300 to i64::MAX) and
+            // surface later as a four-hour-render refusal or a note at the
+            // beginning of time. Half a year of milliseconds is generous:
+            // the longest observed chart is minutes.
+            const MAX_NOTE_MS: f64 = 1.6e10;
+            if !time.is_finite() || time.abs() > MAX_NOTE_MS {
+                return Err(Error::BadMapField("Notes[].Time"));
+            }
             // X/Y are usually 0/1/2 but may be off-grid quantum floats.
             let x = n
                 .get("X")

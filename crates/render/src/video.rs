@@ -574,9 +574,13 @@ pub fn render_video(
         cmd.arg("-i").arg(audio);
     }
     // Hit/miss sounds: mixed into their own PCM track at the registered
-    // hit times, fed to ffmpeg as a third input.
+    // hit times. With a song they are the next input after it; without one
+    // (a cache-JSON map with no audio) they become the render's ONLY audio
+    // rather than being silently dropped, which used to make "hit sounds
+    // on" produce a fully silent file on exactly the maps where hit sounds
+    // are the only sound available.
     let mut _hits_tmp: Option<tempfile::NamedTempFile> = None;
-    if let (Some(hs), true) = (&opts.hitsounds, opts.audio.is_some()) {
+    if let (Some(hs), false) = (&opts.hitsounds, opts.discard_output) {
         let track = crate::audio::Clip::from_wav(&hs.hit_wav).and_then(|hit| {
             let miss = hs
                 .miss_wav
@@ -614,7 +618,13 @@ pub fn render_video(
     // that is part of the file too.
     let size_target = opts.target_size_mb.map(|mb| {
         let secs = total_frames as f64 / opts.fps.max(1) as f64;
-        if !supports_target_size(&opts.encoder) {
+        // VAAPI can be aimed at a size only where the driver has VBR; a
+        // driver without it fails at encoder-open, AFTER the wait, so the
+        // probe runs first and the honest fallback is the same one AMF
+        // gets: the quality setting, and a message saying so.
+        let encoder_can = supports_target_size(&opts.encoder)
+            && (opts.encoder != "vaapi" || vaapi_vbr_supported(&opts.ffmpeg, true));
+        if !encoder_can {
             SizeTarget::EncoderCannot {
                 mb,
                 encoder: opts.encoder.clone(),
@@ -710,6 +720,11 @@ pub fn render_video(
         } else {
             cmd.args(["-af", &format!("atrim=duration={play_secs:.3},apad")]);
         }
+        cmd.args(["-c:a", "aac", "-b:a", "192k"]);
+    } else if _hits_tmp.is_some() && !opts.discard_output {
+        // No song: the hits track (input 1) is the audio. Padded so the
+        // results screen keeps a silent tail instead of ending the stream.
+        cmd.args(["-map", "0:v", "-map", "1:a", "-af", "apad"]);
         cmd.args(["-c:a", "aac", "-b:a", "192k"]);
     }
     let video_dur = total_frames as f64 / opts.fps as f64;
@@ -890,7 +905,12 @@ pub fn render_video(
                 decoder,
                 (fw * fh * 4) as usize,
                 f64::from(decode_fps),
-                f64::from(opts.fps),
+                // Slow motion slows the whole world, the backdrop with it:
+                // the stream paces itself by source-frames-per-output-frame,
+                // so a 0.25x render wants a quarter of the source per frame.
+                // Without this the backdrop ran at real time over a slowed
+                // song and drifted ahead by the inverse of the speed.
+                f64::from(opts.fps) / out_speed,
             ))
         }
         None => None,
@@ -1667,17 +1687,17 @@ pub fn vaapi_device(ffmpeg: &str) -> Option<String> {
     nodes.sort();
     let found = nodes
         .into_iter()
-        .find(|dev| vaapi_probe(ffmpeg, dev, false).is_ok());
+        .find(|dev| vaapi_probe(ffmpeg, dev, "").is_ok());
     if let Ok(mut c) = cache.lock() {
         c.insert(ffmpeg.to_string(), found.clone());
     }
     found
 }
 
-/// Runs a tiny real encode on one render node. `icq` asks for the rate
-/// control mode we would rather use, so the answer is about the mode and not
-/// just about the device.
-fn vaapi_probe(ffmpeg: &str, device: &str, icq: bool) -> Result<(), String> {
+/// Runs a tiny real encode on one render node. `rc_mode` asks for the rate
+/// control mode we would rather use ("ICQ", "VBR", or "" for the driver's
+/// default), so the answer is about the mode and not just about the device.
+fn vaapi_probe(ffmpeg: &str, device: &str, rc_mode: &str) -> Result<(), String> {
     let mut cmd = Command::new(ffmpeg);
     hide_console_window(&mut cmd);
     cmd.args(["-hide_banner", "-loglevel", "error"]);
@@ -1689,8 +1709,14 @@ fn vaapi_probe(ffmpeg: &str, device: &str, icq: bool) -> Result<(), String> {
         "color=black:size=256x256:rate=30:duration=0.1",
     ]);
     cmd.args(["-vf", "format=nv12,hwupload", "-c:v", "h264_vaapi"]);
-    if icq {
-        cmd.args(["-rc_mode", "ICQ", "-global_quality", "23"]);
+    match rc_mode {
+        "ICQ" => {
+            cmd.args(["-rc_mode", "ICQ", "-global_quality", "23"]);
+        }
+        "VBR" => {
+            cmd.args(["-rc_mode", "VBR", "-b:v", "1000k", "-maxrate", "1500k"]);
+        }
+        _ => {}
     }
     cmd.args(["-f", "null", "-"]);
     // The reason is kept rather than discarded. Throwing it away and telling
@@ -1740,7 +1766,31 @@ fn vaapi_icq_supported(ffmpeg: &str, needed: bool) -> bool {
         return hit;
     }
     let ok = match vaapi_device(ffmpeg) {
-        Some(dev) => vaapi_probe(ffmpeg, &dev, true).is_ok(),
+        Some(dev) => vaapi_probe(ffmpeg, &dev, "ICQ").is_ok(),
+        None => false,
+    };
+    if let Ok(mut c) = cache.lock() {
+        c.insert(ffmpeg.to_string(), ok);
+    }
+    ok
+}
+
+/// Whether this VAAPI driver accepts VBR rate control, which is what a size
+/// target needs. Same shape as the ICQ probe, same reason: asking a driver
+/// for a mode it lacks fails the whole encode at open, AFTER the user has
+/// asked for a size and walked away. Probed once per ffmpeg.
+fn vaapi_vbr_supported(ffmpeg: &str, needed: bool) -> bool {
+    if !needed {
+        return false;
+    }
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, bool>>> =
+        std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(Default::default);
+    if let Some(hit) = cache.lock().ok().and_then(|c| c.get(ffmpeg).copied()) {
+        return hit;
+    }
+    let ok = match vaapi_device(ffmpeg) {
+        Some(dev) => vaapi_probe(ffmpeg, &dev, "VBR").is_ok(),
         None => false,
     };
     if let Ok(mut c) = cache.lock() {
@@ -1796,7 +1846,7 @@ pub fn encoder_error(ffmpeg: &str, encoder: &str) -> Option<String> {
             // Say what ffmpeg said. "No render device" is only one of the
             // reasons this fails and was being printed for all of them.
             None => {
-                return Some(match vaapi_probe(ffmpeg, "/dev/dri/renderD128", false) {
+                return Some(match vaapi_probe(ffmpeg, "/dev/dri/renderD128", "") {
                     Ok(()) => "no working VAAPI render device in /dev/dri".into(),
                     Err(why) => why,
                 })
