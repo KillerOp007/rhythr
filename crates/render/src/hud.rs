@@ -1255,6 +1255,7 @@ mod tests {
             points: 0.0,
             fail_time_ms: -1,
             beatmap_hash: String::new(),
+            pitch_lock: false,
             // Far from the note, so it can only be a miss.
             frames: vec![rhythia_formats::rhr::Frame {
                 ms: 0.0,

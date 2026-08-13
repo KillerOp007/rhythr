@@ -129,7 +129,11 @@ function renderReplayCard() {
     <div class="src-meta">
       ${esc(r.file_name)}<br>
       <b>${r.accuracy_pct.toFixed(2)}%</b> · ${r.hits} hits · ${r.misses} misses<br>
-      speed <b>${fmtSpeed(r.speed)}</b> · mods: ${esc(mods)}<br>
+      speed <b>${fmtSpeed(r.speed)}</b>${
+        // Only worth a word when it changes the sound: a speed mod with
+        // the new Pitch Lock toggle on plays at the original pitch.
+        Math.abs(r.speed - 1) > 0.001 && r.pitch_lock ? " (pitch locked)" : ""
+      } · mods: ${esc(mods)}<br>
       ${esc(date)}
     </div>
     ${outcome} ${chip} ${modWarn}`;
@@ -790,6 +794,7 @@ function renderOutputTab() {
   $("set-results").value = String(Math.round(s.results_secs));
   $("set-mblur").value = String(s.motion_blur);
   $("set-outspeed").value = String(s.output_speed ?? 1);
+  $("set-pitch").value = s.pitch_mode || "auto";
   // The map's audio is the default and needs no explaining; a chosen file
   // does, and so does the choice about its speed.
   const audio = s.audio_path || "";
@@ -2419,6 +2424,7 @@ function initControls() {
   $("set-audio-ownspeed").addEventListener("change", () =>
     pushOutput({ audio_own_speed: $("set-audio-ownspeed").checked }),
   );
+  $("set-pitch").addEventListener("change", () => pushOutput({ pitch_mode: $("set-pitch").value }));
   $("set-musicvol").addEventListener("input", () => { $("musicvol-val").textContent = `${$("set-musicvol").value}%`; });
   $("set-musicvol").addEventListener("change", () => pushOutput({ music_volume: Number($("set-musicvol").value) }));
   $("set-hitvol").addEventListener("input", () => { $("hitvol-val").textContent = `${$("set-hitvol").value}%`; });

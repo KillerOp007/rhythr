@@ -117,6 +117,10 @@ struct Settings {
     /// run's speed mod. Off means it stands in for the map's song and
     /// follows the run, which is what a missing map audio wants.
     audio_own_speed: bool,
+    /// What a speed mod does to the song's pitch: "auto" follows the
+    /// replay, "locked" keeps it, "pitched" shifts it with the speed. The
+    /// same toggle the game itself now has in its speed selector.
+    pitch_mode: String,
     /// Render speed of the last completed render, for the time estimate.
     last_render_fps: f64,
     /// Song volume in percent (0-150).
@@ -187,6 +191,7 @@ impl Default for Settings {
             clip_bookmarks: Vec::new(),
             audio_path: None,
             audio_own_speed: false,
+            pitch_mode: "auto".into(),
             last_render_fps: 0.0,
             music_volume: 100,
             hitsound_volume: 50,
@@ -599,6 +604,9 @@ struct ReplayDto {
     map_id: i32,
     legacy_map_id: String,
     speed: f32,
+    /// Release-41 replays record the speed selector's Pitch Lock toggle;
+    /// older ones were always pitched and carry false.
+    pitch_lock: bool,
     mods: Vec<String>,
     passed: bool,
     /// Mods rhythr cannot reproduce. Empty for every ordinary run; when it
@@ -1609,6 +1617,7 @@ fn assemble_status(inner: &Inner, rendering: bool) -> StatusDto {
             map_id: r.map_id,
             legacy_map_id: r.legacy_map_id.clone(),
             speed: r.speed,
+            pitch_lock: r.pitch_lock,
             mods,
             passed: r.passed,
             unsupported_mods: rhythia_render::mods::unsupported_mods(r),
@@ -2982,6 +2991,7 @@ struct OutputUpdate {
     /// audio, which is how the UI's "Use the map's audio" button works.
     audio_path: Option<String>,
     audio_own_speed: Option<bool>,
+    pitch_mode: Option<String>,
     music_volume: Option<u32>,
     hitsound_volume: Option<u32>,
     output_dir: Option<String>,
@@ -3038,6 +3048,15 @@ fn set_output(state: tauri::State<'_, App>, update: OutputUpdate) -> Result<Stat
     }
     if let Some(v) = update.audio_own_speed {
         s.audio_own_speed = v;
+    }
+    if let Some(v) = update.pitch_mode {
+        // Anything unrecognised (a hand-edited file, an older build)
+        // falls back to following the replay rather than silently
+        // meaning something.
+        s.pitch_mode = match v.as_str() {
+            "locked" | "pitched" => v,
+            _ => "auto".into(),
+        };
     }
     if let Some(v) = update.target_size_mb {
         // Anything not a positive number means "no target", which is the
@@ -3286,9 +3305,10 @@ fn prepare_segment(
                 // And at the preview's own fixed quality: a scrub segment is
                 // not the artefact anyone is sizing.
                 target_size_mb: None,
-                // Silent anyway (audio: None below), so this is only here
-                // to keep the struct honest.
+                // Silent anyway (audio: None below), so these are only
+                // here to keep the struct honest.
                 audio_follows_run: true,
+                pitch_lock_override: None,
                 start_ms: start,
                 end_ms: end,
                 ffmpeg,
@@ -4566,6 +4586,11 @@ fn start_render(
             target_size_mb: (s.target_size_mb > 0.0).then_some(s.target_size_mb),
             audio_path: s.audio_path.clone(),
             audio_own_speed: s.audio_own_speed,
+            pitch_lock_override: match s.pitch_mode.as_str() {
+                "locked" => Some(true),
+                "pitched" => Some(false),
+                _ => None,
+            },
             quality: s.quality,
             tcp_feed: s.tcp_feed,
             socket_chunk_kib: s.socket_chunk_kib,
@@ -4705,6 +4730,8 @@ struct RenderJob {
     audio_path: Option<String>,
     /// Mux that file at its own rate instead of following the run.
     audio_own_speed: bool,
+    /// Pitch override for the speed mod; None follows the replay.
+    pitch_lock_override: Option<bool>,
     music_volume: f32,
     hitsounds: Option<rhythia_render::video::HitsoundOptions>,
     ghost: Option<rhythia_render::video::GhostOptions>,
@@ -4904,6 +4931,7 @@ fn run_render_job(
         ffmpeg: job.ffmpeg.clone(),
         audio,
         audio_follows_run,
+        pitch_lock_override: job.pitch_lock_override,
         quality: job.quality,
         tcp_feed: job.tcp_feed,
         socket_chunk: job.socket_chunk_kib as usize * 1024,

@@ -300,6 +300,15 @@
           <span class="sub" id="audio-note">Use a different file instead of the map's audio. Needed for maps whose file stores only the song's name, which otherwise render silent. Leave the box unticked when the file is the map's song (it then follows the run's speed mod, as the game does); tick it when it is a replacement soundtrack that should play unaltered.</span>
         </div>
         <label class="field">
+          <span>Speed-mod pitch</span>
+          <select id="set-pitch">
+            <option value="auto" selected>Follow the replay</option>
+            <option value="pitched">Pitched (shifts with the speed)</option>
+            <option value="locked">Locked (tempo only)</option>
+          </select>
+          <span class="sub">What a speed mod does to the song, mirroring the game's own Pitch Lock toggle. Replays from Release 41 onwards record the player's choice and "Follow the replay" uses it; older replays were always pitched. Only audible on runs with a speed mod.</span>
+        </label>
+        <label class="field">
           <span>Music volume <em id="musicvol-val" class="mono">100%</em></span>
           <input type="range" id="set-musicvol" min="0" max="150" step="5" value="100" />
         </label>

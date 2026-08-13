@@ -130,6 +130,12 @@ endorsed by Rhythia or Capo Games.
   for, the render still happens at the Quality setting and the finished
   line says so rather than quietly writing a bigger file. AMF (AMD on
   Windows) cannot be aimed at a size; choose x264 there.
+- **Speed-mod pitch**: what a speed mod does to the song, mirroring the
+  Pitch Lock toggle the game added to its speed selector in Release 41.
+  Replays from that release on record the player's choice, and "Follow
+  the replay" plays what they heard; older replays were always pitched
+  (faster and higher, nightcore-style) and render that way. The other
+  two settings override the replay in either direction.
 - **Playback speed**: how fast the video plays the run back. 0.25x
   stretches it over four times the length, which is the way to get the
   slow motion the Analyze window shows you out as a video. The music is

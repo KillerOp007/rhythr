@@ -24,6 +24,12 @@ pub const V_FAIL_TIME: i32 = 20260222;
 pub const V_INT32_TIME: i32 = 20260510;
 /// Adds beatmapHash.
 pub const V_BEATMAP_HASH: i32 = 20260517;
+/// Adds pitchLock (Release 41's speed-selector toggle). Found before any
+/// real file existed: the version constant appears in the new exe with the
+/// same 5-site signature the previous current-version had, and the
+/// rhythia.com web parser (the official reference this module is verified
+/// against) reads `pitchLock = bool` between beatmapHash and frameCount.
+pub const V_PITCH_LOCK: i32 = 20260803;
 
 /// Offset between .NET DateTime ticks (100 ns since 0001-01-01) and the
 /// Unix epoch, in ticks.
@@ -81,6 +87,18 @@ pub struct Replay {
     pub fail_time_ms: i32,
     /// 64-hex map hash (empty before 20260517).
     pub beatmap_hash: String,
+    /// Speed-modded audio kept its pitch (true) or was rate-shifted up
+    /// with the speed, nightcore-style (false).
+    ///
+    /// False for every replay older than [`V_PITCH_LOCK`]: the game has
+    /// always pitched speed-modded audio (player-confirmed against real
+    /// gameplay), and Release 41's toggle newly allows switching that
+    /// off. The rhythia.com parser defaults the other way, but that
+    /// mirrors ITS playback stack, not the game's: a browser's
+    /// `playbackRate` preserves pitch by default, so the website always
+    /// sounded pitch-locked no matter what the game did. The score
+    /// database stamping old rows PitchLock=1 is the same web-side story.
+    pub pitch_lock: bool,
     pub frames: Vec<Frame>,
     /// Bytes left after the last frame. Always 0 for well-formed files;
     /// nonzero is surfaced by the integrity check.
@@ -127,6 +145,16 @@ impl Replay {
             r.string()?
         } else {
             String::new()
+        };
+        // One byte, sitting BEFORE the frame count: a parser without this
+        // gate reads the bool into the count and rejects every Release-41
+        // replay as corrupt.
+        let pitch_lock = if version >= V_PITCH_LOCK {
+            r.bool()?
+        } else {
+            // Older replays were all played pitched; see the field's doc
+            // for why the web parser's contrary default is not evidence.
+            false
         };
 
         let frame_count = r.i32()?;
@@ -185,6 +213,7 @@ impl Replay {
             points,
             fail_time_ms,
             beatmap_hash,
+            pitch_lock,
             frames,
             trailing_bytes: r.remaining(),
         })

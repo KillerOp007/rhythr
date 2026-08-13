@@ -155,8 +155,8 @@ pub fn locate_blob_base(exe: &[u8], entries: &[Entry]) -> Option<u64> {
 ///
 /// Skin textures keep their original layout; the rest lands in dedicated
 /// folders: game shaders in `shaders/` (vignette, fade, instanced_tint …),
-/// the hit/miss sounds in `sounds/`, mod icons in `mods/`, and the two UI
-/// fonts in `fonts/`. Colorset names may themselves contain dots; a
+/// the hit/miss sounds in `sounds/`, mod icons in `mods/`, and every UI
+/// font in `fonts/`. Colorset names may themselves contain dots; a
 /// Textures.Game rest with a single dot ("kfc.png") is a top-level file.
 fn route_name(name: &str) -> Option<(&str, &str)> {
     let rest = name.strip_prefix(std::str::from_utf8(NAME_PREFIX).ok()?)?;
@@ -184,8 +184,14 @@ fn route_name(name: &str) -> Option<(&str, &str)> {
     if let Some(f) = rest.strip_prefix("Textures.Menu.mods.") {
         return Some(("mods", f));
     }
-    if rest == "Fonts.default.ttf" || rest == "Fonts.default2.ttf" {
-        return Some(("fonts", rest.strip_prefix("Fonts.").unwrap()));
+    if let Some(f) = rest.strip_prefix("Fonts.") {
+        // ALL of them, not a whitelist: the HUD resolves a fallback chain
+        // (default, default2, the Japanese face, arial) and a font the
+        // extractor withholds is a font the chain can never reach. The
+        // Japanese one is what a CJK song title needs, and routing only
+        // the first two silently reduced such titles to replacement marks
+        // on every real installation.
+        return Some(("fonts", f));
     }
     None
 }

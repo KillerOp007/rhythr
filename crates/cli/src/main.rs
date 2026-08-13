@@ -113,6 +113,12 @@ enum Command {
         /// soundtrack rather than the map's song.
         #[arg(long)]
         audio_own_speed: bool,
+        /// What a speed mod does to the song's pitch: auto follows the
+        /// replay (its recorded Pitch Lock toggle on new files, pitched on
+        /// older ones), locked keeps the pitch, pitched shifts it with the
+        /// speed.
+        #[arg(long, default_value = "auto", value_parser = ["auto", "locked", "pitched"])]
+        pitch: String,
         /// Clip start (ms or mm:ss); default 0.
         #[arg(long)]
         start: Option<String>,
@@ -597,6 +603,7 @@ fn run() -> anyhow::Result<bool> {
             out,
             audio,
             audio_own_speed,
+            pitch,
             start,
             end,
             fps,
@@ -847,6 +854,11 @@ fn run() -> anyhow::Result<bool> {
                 ffmpeg,
                 audio: audio_path,
                 audio_follows_run: !audio_own_speed,
+                pitch_lock_override: match pitch.as_str() {
+                    "locked" => Some(true),
+                    "pitched" => Some(false),
+                    _ => None,
+                },
                 tcp_feed: !no_tcp_feed,
                 socket_chunk,
                 discard_output: dry_run,
@@ -990,6 +1002,14 @@ fn print_info(r: &Replay) {
         );
     }
     println!("speed          {}", r.speed);
+    println!(
+        "pitch          {}",
+        if r.pitch_lock {
+            "locked (tempo only)"
+        } else {
+            "shifts with speed"
+        }
+    );
     println!("total score    {}", r.total_score);
     println!("accuracy       {:.4} %", r.accuracy_pct);
     println!("hits/misses    {}/{}", r.hits, r.misses);
@@ -1027,6 +1047,7 @@ fn print_info_json(r: &Replay) {
         "unsupported_mods": rhythia_render::mods::unsupported_mods(r),
         "spin": r.spin,
         "speed": r.speed,
+        "pitch_lock": r.pitch_lock,
         "total_score": r.total_score,
         "accuracy_pct": r.accuracy_pct,
         "hits": r.hits,

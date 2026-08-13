@@ -326,6 +326,7 @@ mod tests {
             points: 0.0,
             fail_time_ms: -1,
             beatmap_hash: String::new(),
+            pitch_lock: false,
             frames: Vec::new(),
             trailing_bytes: 0,
         }

@@ -82,6 +82,12 @@ pub struct VideoOptions {
     /// pitching somebody's chosen music up 45% to match a speed mod is
     /// never what they meant.
     pub audio_follows_run: bool,
+    /// Overrides what the speed mod does to the song's pitch. None follows
+    /// the replay (its recorded toggle for Release-41 files, pitched for
+    /// everything older); Some(true) locks the pitch, Some(false) shifts
+    /// it with the speed. A viewer's choice, mirroring the toggle the game
+    /// itself now has in its speed selector.
+    pub pitch_lock_override: Option<bool>,
     /// Aim for a file of about this many MB instead of a quality level.
     ///
     /// Frames arrive over a pipe, so ffmpeg cannot rewind and two-pass is
@@ -106,6 +112,59 @@ pub struct VideoOptions {
     /// The results screen keeps its own real-time length: it is an
     /// appendix, not part of the run.
     pub output_speed: f64,
+}
+
+/// An `atempo` chain for one tempo factor, pitch untouched. Chained in
+/// halves/doubles because a single atempo instance only accepts 0.5..2 on
+/// older ffmpeg builds, and the render must work with a system ffmpeg as
+/// well as the bundled one. Empty when the factor is 1.
+fn atempo_chain(mut s: f64) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    while s < 0.5 {
+        parts.push("atempo=0.5".into());
+        s *= 2.0;
+    }
+    while s > 2.0 {
+        parts.push("atempo=2.0".into());
+        s /= 2.0;
+    }
+    if (s - 1.0).abs() > 0.001 {
+        parts.push(format!("atempo={s:.6}"));
+    }
+    parts.join(",")
+}
+
+/// The filter prefix (trailing comma included, or empty) that makes the
+/// map's song match the video's pace.
+///
+/// `pitch_lock` comes from the replay and decides WHAT a speed mod did to
+/// the audio the player heard. Locked (the game's default, and the
+/// standing behaviour before the toggle existed): tempo changes, pitch
+/// does not, so the whole factor (run speed x output speed) goes through
+/// atempo. Unlocked (an explicit nightcore-style choice): the run's own
+/// speed is a rate shift exactly as before, and only the viewer's slow
+/// motion, which the player never heard, stays pitch-preserving on top.
+fn audio_speed_filter(pitch_lock: bool, run_speed: f64, out_speed: f64) -> String {
+    let mut f = String::new();
+    if pitch_lock {
+        let chain = atempo_chain(run_speed * out_speed);
+        if !chain.is_empty() {
+            f = format!("{chain},");
+        }
+    } else {
+        if (run_speed - 1.0).abs() > 0.001 {
+            f = format!(
+                "aresample=48000,asetrate={:.0},aresample=48000,",
+                48000.0 * run_speed
+            );
+        }
+        let chain = atempo_chain(out_speed);
+        if !chain.is_empty() {
+            f.push_str(&chain);
+            f.push(',');
+        }
+    }
+    f
 }
 
 /// Bitrate the audio track is encoded at, and the only figure the size
@@ -206,6 +265,7 @@ impl Default for VideoOptions {
             discard_output: false,
             background_video: None,
             audio_follows_run: true,
+            pitch_lock_override: None,
             target_size_mb: None,
             output_speed: 1.0,
         }
@@ -407,14 +467,14 @@ pub fn render_video(
     let end_ms = opts.end_ms.min(run_end.max(opts.start_ms));
     // Results screen only when the clip reaches the end of the run.
     let show_results = opts.results_secs > 0.0 && end_ms >= run_end - 500.0;
-    let speed = (replay.speed as f64).clamp(0.25, 3.0);
+    let run_speed = (replay.speed as f64).clamp(0.25, 3.0);
     // The run's own speed and the speed the video plays it back at
     // multiply: a 1.45x run rendered at 0.5x covers song time at 0.725x.
     // Everything downstream (the clip's wall-clock length, the song time
     // each frame advances, the audio rate, where the hit sounds land) is
     // derived from this one number, so the two speeds can never disagree.
     let out_speed = clamp_output_speed(opts.output_speed);
-    let speed = speed * out_speed;
+    let speed = run_speed * out_speed;
     let span_ms = (end_ms - opts.start_ms).max(0.0);
     // Wall-clock length of the clip: song span compressed by the speed.
     let span_real_ms = span_ms / speed;
@@ -613,14 +673,11 @@ pub fn render_video(
     if opts.audio.is_some() && !opts.discard_output {
         let play_secs = span_real_ms / 1000.0;
         let mv = opts.music_volume.clamp(0.0, 1.5);
-        // Speed mod: rate-shift the song like the game does (faster AND
-        // higher-pitched). Resample to a known rate first so asetrate
-        // scales from a fixed base.
-        let rate = if (speed - 1.0).abs() > 0.001 && opts.audio_follows_run {
-            format!(
-                "aresample=48000,asetrate={:.0},aresample=48000,",
-                48000.0 * speed
-            )
+        // Speed mod: what happens to the song depends on the replay's own
+        // pitch-lock flag, not on a guess. See audio_speed_filter.
+        let rate = if opts.audio_follows_run {
+            let lock = opts.pitch_lock_override.unwrap_or(replay.pitch_lock);
+            audio_speed_filter(lock, run_speed, out_speed)
         } else {
             String::new()
         };
@@ -1781,6 +1838,71 @@ pub fn encoder_error(ffmpeg: &str, encoder: &str) -> Option<String> {
 mod audio_tests {
     use super::*;
 
+    /// The tempo product must survive the chaining exactly: the video's
+    /// length is span/(run*out), and audio that comes out a different
+    /// length drifts against the picture over a whole song.
+    #[test]
+    fn atempo_chain_multiplies_back_to_the_factor() {
+        for want in [0.025, 0.1, 0.25, 0.5, 0.725, 1.0, 1.45, 2.0, 2.9, 12.0] {
+            let chain = atempo_chain(want);
+            let got: f64 = chain
+                .split(',')
+                .filter(|p| !p.is_empty())
+                .map(|p| p.trim_start_matches("atempo=").parse::<f64>().unwrap())
+                .product();
+            assert!(
+                (got - want).abs() < 0.002,
+                "{want}: chain {chain} multiplies to {got}"
+            );
+            // And every stage stays inside what the oldest supported
+            // ffmpeg accepts.
+            for p in chain.split(',').filter(|p| !p.is_empty()) {
+                let v: f64 = p.trim_start_matches("atempo=").parse().unwrap();
+                assert!((0.5..=2.0).contains(&v), "{want}: stage {p} out of range");
+            }
+        }
+        assert_eq!(atempo_chain(1.0), "", "1x needs no filter at all");
+    }
+
+    /// Locked pitch is the game's default and its standing behaviour: a
+    /// 1.45x run plays faster at the SAME pitch, so the filter must be
+    /// tempo-only, and rendering it with a rate shift puts a chipmunk
+    /// where the player heard the song.
+    #[test]
+    fn a_locked_run_gets_tempo_and_never_a_rate_shift() {
+        let f = audio_speed_filter(true, 1.45, 1.0);
+        assert!(f.contains("atempo"), "{f}");
+        assert!(!f.contains("asetrate"), "{f}");
+        // Slow motion folds into the same chain.
+        let f = audio_speed_filter(true, 1.45, 0.5);
+        let got: f64 = f
+            .trim_end_matches(',')
+            .split(',')
+            .map(|p| p.trim_start_matches("atempo=").parse::<f64>().unwrap())
+            .product();
+        assert!((got - 0.725).abs() < 0.002, "{f}");
+        // And a plain 1x run at 1x output filters nothing.
+        assert_eq!(audio_speed_filter(true, 1.0, 1.0), "");
+    }
+
+    /// Unlocked is the explicit nightcore choice: the run's own speed is a
+    /// rate shift exactly as it always was, and only the viewer's slow
+    /// motion, which the player never heard, stays pitch-preserving.
+    #[test]
+    fn an_unlocked_run_keeps_the_rate_shift() {
+        let f = audio_speed_filter(false, 1.45, 1.0);
+        assert!(f.contains("asetrate=69600"), "{f}");
+        assert!(!f.contains("atempo"), "{f}");
+        let f = audio_speed_filter(false, 1.45, 0.5);
+        assert!(
+            f.contains("asetrate=69600") && f.contains("atempo=0.5"),
+            "{f}"
+        );
+        // No speed mod: nothing to pitch, slow motion alone is tempo.
+        let f = audio_speed_filter(false, 1.0, 0.25);
+        assert!(!f.contains("asetrate"), "{f}");
+    }
+
     /// The map's own song IS the run's song, so it has to follow a speed
     /// mod the way the game does. Only a deliberately chosen replacement
     /// track opts out, and the default has to stay on that side: a build
@@ -1789,6 +1911,8 @@ mod audio_tests {
     #[test]
     fn audio_follows_the_run_unless_something_says_otherwise() {
         assert!(VideoOptions::default().audio_follows_run);
+        // And the pitch follows the replay unless the viewer overrides it.
+        assert_eq!(VideoOptions::default().pitch_lock_override, None);
     }
 }
 

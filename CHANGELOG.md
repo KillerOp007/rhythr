@@ -5,6 +5,28 @@ endorsed by Rhythia or Capo Games.
 
 ## Unreleased
 
+### Rhythia Release 41
+
+- **Replays from game Release 41 load.** The update writes a new replay
+  version (20260803) with the speed selector's Pitch Lock choice stored as
+  one byte in the middle of the header, and a parser without that gate
+  reads the byte into the frame count and calls every new file corrupt.
+  Verified against the rhythia.com parser, which reads the same byte in
+  the same place.
+
+- **Pitch Lock is honoured, and overridable.** A speed-modded run played
+  with the new toggle renders with the song at its original pitch (tempo
+  changed only); everything else keeps the pitched, nightcore-style audio
+  the game has always had. `info` reports which one a replay carries, the
+  replay card marks locked runs, and an Output setting (CLI `--pitch`)
+  overrides it in either direction. Slow motion stays pitch-preserving on
+  top in both cases, since the player never heard the slow-down.
+
+- **The game connection now extracts all four of the game's fonts** rather
+  than two of them. One of the two it left behind is the Japanese face,
+  which is exactly the font a CJK song title needs: the fallback chain
+  from this cycle's title fix could never reach it on a real installation.
+
 Getting what you found out of the tool, and four things that were being
 drawn or measured wrong.
 

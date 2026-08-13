@@ -6,7 +6,7 @@
 //! not part of any crate API, never touches the filesystem, and must never
 //! be promoted into one (project hard rule #1: no replay writer).
 
-use rhythia_formats::rhr::{Replay, V_BEATMAP_HASH};
+use rhythia_formats::rhr::{Replay, V_BEATMAP_HASH, V_PITCH_LOCK};
 
 struct B(Vec<u8>);
 
@@ -176,6 +176,62 @@ fn int_time_without_hash() {
     let r = Replay::parse(&data).unwrap();
     assert_eq!(r.frames[0].ms, 1234.0);
     assert_eq!(r.beatmap_hash, "");
+}
+
+#[test]
+fn pitch_lock_gate_reads_the_byte_and_defaults_true_before_it() {
+    // v20260803 adds ONE byte between beatmapHash and frameCount. The
+    // dangerous failure is silent: a parser without the gate reads that
+    // byte into the frame count and calls the file corrupt.
+    let with_byte = |b: u8| {
+        stats(extended(header(V_PITCH_LOCK), 1.0))
+            .i32(-1) // failTime
+            .string("cafebabe") // beatmapHash
+            .u8(b) // pitchLock
+            .i32(1)
+            .i32(1234)
+            .f32(0.0)
+            .f32(0.0)
+            .f32(1.0)
+            .u8(1)
+            .0
+    };
+    let locked = Replay::parse(&with_byte(1)).unwrap();
+    assert!(locked.pitch_lock);
+    assert_eq!(locked.frames.len(), 1, "the count came after the byte");
+    assert_eq!(locked.beatmap_hash, "cafebabe");
+    assert_eq!(locked.trailing_bytes, 0);
+
+    let pitched = Replay::parse(&with_byte(0)).unwrap();
+    assert!(!pitched.pitch_lock, "an explicit 0 means pitched audio");
+
+    // Older versions have no byte to read and mean PITCHED: the game
+    // always rate-shifted speed-modded audio (player-confirmed), and the
+    // toggle is Release 41's way to switch that off. The web parser
+    // defaults the other way only because a browser's playbackRate
+    // preserves pitch by itself.
+    let old = stats(extended(header(V_BEATMAP_HASH), 1.0))
+        .i32(-1)
+        .string("cafebabe")
+        .i32(1)
+        .i32(1234)
+        .f32(0.0)
+        .f32(0.0)
+        .f32(1.0)
+        .u8(0)
+        .0;
+    let r = Replay::parse(&old).unwrap();
+    assert!(!r.pitch_lock, "an old replay was played pitched");
+    assert_eq!(r.frames.len(), 1, "no stray byte was consumed");
+}
+
+#[test]
+fn v20260803_truncated_before_the_pitch_byte_errors_cleanly() {
+    let data = stats(extended(header(V_PITCH_LOCK), 1.0))
+        .i32(-1)
+        .string("cafebabe")
+        .0;
+    assert!(Replay::parse(&data).is_err(), "EOF, not a default");
 }
 
 #[test]
