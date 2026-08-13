@@ -119,6 +119,15 @@ pub struct VideoOptions {
 /// older ffmpeg builds, and the render must work with a system ffmpeg as
 /// well as the bundled one. Empty when the factor is 1.
 fn atempo_chain(mut s: f64) -> String {
+    // A factor that IS 1 (within f32 speed noise) wants no filter at all.
+    // This check must run on the whole factor, before the halving loops:
+    // run on the residual afterwards, a factor like 2.001 would lose its
+    // 1.0005 remainder, and the music would run at exactly 2.0 while the
+    // video and the hit sounds run at 2.001, which is a tenth of a second
+    // of drift over a seven-minute song and a cut-off song tail.
+    if (s - 1.0).abs() < 0.001 {
+        return String::new();
+    }
     let mut parts: Vec<String> = Vec::new();
     while s < 0.5 {
         parts.push("atempo=0.5".into());
@@ -128,8 +137,8 @@ fn atempo_chain(mut s: f64) -> String {
         parts.push("atempo=2.0".into());
         s /= 2.0;
     }
-    if (s - 1.0).abs() > 0.001 {
-        parts.push(format!("atempo={s:.6}"));
+    if (s - 1.0).abs() > 1e-9 {
+        parts.push(format!("atempo={s:.9}"));
     }
     parts.join(",")
 }
@@ -138,12 +147,13 @@ fn atempo_chain(mut s: f64) -> String {
 /// map's song match the video's pace.
 ///
 /// `pitch_lock` comes from the replay and decides WHAT a speed mod did to
-/// the audio the player heard. Locked (the game's default, and the
-/// standing behaviour before the toggle existed): tempo changes, pitch
-/// does not, so the whole factor (run speed x output speed) goes through
-/// atempo. Unlocked (an explicit nightcore-style choice): the run's own
-/// speed is a rate shift exactly as before, and only the viewer's slow
-/// motion, which the player never heard, stays pitch-preserving on top.
+/// the audio the player heard. Unlocked is the game's standing behaviour
+/// and the default for every pre-Release-41 replay: the run's own speed
+/// is a rate shift, faster and higher. Locked is the toggle Release 41
+/// added, switching the pitch change OFF: tempo changes, pitch does not,
+/// so the whole factor (run speed x output speed) goes through atempo.
+/// In both cases the viewer's slow motion, which the player never heard,
+/// stays pitch-preserving on top.
 fn audio_speed_filter(pitch_lock: bool, run_speed: f64, out_speed: f64) -> String {
     let mut f = String::new();
     if pitch_lock {
@@ -1843,7 +1853,12 @@ mod audio_tests {
     /// length drifts against the picture over a whole song.
     #[test]
     fn atempo_chain_multiplies_back_to_the_factor() {
-        for want in [0.025, 0.1, 0.25, 0.5, 0.725, 1.0, 1.45, 2.0, 2.9, 12.0] {
+        // 2.001 and 0.4999 sit just past a power of two: the halving
+        // loops leave a residual within 0.1% of 1.0, and an epsilon check
+        // running on the residual instead of the whole factor drops it.
+        for want in [
+            0.025, 0.1, 0.25, 0.4999, 0.5, 0.725, 1.0, 1.45, 2.0, 2.001, 2.9, 12.0,
+        ] {
             let chain = atempo_chain(want);
             let got: f64 = chain
                 .split(',')
@@ -1864,8 +1879,8 @@ mod audio_tests {
         assert_eq!(atempo_chain(1.0), "", "1x needs no filter at all");
     }
 
-    /// Locked pitch is the game's default and its standing behaviour: a
-    /// 1.45x run plays faster at the SAME pitch, so the filter must be
+    /// Locked pitch is Release 41's opt-in toggle: a 1.45x run played
+    /// with it goes faster at the SAME pitch, so the filter must be
     /// tempo-only, and rendering it with a rate shift puts a chipmunk
     /// where the player heard the song.
     #[test]

@@ -179,7 +179,7 @@ fn int_time_without_hash() {
 }
 
 #[test]
-fn pitch_lock_gate_reads_the_byte_and_defaults_true_before_it() {
+fn pitch_lock_gate_reads_the_byte_and_defaults_pitched_before_it() {
     // v20260803 adds ONE byte between beatmapHash and frameCount. The
     // dangerous failure is silent: a parser without the gate reads that
     // byte into the frame count and calls the file corrupt.

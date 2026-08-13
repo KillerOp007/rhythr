@@ -76,10 +76,11 @@ pub struct FontAtlas {
     pub height: usize,
     pub pixels: Vec<u8>, // R8 coverage, row-major
     glyphs: std::collections::HashMap<char, Glyph>,
-    /// Tried in order per character. The game ships three (a default, a
-    /// second one, and a Japanese face) and the bundled approximation is
-    /// always last, so a title reaches for the real font first and still
-    /// gets drawn when the game's assets are not available.
+    /// Tried in order per character. The game ships four (a default, a
+    /// second one, a Japanese face and arial) and the bundled
+    /// approximation is always last, so a title reaches for the real font
+    /// first and still gets drawn when the game's assets are not
+    /// available.
     fonts: Vec<Font>,
     /// Everything currently rasterised, so a rebuild can start from what
     /// the atlas already had rather than losing it.

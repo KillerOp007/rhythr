@@ -18,7 +18,7 @@ endorsed by Rhythia or Capo Games.
   with the new toggle renders with the song at its original pitch (tempo
   changed only); everything else keeps the pitched, nightcore-style audio
   the game has always had. `info` reports which one a replay carries, the
-  replay card marks locked runs, and an Output setting (CLI `--pitch`)
+  replay card marks locked speed-modded runs, and an Output setting (CLI `--pitch`)
   overrides it in either direction. Slow motion stays pitch-preserving on
   top in both cases, since the player never heard the slow-down.
 

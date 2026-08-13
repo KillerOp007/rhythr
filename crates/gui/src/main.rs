@@ -366,6 +366,13 @@ impl Settings {
         // zero or a negative here, and dividing the whole timeline by it
         // would produce a render of no length or of infinite length.
         self.output_speed = rhythia_render::video::clamp_output_speed(self.output_speed);
+        // And the pitch mode: the update handler normalises it, but a file
+        // arrives through serde without passing that, and a junk value
+        // would leave the UI select showing nothing while quietly meaning
+        // auto.
+        if !matches!(self.pitch_mode.as_str(), "auto" | "locked" | "pitched") {
+            self.pitch_mode = "auto".into();
+        }
     }
 
     fn load() -> Settings {
