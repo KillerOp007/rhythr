@@ -1660,11 +1660,6 @@ fn verify_dto(replay: &Replay, map: &Map, hash_mismatch: bool) -> VerifyDto {
     }
 }
 
-/// Whether a failed check is better explained by the loaded map than by the
-/// replay. A replay's hit flags only line up with the chart they were played
-/// on, so against a foreign map most of them match nothing at all (a state
-/// no edit produces, since editing a replay keeps its own totals coherent).
-
 /// Overlays and meter chrome flip to dark strokes on bright skin
 /// backgrounds (one rule, used by the HUD and the analyze overlay).
 fn is_light_background(cfg: &rhythia_render::config::SkinConfig) -> bool {

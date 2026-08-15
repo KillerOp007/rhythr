@@ -1,6 +1,7 @@
 //! Debug tool: renders the designer window's preview scene to a PNG,
 //! the same three-note synthetic setup the live preview command uses.
 //! Usage: designer_preview_png <out.png> [waves] [amp] [rim]
+#[allow(clippy::field_reassign_with_default)]
 fn main() {
     let mut args = std::env::args().skip(1);
     let out = args.next().expect("out path");
