@@ -134,16 +134,24 @@ fn inset(pts: &[[f32; 2]], t: f32) -> Outline {
     out
 }
 
-/// Builds the note mesh from a closed outline.
-///
-/// `hollow`: None fills the silhouette; Some(t) keeps a rim of thickness
-/// `t` (in outline units) and opens the middle, the way the game's thin
-/// skins look. `depth` is the half-extrusion in the same units.
-pub fn build_note_mesh(
-    outline: &[[f32; 2]],
-    hollow: Option<f32>,
-    depth: f32,
-) -> Result<Mesh, Error> {
+/// The 2D truth of a note before extrusion: the cleaned, normalised
+/// outer contour and, for hollow notes, the inset inner one. The editor
+/// canvas draws EXACTLY this (it asks the backend rather than porting the
+/// maths), and the mesh extrudes exactly this, so the note being edited
+/// and the note being rendered cannot drift apart.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct NotePlan {
+    pub outer: Vec<[f32; 2]>,
+    pub inner: Option<Vec<[f32; 2]>>,
+    /// The factor the normalisation applied to the input (1.0 when the
+    /// outline already sat at unit scale). The editor maps its control
+    /// points through this so the handles stay ON the contour it draws.
+    pub scale: f32,
+}
+
+/// Cleans and normalises an outline and computes the rim contour: the
+/// single source both the canvas and the mesh build from.
+pub fn plan_note(outline: &[[f32; 2]], hollow: Option<f32>) -> Result<NotePlan, Error> {
     if outline.len() < 3
         || outline
             .iter()
@@ -184,12 +192,34 @@ pub fn build_note_mesh(
         .iter()
         .map(|p| p[0].abs().max(p[1].abs()))
         .fold(0.0f32, f32::max);
+    let mut scale = 1.0f32;
     if m > 1e-6 && (m - 1.0).abs() > 1e-3 {
+        scale = 1.0 / m;
         for p in &mut pts {
-            p[0] /= m;
-            p[1] /= m;
+            p[0] *= scale;
+            p[1] *= scale;
         }
     }
+    let inner = hollow.map(|t| inset(&pts, t.clamp(0.01, 0.9)));
+    Ok(NotePlan {
+        outer: pts,
+        inner,
+        scale,
+    })
+}
+
+/// Builds the note mesh from a closed outline.
+///
+/// `hollow`: None fills the silhouette; Some(t) keeps a rim of thickness
+/// `t` (in outline units) and opens the middle, the way the game's thin
+/// skins look. `depth` is the half-extrusion in the same units.
+pub fn build_note_mesh(
+    outline: &[[f32; 2]],
+    hollow: Option<f32>,
+    depth: f32,
+) -> Result<Mesh, Error> {
+    let plan = plan_note(outline, hollow)?;
+    let pts = plan.outer;
     let d = depth.clamp(0.005, 0.5);
 
     let mut mesh = Mesh::default();
@@ -242,9 +272,8 @@ pub fn build_note_mesh(
             }
             wall(&mut mesh, base, n, false);
         }
-        Some(t) => {
-            let t = t.clamp(0.01, 0.9);
-            let inner = inset(&pts, t);
+        Some(_) => {
+            let inner = plan.inner.clone().expect("hollow plan carries the rim");
             let n = pts.len() as u32;
             let ob = push_contour(&pts);
             let ib = push_contour(&inner);

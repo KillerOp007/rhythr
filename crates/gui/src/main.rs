@@ -4394,6 +4394,16 @@ fn designer_scene() -> (rhythia_formats::map::Map, rhythia_formats::rhr::Replay)
     (map, replay)
 }
 
+/// The cleaned contours the canvas draws: the SAME cleanup, normalise and
+/// inset the mesh build runs, served from one place so the note being
+/// edited and the note being rendered are the same note. Pure maths,
+/// sub-millisecond, called live while dragging.
+#[tauri::command]
+fn designer_outline(shape: DesignerShape) -> Result<rhythia_render::designer::NotePlan, String> {
+    rhythia_render::designer::plan_note(&shape.outline, shape.hollow)
+        .map_err(|_| "the outline crosses itself - move the crossing points apart".to_string())
+}
+
 const DESIGNER_PREVIEW_W: u32 = 960;
 const DESIGNER_PREVIEW_H: u32 = 560;
 
@@ -5968,6 +5978,7 @@ fn main() {
             open_analyze_window,
             toggle_analyze_fullscreen,
             open_designer_window,
+            designer_outline,
             designer_preview,
             designer_export,
             set_clip,

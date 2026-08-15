@@ -139,39 +139,34 @@ new ResizeObserver(fitCanvas).observe($("dz-canvas-box"));
 const toPx = (p) => [CW / 2 + p[0] * UNIT, CH / 2 - p[1] * UNIT];
 const toWorld = (x, y) => [(x - CW / 2) / UNIT, -(y - CH / 2) / UNIT];
 
-/// The same inward inset the mesh builder uses (angle bisector, clamped
-/// mitre, never past the outer contour), so the canvas shows the RIM the
-/// export will actually have: rim thickness is part of the note, and a
-/// drawing that ignores it made the slider look dead.
-function insetOutline(pts, t) {
-  const n = pts.length;
-  const out = [];
-  for (let i = 0; i < n; i++) {
-    const p = pts[(i + n - 1) % n];
-    const c = pts[i];
-    const q = pts[(i + 1) % n];
-    const norm = (v) => {
-      const l = Math.hypot(v[0], v[1]) || 1e-9;
-      return [v[0] / l, v[1] / l];
-    };
-    const d1 = norm([c[0] - p[0], c[1] - p[1]]);
-    const d2 = norm([q[0] - c[0], q[1] - c[1]]);
-    const n1 = [d1[1], -d1[0]];
-    const n2 = [d2[1], -d2[0]];
-    let b = norm([n1[0] + n2[0], n1[1] + n2[1]]);
-    const dot = Math.min(1, Math.max(0.25, b[0] * n1[0] + b[1] * n1[1]));
-    b = [b[0] / dot, b[1] / dot];
-    let x = c[0] - b[0] * t, y = c[1] - b[1] * t;
-    const ro = Math.hypot(c[0], c[1]);
-    const ri = Math.hypot(x, y);
-    if (ri > ro * 0.98 && ri > 1e-9) {
-      const sc = (ro * 0.98) / ri;
-      x *= sc;
-      y *= sc;
-    }
-    out.push([x, y]);
+// The note's contours come from the BACKEND (designer_outline), which
+// runs the identical cleanup, normalisation and rim inset the mesh build
+// runs. A local port of that maths drifted from the real thing once
+// already, which is exactly how the edited note and the previewed note
+// stopped matching; one source of truth ends that class of bug.
+let plan = null;
+let planBusy = false;
+let planAgain = false;
+
+async function refreshPlan() {
+  if (planBusy) {
+    planAgain = true;
+    return;
   }
-  return out;
+  planBusy = true;
+  try {
+    plan = await invoke("designer_outline", { shape: shapePayload() });
+  } catch (e) {
+    plan = null;
+    setStatus(String(e), true);
+  } finally {
+    planBusy = false;
+    if (planAgain) {
+      planAgain = false;
+      refreshPlan();
+    }
+  }
+  draw();
 }
 // The game's TRUE hit area in note units: hitbox half-extent 0.56875
 // cells over the note's visual half-size 0.45 cells. The note itself is
@@ -199,12 +194,10 @@ function draw() {
   ctx.strokeRect(...toPx([-HITBOX, HITBOX]), 2 * UNIT * HITBOX, 2 * UNIT * HITBOX);
   ctx.setLineDash([]);
 
-  const pts = outline();
-  if (!pts || pts.length < 3) return;
-  // The note as it will exist: filled silhouette, or the rim between the
-  // outline and its inset, in the FIRST colorset colour. Every slider
-  // (rim thickness included) changes THIS drawing immediately, not just
-  // the render preview below.
+  if (!plan || !plan.outer || plan.outer.length < 3) return;
+  // The note as the export will have it: the backend's contours, filled
+  // (or rimmed) in the FIRST colorset colour. Every slider changes THIS
+  // drawing, and it is the same geometry the preview and the .rhs get.
   const path = (list) => {
     const [px, py] = toPx(list[0]);
     ctx.moveTo(px, py);
@@ -212,16 +205,16 @@ function draw() {
     ctx.closePath();
   };
   ctx.beginPath();
-  path(pts);
-  if (P.hollow) {
-    path(insetOutline(pts, Math.min(Math.max(P.thick, 0.01), 0.9)));
+  path(plan.outer);
+  if (plan.inner) {
+    path(plan.inner);
   }
   ctx.fillStyle = colors[0] || "#ffffff";
   ctx.globalAlpha = 0.9;
   ctx.fill("evenodd");
   ctx.globalAlpha = 1;
   ctx.beginPath();
-  path(pts);
+  path(plan.outer);
   ctx.strokeStyle = accent;
   ctx.lineWidth = 1.5;
   ctx.stroke();
@@ -239,8 +232,9 @@ function draw() {
       ctx.lineTo(...toPx([1.25 * Math.cos(a), 1.25 * Math.sin(a)]));
       ctx.stroke();
     }
+    const ps = plan?.scale || 1;
     for (const p of free) {
-      const [x, y] = toPx([p.x, p.y]);
+      const [x, y] = toPx([p.x * ps, p.y * ps]);
       ctx.beginPath();
       if (p.smooth) {
         ctx.arc(x, y, 5, 0, Math.PI * 2);
@@ -261,8 +255,9 @@ let dragging = -1;
 
 function pointAt(mx, my) {
   if (!free) return -1;
+  const ps = plan?.scale || 1;
   for (let i = 0; i < free.length; i++) {
-    const [x, y] = toPx([free[i].x, free[i].y]);
+    const [x, y] = toPx([free[i].x * ps, free[i].y * ps]);
     if (Math.hypot(mx - x, my - y) < 9) return i;
   }
   return -1;
@@ -293,6 +288,9 @@ cv.addEventListener("pointerdown", (e) => {
   }
   // Click near the outline: insert a point there (folded into the wedge).
   let [wx, wy] = toWorld(mx, my);
+  const ps0 = plan?.scale || 1;
+  wx /= ps0;
+  wy /= ps0;
   [wx, wy] = foldToWedge(wx, wy);
   [wx, wy] = clampUnit(wx, wy);
   // Insert in angular order so the wedge stays a simple arc of points.
@@ -320,6 +318,11 @@ cv.addEventListener("pointermove", (e) => {
   const mx = e.clientX - rect.left;
   const my = e.clientY - rect.top;
   let [wx, wy] = toWorld(mx, my);
+  {
+    const ps1 = plan?.scale || 1;
+    wx /= ps1;
+    wy /= ps1;
+  }
   // Clamp into the wedge instead of folding: folding teleports a point
   // sitting near the boundary to the wedge's far side the moment the
   // cursor slips across, which reads as the point jumping away.
@@ -406,10 +409,10 @@ function setStatus(text, err) {
 }
 
 function scheduleAll() {
-  draw();
-  // Live, not after-the-fact: kick a render immediately when none is in
-  // flight (the busy/again pair coalesces a drag into back-to-back
-  // renders), plus a trailing call so the final state always lands.
+  // The contours come from the backend and repaint on arrival (sub-ms
+  // maths, coalesced during a drag); the render preview follows live the
+  // same way, with a trailing call so the final state always lands.
+  refreshPlan();
   if (!previewBusy) refreshPreview();
   clearTimeout(previewTimer);
   previewTimer = setTimeout(refreshPreview, 120);
@@ -540,4 +543,5 @@ wireControls();
 renderColors();
 $("dz-n-row").hidden = true;
 fitCanvas();
+refreshPlan();
 refreshPreview();
