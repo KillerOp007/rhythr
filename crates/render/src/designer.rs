@@ -1,0 +1,319 @@
+//! Geometry for the note designer: a closed 2D outline (drawn or
+//! generated in the designer window) becomes an extruded note mesh, plus
+//! its `.obj`/`.mtl` export.
+//!
+//! The whole pipeline works in the note convention the renderer and the
+//! game share: x/y half-extent 1, a thin z extrusion. Every real note
+//! mesh observed (the game's four built-ins and a player export) is
+//! exactly this: a flat silhouette pulled into a slab, so the designer
+//! never needs 3D editing, only a good outline.
+
+use crate::mesh::{Mesh, Vertex};
+use crate::Error;
+
+/// One closed outline, counter-clockwise, in the unit plane.
+type Outline = Vec<[f32; 2]>;
+
+/// Signed area (positive = counter-clockwise).
+fn signed_area(pts: &[[f32; 2]]) -> f32 {
+    let mut a = 0.0;
+    for i in 0..pts.len() {
+        let p = pts[i];
+        let q = pts[(i + 1) % pts.len()];
+        a += p[0] * q[1] - q[0] * p[1];
+    }
+    a * 0.5
+}
+
+/// Ear-clipping triangulation of a simple polygon (concave is fine, which
+/// wavy outlines are; self-intersecting is not and errors out instead of
+/// spinning). Returns index triples into `pts`.
+fn triangulate(pts: &[[f32; 2]]) -> Result<Vec<[u32; 3]>, Error> {
+    let n = pts.len();
+    if n < 3 {
+        return Err(Error::BadObj);
+    }
+    let cross = |o: [f32; 2], a: [f32; 2], b: [f32; 2]| -> f32 {
+        (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+    };
+    let inside = |a: [f32; 2], b: [f32; 2], c: [f32; 2], p: [f32; 2]| -> bool {
+        // Strictly inside the triangle abc (CCW), with a hair of tolerance
+        // so a vertex ON an edge does not block the ear.
+        cross(a, b, p) > -1e-7 && cross(b, c, p) > -1e-7 && cross(c, a, p) > -1e-7
+    };
+    let mut idx: Vec<u32> = (0..n as u32).collect();
+    let mut tris = Vec::with_capacity(n - 2);
+    let mut guard = 0usize;
+    while idx.len() > 3 {
+        let m = idx.len();
+        let mut clipped = false;
+        for i in 0..m {
+            let (pi, ci, ni) = (idx[(i + m - 1) % m], idx[i], idx[(i + 1) % m]);
+            let (a, b, c) = (pts[pi as usize], pts[ci as usize], pts[ni as usize]);
+            if cross(a, b, c) <= 1e-9 {
+                continue; // reflex or degenerate corner: not an ear
+            }
+            let blocked = idx.iter().any(|&j| {
+                j != pi && j != ci && j != ni && inside(a, b, c, pts[j as usize])
+            });
+            if blocked {
+                continue;
+            }
+            tris.push([pi, ci, ni]);
+            idx.remove(i);
+            clipped = true;
+            break;
+        }
+        if !clipped {
+            // No ear anywhere: the outline crosses itself (or collapsed).
+            // Erroring is the honest outcome; the caller shows the outline
+            // and the user can see the crossing.
+            return Err(Error::BadObj);
+        }
+        guard += 1;
+        if guard > 100_000 {
+            return Err(Error::BadObj);
+        }
+    }
+    tris.push([idx[0], idx[1], idx[2]]);
+    Ok(tris)
+}
+
+/// Insets the outline by `t` along each vertex's inward angle bisector.
+/// Keeps the vertex count (and therefore the outer/inner correspondence
+/// the ring faces need). A spike sharper than the inset allows can fold
+/// the inner contour; the designer's live preview makes that visible, and
+/// the mitre length is clamped so it cannot explode.
+fn inset(pts: &[[f32; 2]], t: f32) -> Outline {
+    let n = pts.len();
+    let mut out = Vec::with_capacity(n);
+    for i in 0..n {
+        let p = pts[(i + n - 1) % n];
+        let c = pts[i];
+        let q = pts[(i + 1) % n];
+        let norm = |v: [f32; 2]| -> [f32; 2] {
+            let l = (v[0] * v[0] + v[1] * v[1]).sqrt().max(1e-9);
+            [v[0] / l, v[1] / l]
+        };
+        // Inward normals of the two edges meeting at c (outline is CCW, so
+        // inward is the right-hand side of the direction of travel).
+        let d1 = norm([c[0] - p[0], c[1] - p[1]]);
+        let d2 = norm([q[0] - c[0], q[1] - c[1]]);
+        let n1 = [d1[1], -d1[0]];
+        let n2 = [d2[1], -d2[0]];
+        let mut b = norm([n1[0] + n2[0], n1[1] + n2[1]]);
+        // Mitre scale so the inset distance holds through the corner,
+        // clamped: a near-reversal would otherwise shoot the vertex out.
+        let dot = (b[0] * n1[0] + b[1] * n1[1]).clamp(0.25, 1.0);
+        b = [b[0] / dot, b[1] / dot];
+        out.push([c[0] - b[0] * t, c[1] - b[1] * t]);
+    }
+    out
+}
+
+/// Builds the note mesh from a closed outline.
+///
+/// `hollow`: None fills the silhouette; Some(t) keeps a rim of thickness
+/// `t` (in outline units) and opens the middle, the way the game's thin
+/// skins look. `depth` is the half-extrusion in the same units.
+pub fn build_note_mesh(
+    outline: &[[f32; 2]],
+    hollow: Option<f32>,
+    depth: f32,
+) -> Result<Mesh, Error> {
+    if outline.len() < 3
+        || outline
+            .iter()
+            .any(|p| !p[0].is_finite() || !p[1].is_finite())
+    {
+        return Err(Error::BadObj);
+    }
+    let mut pts: Outline = outline.to_vec();
+    if signed_area(&pts) < 0.0 {
+        pts.reverse(); // normalise to CCW
+    }
+    if signed_area(&pts).abs() < 1e-6 {
+        return Err(Error::BadObj);
+    }
+    let d = depth.clamp(0.005, 0.5);
+
+    let mut mesh = Mesh::default();
+    // Emits one contour's front/back vertices; returns the base index and
+    // stride to address (front, back) pairs.
+    let mut push_contour = |pts: &[[f32; 2]]| -> u32 {
+        let base = mesh.vertices.len() as u32;
+        for p in pts {
+            mesh.vertices.push(Vertex {
+                pos: [p[0], p[1], d],
+            });
+        }
+        for p in pts {
+            mesh.vertices.push(Vertex {
+                pos: [p[0], p[1], -d],
+            });
+        }
+        base
+    };
+    // Walls along a contour. `flip` turns the quads inside-out for inner
+    // rims, so their outward face points into the hole and survives
+    // backface culling from the viewer's side.
+    let wall = |mesh: &mut Mesh, base: u32, n: u32, flip: bool| {
+        for i in 0..n {
+            let j = (i + 1) % n;
+            let (fa, fb) = (base + i, base + j);
+            let (ba, bb) = (base + n + i, base + n + j);
+            let quad = if flip {
+                [[fa, bb, ba], [fa, fb, bb]]
+            } else {
+                [[fa, ba, bb], [fa, bb, fb]]
+            };
+            for t in quad {
+                mesh.indices.extend_from_slice(&t);
+            }
+        }
+    };
+
+    match hollow {
+        None => {
+            let tris = triangulate(&pts)?;
+            let n = pts.len() as u32;
+            let base = push_contour(&pts);
+            for [a, b, c] in &tris {
+                // Front face (z = +d) keeps CCW; back face reverses.
+                mesh.indices
+                    .extend_from_slice(&[base + a, base + b, base + c]);
+                mesh.indices
+                    .extend_from_slice(&[base + n + a, base + n + c, base + n + b]);
+            }
+            wall(&mut mesh, base, n, false);
+        }
+        Some(t) => {
+            let t = t.clamp(0.01, 0.9);
+            let inner = inset(&pts, t);
+            let n = pts.len() as u32;
+            let ob = push_contour(&pts);
+            let ib = push_contour(&inner);
+            // Front and back rim faces as quads between the contours.
+            for i in 0..n {
+                let j = (i + 1) % n;
+                let (oa, obx) = (ob + i, ob + j);
+                let (ia, ibx) = (ib + i, ib + j);
+                mesh.indices.extend_from_slice(&[oa, obx, ibx]);
+                mesh.indices.extend_from_slice(&[oa, ibx, ia]);
+                let (oa, obx) = (ob + n + i, ob + n + j);
+                let (ia, ibx) = (ib + n + i, ib + n + j);
+                mesh.indices.extend_from_slice(&[oa, ibx, obx]);
+                mesh.indices.extend_from_slice(&[oa, ia, ibx]);
+            }
+            wall(&mut mesh, ob, n, false);
+            wall(&mut mesh, ib, n, true);
+        }
+    }
+    mesh.normalize_to_unit();
+    Ok(mesh)
+}
+
+/// The exported material. Always written alongside the .obj, with the
+/// name the faces reference: the game crashes at map end on a mesh skin
+/// whose .mtl was not bundled, and no export of ours may reproduce that.
+pub const NOTE_MTL: &str = "# rhythr note designer\nnewmtl Material.001\nNs 250.000000\nKa 1.000000 1.000000 1.000000\nKd 1.000000 1.000000 1.000000\nKs 0.000000 0.000000 0.000000\nKe 0.000000 0.000000 0.000000\nNi 1.450000\nd 1.000000\nillum 1\n";
+
+/// Wavefront text for the mesh, referencing the bundled material.
+pub fn to_obj(mesh: &Mesh, name: &str) -> String {
+    let mut s = String::with_capacity(mesh.vertices.len() * 32);
+    s.push_str("# rhythr note designer\n");
+    s.push_str("mtllib note.mtl\n");
+    s.push_str(&format!("o {name}\n"));
+    for v in &mesh.vertices {
+        s.push_str(&format!("v {:.6} {:.6} {:.6}\n", v.pos[0], v.pos[1], v.pos[2]));
+    }
+    s.push_str("usemtl Material.001\n");
+    for t in mesh.indices.chunks_exact(3) {
+        s.push_str(&format!("f {} {} {}\n", t[0] + 1, t[1] + 1, t[2] + 1));
+    }
+    s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn square() -> Vec<[f32; 2]> {
+        vec![[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]]
+    }
+
+    /// A wavy circle: the shape the whole designer exists for.
+    fn wavy(n: usize, waves: f32, amp: f32) -> Vec<[f32; 2]> {
+        (0..n)
+            .map(|i| {
+                let th = i as f32 / n as f32 * std::f32::consts::TAU;
+                let r = 1.0 + amp * (waves * th).sin();
+                [r * th.cos(), r * th.sin()]
+            })
+            .collect()
+    }
+
+    #[test]
+    fn filled_square_is_a_closed_slab() {
+        let m = build_note_mesh(&square(), None, 0.05).unwrap();
+        assert_eq!(m.vertices.len(), 8);
+        // 2 front + 2 back + 8 wall triangles.
+        assert_eq!(m.indices.len() / 3, 12);
+        // Every index in range.
+        assert!(m.indices.iter().all(|&i| (i as usize) < m.vertices.len()));
+    }
+
+    #[test]
+    fn hollow_ring_keeps_correspondence_and_range() {
+        let m = build_note_mesh(&square(), Some(0.2), 0.05).unwrap();
+        assert_eq!(m.vertices.len(), 16);
+        assert!(m.indices.iter().all(|&i| (i as usize) < m.vertices.len()));
+        // Rim: 4 quads front + 4 back = 16 tris, walls: 8 + 8 = 16.
+        assert_eq!(m.indices.len() / 3, 32);
+    }
+
+    #[test]
+    fn a_wavy_circle_triangulates_despite_being_concave() {
+        let outline = wavy(96, 8.0, 0.25);
+        let m = build_note_mesh(&outline, None, 0.05).unwrap();
+        assert_eq!(m.indices.len() / 3, (96 - 2) + (96 - 2) + 96 * 2);
+        let hollow = build_note_mesh(&outline, Some(0.15), 0.05).unwrap();
+        assert!(hollow.indices.iter().all(|&i| (i as usize) < hollow.vertices.len()));
+    }
+
+    /// The renderer's convention: the export must parse back through the
+    /// same loader real skins take, and land at unit scale.
+    #[test]
+    fn obj_roundtrip_through_the_skin_loader() {
+        let m = build_note_mesh(&wavy(48, 5.0, 0.3), Some(0.2), 0.06).unwrap();
+        let obj = to_obj(&m, "designer_note");
+        let back = Mesh::from_obj_str(&obj).unwrap();
+        assert_eq!(back.vertices.len(), m.vertices.len());
+        assert_eq!(back.indices, m.indices);
+        let max = back
+            .vertices
+            .iter()
+            .map(|v| v.pos[0].abs().max(v.pos[1].abs()))
+            .fold(0.0f32, f32::max);
+        assert!((max - 1.0).abs() < 1e-3, "unit convention, got {max}");
+        assert!(obj.contains("mtllib note.mtl"), "the mtl is never optional");
+        assert!(NOTE_MTL.contains("newmtl Material.001"));
+    }
+
+    #[test]
+    fn broken_outlines_error_instead_of_spinning() {
+        // Self-intersecting bowtie.
+        let bow = vec![[-1.0, -1.0], [1.0, 1.0], [1.0, -1.0], [-1.0, 1.0]];
+        assert!(build_note_mesh(&bow, None, 0.05).is_err());
+        // Collinear: no area.
+        let line = vec![[-1.0, 0.0], [0.0, 0.0], [1.0, 0.0]];
+        assert!(build_note_mesh(&line, None, 0.05).is_err());
+        // Too few points, NaN.
+        assert!(build_note_mesh(&[[0.0, 0.0], [1.0, 0.0]], None, 0.05).is_err());
+        assert!(build_note_mesh(&[[f32::NAN, 0.0], [1.0, 0.0], [0.0, 1.0]], None, 0.05).is_err());
+        // Clockwise input is fine (normalised), not an error.
+        let mut cw = square();
+        cw.reverse();
+        assert!(build_note_mesh(&cw, None, 0.05).is_ok());
+    }
+}

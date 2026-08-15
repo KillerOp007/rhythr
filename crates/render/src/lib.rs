@@ -10,6 +10,7 @@ pub mod builtin;
 pub mod config;
 pub mod exe_assets;
 pub mod hud;
+pub mod designer;
 pub mod mesh;
 pub mod mods;
 pub mod nv12;
