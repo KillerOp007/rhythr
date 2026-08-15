@@ -4397,14 +4397,7 @@ async fn designer_preview(shape: DesignerShape) -> Result<String, String> {
         let px = renderer
             .render_still(&params, &cfg, &skin, &replay, &map, 300.0, None)
             .map_err(|e| e.to_string())?;
-        let tmp = tempfile::Builder::new()
-            .prefix("rhythr-designer-")
-            .suffix(".png")
-            .tempfile()
-            .map_err(err_str)?;
-        rhythia_render::write_png(tmp.path(), &px, DESIGNER_PREVIEW_W, DESIGNER_PREVIEW_H)
-            .map_err(|e| e.to_string())?;
-        let bytes = std::fs::read(tmp.path()).map_err(err_str)?;
+        let bytes = png_bytes(&px, DESIGNER_PREVIEW_W, DESIGNER_PREVIEW_H)?;
         use base64::Engine as _;
         Ok(format!(
             "data:image/png;base64,{}",
