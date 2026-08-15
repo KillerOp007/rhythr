@@ -35,6 +35,17 @@ struct Instance {
 }
 
 impl Instance {
+    /// A note drawn as custom geometry: same transform and colour, but the
+    /// fragment path is a flat tinted fill (the shape lives in the mesh).
+    fn mesh_note(model: Mat4, color: [f32; 4]) -> Self {
+        Instance {
+            model: model.to_cols_array_2d(),
+            color,
+            kind: 6.0,
+            _pad: [0.0; 3],
+        }
+    }
+
     fn note(model: Mat4, color: [f32; 4]) -> Self {
         Instance {
             model: model.to_cols_array_2d(),
@@ -94,6 +105,11 @@ pub struct SkinTextures {
     /// Persistent frame-sized texture a video background streams into
     /// (bound as the background slot); None for image/skin backgrounds.
     bg_stream: Option<wgpu::Texture>,
+    /// Custom note geometry (an .obj skin), drawn instead of the SDF quad.
+    /// None falls back to the procedural looks, including when the .obj
+    /// failed to parse: a broken mesh must degrade the look, never the
+    /// render.
+    note_mesh: Option<GpuMesh>,
 }
 
 pub struct Renderer {
@@ -1103,6 +1119,15 @@ impl Renderer {
                 },
             ],
         });
+        // A mesh note skin: parsed leniently (mtllib/usemtl are ignored,
+        // which is deliberate: the game itself crashes on an export whose
+        // .mtl was not bundled, and this renderer must not inherit that).
+        let note_mesh = config.note_mesh.as_deref().and_then(|bytes| {
+            let src = std::str::from_utf8(bytes).ok()?;
+            let mut m = Mesh::from_obj_str(src).ok()?;
+            m.normalize_to_unit();
+            (!m.indices.is_empty()).then(|| upload_mesh(&self.device, &m))
+        });
         SkinTextures {
             bind_group,
             tex_flags,
@@ -1112,6 +1137,7 @@ impl Renderer {
             } else {
                 None
             },
+            note_mesh,
         }
     }
 
@@ -1806,7 +1832,14 @@ impl Renderer {
                     config.colorset[i % config.colorset.len()]
                 };
                 let [r, g, b] = srgb_to_linear(rgb);
-                items.push((-depth, Instance::note(model, [r, g, b, opacity])));
+                items.push((
+                    -depth,
+                    if skin.note_mesh.is_some() {
+                        Instance::mesh_note(model, [r, g, b, opacity])
+                    } else {
+                        Instance::note(model, [r, g, b, opacity])
+                    },
+                ));
             }
         }
 
@@ -1873,12 +1906,34 @@ impl Renderer {
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &self.bind_group, &[]);
             pass.set_bind_group(1, &skin.bind_group, &[]);
-            pass.set_vertex_buffer(0, self.quad.vertices.slice(..));
             pass.set_vertex_buffer(1, self.inst_buf.slice(..));
-            pass.set_index_buffer(self.quad.indices.slice(..), wgpu::IndexFormat::Uint32);
-            pass.draw_indexed(0..self.quad.index_count, 0, 0..main_count as u32);
+            // The sorted list mixes quad instances with mesh notes when a
+            // skin brings its own geometry, and a draw call has ONE vertex
+            // buffer, so the list is walked in contiguous runs of the same
+            // mesh. Without a custom mesh this collapses to the single
+            // draw it always was.
+            let mut start = 0usize;
+            while start < main_count {
+                let is_mesh = instances[start].kind == 6.0;
+                let mut end = start + 1;
+                while end < main_count && (instances[end].kind == 6.0) == is_mesh {
+                    end += 1;
+                }
+                let gm = if is_mesh {
+                    skin.note_mesh.as_ref().unwrap_or(&self.quad)
+                } else {
+                    &self.quad
+                };
+                pass.set_vertex_buffer(0, gm.vertices.slice(..));
+                pass.set_index_buffer(gm.indices.slice(..), wgpu::IndexFormat::Uint32);
+                pass.draw_indexed(0..gm.index_count, 0, start as u32..end as u32);
+                start = end;
+            }
             if instances.len() > main_count {
+                // Cursor and trail always ride the quad.
                 pass.set_pipeline(&self.pipeline_overlay);
+                pass.set_vertex_buffer(0, self.quad.vertices.slice(..));
+                pass.set_index_buffer(self.quad.indices.slice(..), wgpu::IndexFormat::Uint32);
                 pass.draw_indexed(
                     0..self.quad.index_count,
                     0,

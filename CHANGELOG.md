@@ -3,6 +3,18 @@
 rhythr is an unofficial community tool and is not affiliated with or
 endorsed by Rhythia or Capo Games.
 
+## Unreleased
+
+- **Mesh note skins render.** The game supports note skins that are 3D
+  meshes (`.obj`), and rhythr treated them as an image it could not
+  decode, silently falling back to the default look. The four built-in
+  meshes and custom meshes bundled in an imported `.rhs` now render as
+  real geometry with the colorset's tint and true perspective. The loader
+  deliberately ignores material references: a skin exported without its
+  `.mtl` (which the game currently crashes on after every map) renders
+  fine here, just with the flat fill. Face shading against the real game
+  is uncalibrated until footage of a mesh skin exists.
+
 ## v0.6.2 (2026-10-21)
 
 ### Fixed

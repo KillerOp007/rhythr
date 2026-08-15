@@ -77,6 +77,12 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // Quad-local (±1) → texture uv, V flipped (image top = +y).
     let uv = vec2<f32>(in.local.x * 0.5 + 0.5, 0.5 - in.local.y * 0.5);
 
+    if (in.kind > 5.5) {
+        // Mesh note: the shape is real geometry, so the fragment is just
+        // the tinted fill. Depth and backface culling do the rest.
+        return in.color;
+    }
+
     if (in.kind > 4.5) {
         // Trail stamp: the skin's own trail texture when present, else the
         // same crisp filled circle the cursor falls back to.

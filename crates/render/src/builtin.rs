@@ -136,9 +136,16 @@ impl SkinConfig {
         if self.mod_icons.is_empty() {
             self.mod_icons = assets.mod_icons();
         }
-        if self.note_texture.is_none() {
+        if self.note_texture.is_none() && self.note_mesh.is_none() {
             if let Some(file) = builtin_ref(&self.note_skin_name, "notes") {
-                self.note_texture = assets.texture("notes", file);
+                // The notes category holds textures AND the four built-in
+                // meshes (cube/circle/plane/rounded_fixed.obj). An .obj is
+                // geometry, not an image, and goes to the mesh slot.
+                if file.to_ascii_lowercase().ends_with(".obj") {
+                    self.note_mesh = assets.texture("notes", file);
+                } else {
+                    self.note_texture = assets.texture("notes", file);
+                }
             }
         }
         if self.border_texture.is_none() {

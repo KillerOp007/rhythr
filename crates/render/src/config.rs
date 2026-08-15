@@ -254,6 +254,12 @@ pub struct SkinConfig {
     pub fade_length: f32,
     pub parallax: f32,
     pub half_ghost: bool,
+    /// A custom note MESH (Wavefront .obj bytes): the game's own four
+    /// built-ins (cube, circle, plane, rounded_fixed under
+    /// Textures/Game/notes/) or a mesh bundled in an imported .rhs. When
+    /// set it wins over `note_texture` and the SDF shape: the geometry IS
+    /// the look.
+    pub note_mesh: Option<Vec<u8>>,
     pub note_shape: NoteShape,
     pub note_skin_name: String,
     pub border_skin_name: String,
@@ -414,6 +420,7 @@ impl Default for SkinConfig {
             cursor_trail_shrink: true,
             cursor_trail_gradient: Vec::new(),
             note_texture: None,
+            note_mesh: None,
             background_images: Vec::new(),
             custom_bg_dim: None,
             custom_bg_video: false,
@@ -477,6 +484,24 @@ fn read_zip_entry(zip: &mut ZipCursor, name: &str) -> Result<Option<Vec<u8>>, Er
         }
         Err(zip::result::ZipError::FileNotFound) => Ok(None),
         Err(err) => Err(Error::Config(format!("reading {name}: {err}"))),
+    }
+}
+
+/// As [`first_zip_entry_under`], but the caller also learns the entry's
+/// name, for routing by extension.
+fn first_zip_entry_named_under(
+    zip: &mut ZipCursor,
+    prefix: &str,
+) -> Result<Option<(String, Vec<u8>)>, Error> {
+    let name = (0..zip.len()).find_map(|i| {
+        let e = zip.by_index(i).ok()?;
+        let n = e.name();
+        (n.starts_with(prefix) && n.len() > prefix.len() && !n.ends_with('/'))
+            .then(|| n.to_string())
+    });
+    match name {
+        Some(n) => Ok(read_zip_entry(zip, &n)?.map(|b| (n, b))),
+        None => Ok(None),
     }
 }
 
@@ -562,7 +587,17 @@ impl SkinConfig {
 
         // Bundled assets: at most one file per skin folder. Grab the first
         // entry under each known prefix.
-        cfg.note_texture = first_zip_entry_under(&mut zip, "noteSkin/")?;
+        // A noteSkin entry may be a texture OR a Wavefront mesh: the game
+        // supports .obj note skins and exports bundle them under the same
+        // folder. Routing by name matters, because feeding mesh bytes to
+        // the image decoder silently loses the skin's whole point.
+        match first_zip_entry_named_under(&mut zip, "noteSkin/")? {
+            Some((name, bytes)) if name.to_ascii_lowercase().ends_with(".obj") => {
+                cfg.note_mesh = Some(bytes);
+            }
+            Some((_, bytes)) => cfg.note_texture = Some(bytes),
+            None => {}
+        }
         cfg.border_texture = first_zip_entry_under(&mut zip, "borderSkin/")?;
         cfg.cursor_texture = first_zip_entry_under(&mut zip, "cursorSkin/")?;
         cfg.trail_texture = first_zip_entry_under(&mut zip, "cursorTrailSkin/")?;
@@ -768,6 +803,7 @@ impl SkinConfig {
             },
             // Assets come from a .rhs bundle, not the JSON; from_rhs fills them.
             note_texture: None,
+            note_mesh: None,
             background_images,
             border_texture: None,
             cursor_texture: None,
@@ -942,6 +978,7 @@ mod tests {
         let c = SkinConfig::from_rhs(&data).unwrap();
         assert!((c.note_scale - 0.8).abs() < 1e-6); // config parsed
         assert_eq!(c.note_texture.as_deref(), Some(&b"\x89PNG-fake-bytes"[..]));
+        assert!(c.note_mesh.is_none(), "a png is not a mesh");
         assert!(c.border_texture.is_none());
         assert_eq!(
             c.colorset,
@@ -950,6 +987,33 @@ mod tests {
                 [1.0, 225.0 / 255.0, 201.0 / 255.0]
             ]
         );
+    }
+
+    /// The game supports .obj note skins and its exports bundle them in
+    /// the SAME noteSkin/ folder as textures. Feeding mesh bytes to the
+    /// image decoder silently loses the skin's whole point, so routing is
+    /// by name. Modelled on a real player export ("Rounded Thin.obj",
+    /// mtllib pointing at a file the archive does not carry: the parser
+    /// must not care).
+    #[test]
+    fn rhs_obj_note_skin_lands_in_the_mesh_slot() {
+        use std::io::Write;
+        use zip::write::SimpleFileOptions;
+        let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let opts = SimpleFileOptions::default();
+        zw.start_file("config", opts).unwrap();
+        zw.write_all(br#"{"NoteScale":{"Value":1}}"#).unwrap();
+        zw.start_file("noteSkin/Rounded Thin.obj", opts).unwrap();
+        zw.write_all(
+            b"mtllib missing.mtl\nusemtl Material.001\nv -1 -1 0\nv 1 -1 0\nv 1 1 0\nf 1 2 3\n",
+        )
+        .unwrap();
+        let data = zw.finish().unwrap().into_inner();
+
+        let c = SkinConfig::from_rhs(&data).unwrap();
+        let mesh = c.note_mesh.as_deref().expect("obj routed to the mesh slot");
+        assert!(mesh.starts_with(b"mtllib"));
+        assert!(c.note_texture.is_none(), "and not to the image decoder");
     }
 
     #[test]

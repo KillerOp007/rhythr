@@ -111,6 +111,29 @@ impl Mesh {
     /// A flat unit quad spanning ±1 in x/y at z=0 (two triangles, CCW). The
     /// note/cursor/border shapes are drawn onto it in the fragment shader,
     /// so no per-skin mesh file is needed.
+    /// Scales the mesh so its x/y half-extent is exactly 1, matching the
+    /// unit-quad convention every instance transform assumes. The game's
+    /// own meshes and Blender exports for it already use ±1 (verified on
+    /// all four built-ins and a player export), so this is normally a
+    /// no-op; a mesh authored at another scale would otherwise render at
+    /// the wrong size relative to its hitbox. Z scales along, keeping the
+    /// extrusion proportional.
+    pub fn normalize_to_unit(&mut self) {
+        let m = self
+            .vertices
+            .iter()
+            .map(|v| v.pos[0].abs().max(v.pos[1].abs()))
+            .fold(0.0f32, f32::max);
+        if m > 1e-6 && (m - 1.0).abs() > 0.05 {
+            let s = 1.0 / m;
+            for v in &mut self.vertices {
+                v.pos[0] *= s;
+                v.pos[1] *= s;
+                v.pos[2] *= s;
+            }
+        }
+    }
+
     pub fn quad() -> Mesh {
         Mesh {
             vertices: vec![
@@ -134,6 +157,30 @@ impl Mesh {
 
 #[cfg(test)]
 mod tests {
+    /// The unit-quad convention every instance transform assumes: half
+    /// extent 1 in x/y. The game's meshes already comply (no-op); one
+    /// authored at cell scale gets pulled to it, z along.
+    #[test]
+    fn normalize_pulls_odd_scales_to_the_unit_convention() {
+        let mut m =
+            super::Mesh::from_obj_str("v -4 0 0.2\nv 4 0 0.2\nv 0 4 0.2\nf 1 2 3\n").unwrap();
+        m.normalize_to_unit();
+        let max = m
+            .vertices
+            .iter()
+            .map(|v| v.pos[0].abs().max(v.pos[1].abs()))
+            .fold(0.0f32, f32::max);
+        assert!((max - 1.0).abs() < 1e-5);
+        assert!((m.vertices[0].pos[2] - 0.05).abs() < 1e-5, "z scales along");
+
+        // Already at unit scale: untouched, byte for byte.
+        let mut ok =
+            super::Mesh::from_obj_str("v -1 -1 0.05\nv 1 -1 0.05\nv 1 1 0.05\nf 1 2 3\n").unwrap();
+        let before = ok.vertices.clone();
+        ok.normalize_to_unit();
+        assert_eq!(format!("{before:?}"), format!("{:?}", ok.vertices));
+    }
+
     use super::*;
 
     #[test]

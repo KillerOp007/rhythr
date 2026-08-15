@@ -163,6 +163,12 @@ endorsed by Rhythia or Capo Games.
   where it goes and can read it first; it deliberately leaves out the
   player name and any path the window does not already show, so sending
   it gives away no more than a screenshot would.
+- **Mesh note skins**: the game's four built-in note meshes (cube,
+  circle, plane, rounded thin) and custom `.obj` note skins bundled in an
+  imported `.rhs` render as real 3D geometry, tinted by the colorset. A
+  broken or missing mesh falls back to the regular note look rather than
+  failing the render: notably, rhythr does not care when a skin's `.mtl`
+  file was not bundled, which the game itself currently crashes on.
 - **Verified badge**: every replay is integrity-checked. The hits,
   misses and accuracy are re-derived from the raw inputs and compared
   against the file's header. "inconsistent (possibly modified)" means
