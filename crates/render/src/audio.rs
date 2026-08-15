@@ -107,6 +107,12 @@ impl Clip {
 /// resolved hit registration; miss times use each note's own time. Returns
 /// None when nothing would sound.
 #[allow(clippy::too_many_arguments)]
+/// Longest slice of a hit/miss clip that gets mixed per event. The
+/// game's own clips are well under half a second; the cap exists for a
+/// user picking a whole SONG as their hit sound, which would otherwise
+/// mix minutes of audio at every one of hundreds of hits.
+const MAX_CLIP_SECS: f32 = 2.0;
+
 pub fn build_hitsound_wav(
     hit: &Clip,
     miss: Option<&Clip>,
@@ -129,7 +135,8 @@ pub fn build_hitsound_wav(
             return false;
         }
         let offset = (rel / speed / 1000.0 * RATE as f64) as usize * CHANNELS;
-        for (i, s) in clip.samples.iter().enumerate() {
+        let cap = (MAX_CLIP_SECS * RATE as f32) as usize * CHANNELS;
+        for (i, s) in clip.samples.iter().take(cap).enumerate() {
             if let Some(slot) = mix.get_mut(offset + i) {
                 *slot += s * volume;
             }

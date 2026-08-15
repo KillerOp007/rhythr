@@ -205,10 +205,14 @@ cv.addEventListener("pointerdown", (e) => {
   let [wx, wy] = toWorld(mx, my);
   [wx, wy] = foldToWedge(wx, wy);
   // Insert in angular order so the wedge stays a simple arc of points.
-  const ang = Math.atan2(wy, wx);
+  // Angles normalised to [0, 2pi): atan2 goes negative below the x-axis,
+  // and comparing raw values put every lower-half click at index 0,
+  // scrambling the outline in no-symmetry mode.
+  const norm = (a) => ((a % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+  const ang = norm(Math.atan2(wy, wx));
   let at = free.length;
   for (let i = 0; i < free.length; i++) {
-    if (Math.atan2(free[i].y, free[i].x) > ang) {
+    if (norm(Math.atan2(free[i].y, free[i].x)) > ang) {
       at = i;
       break;
     }
@@ -225,7 +229,18 @@ cv.addEventListener("pointermove", (e) => {
   const mx = ((e.clientX - rect.left) * S) / rect.width;
   const my = ((e.clientY - rect.top) * S) / rect.height;
   let [wx, wy] = toWorld(mx, my);
-  [wx, wy] = foldToWedge(wx, wy);
+  // Clamp into the wedge instead of folding: folding teleports a point
+  // sitting near the boundary to the wedge's far side the moment the
+  // cursor slips across, which reads as the point jumping away.
+  if (free && symmetry > 1) {
+    const wedge = (Math.PI * 2) / symmetry;
+    let a = Math.atan2(wy, wx);
+    if (a < 0) a += Math.PI * 2;
+    a = Math.min(a, wedge);
+    const rr = Math.hypot(wx, wy);
+    wx = rr * Math.cos(a);
+    wy = rr * Math.sin(a);
+  }
   const r = Math.hypot(wx, wy);
   if (r > 1.2) {
     wx *= 1.2 / r;
@@ -260,6 +275,8 @@ cv.addEventListener("contextmenu", (e) => {
   );
   if (hit >= 0) {
     free.splice(hit, 1);
+    // A removal invalidates whatever a concurrent left-drag was holding.
+    dragging = -1;
     scheduleAll();
   }
 });

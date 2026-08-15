@@ -37,9 +37,13 @@ fn triangulate(pts: &[[f32; 2]]) -> Result<Vec<[u32; 3]>, Error> {
         (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
     };
     let inside = |a: [f32; 2], b: [f32; 2], c: [f32; 2], p: [f32; 2]| -> bool {
-        // Strictly inside the triangle abc (CCW), with a hair of tolerance
-        // so a vertex ON an edge does not block the ear.
-        cross(a, b, p) > -1e-7 && cross(b, c, p) > -1e-7 && cross(c, a, p) > -1e-7
+        // Strictly inside the triangle abc (CCW), with tolerance RELATIVE
+        // to the triangle's own size: a fixed slack swallowed the thin
+        // ears of dense outlines whole (every neighbour of a razor-thin
+        // ear sat within the absolute slack and "blocked" it, failing
+        // perfectly valid shapes).
+        let eps = cross(a, b, c).abs() * 1e-3 + 1e-12;
+        cross(a, b, p) > -eps && cross(b, c, p) > -eps && cross(c, a, p) > -eps
     };
     let mut idx: Vec<u32> = (0..n as u32).collect();
     let mut tris = Vec::with_capacity(n - 2);
@@ -106,7 +110,20 @@ fn inset(pts: &[[f32; 2]], t: f32) -> Outline {
         // clamped: a near-reversal would otherwise shoot the vertex out.
         let dot = (b[0] * n1[0] + b[1] * n1[1]).clamp(0.25, 1.0);
         b = [b[0] / dot, b[1] / dot];
-        out.push([c[0] - b[0] * t, c[1] - b[1] * t]);
+        let mut p = [c[0] - b[0] * t, c[1] - b[1] * t];
+        // An inner vertex further from the centre than its outer partner
+        // means the mitre shot past the silhouette on a spike; pull it
+        // back inside so the rim can fold visually (the preview shows it)
+        // but never outgrow the shape it rims.
+        let (ro, ri) = (
+            (c[0] * c[0] + c[1] * c[1]).sqrt(),
+            (p[0] * p[0] + p[1] * p[1]).sqrt(),
+        );
+        if ri > ro * 0.98 && ri > 1e-9 {
+            let s = ro * 0.98 / ri;
+            p = [p[0] * s, p[1] * s];
+        }
+        out.push(p);
     }
     out
 }
@@ -129,11 +146,43 @@ pub fn build_note_mesh(
         return Err(Error::BadObj);
     }
     let mut pts: Outline = outline.to_vec();
+    // A closed polygon often arrives with its first point repeated at the
+    // end, and a freeform editor lets two points land on the same spot.
+    // Exact or near duplicates poison ear clipping (the duplicate is
+    // never an ear and blocks every ear that touches it), so they go
+    // first, along with densification beyond what triangulation can hold
+    // apart numerically: an outline is capped to 512 well-spaced points,
+    // which is far beyond anything a note's silhouette needs.
+    while pts.len() > 3 && {
+        let (f, l) = (pts[0], pts[pts.len() - 1]);
+        (f[0] - l[0]).abs() < 1e-6 && (f[1] - l[1]).abs() < 1e-6
+    } {
+        pts.pop();
+    }
+    pts.dedup_by(|a, b| (a[0] - b[0]).abs() < 1e-4 && (a[1] - b[1]).abs() < 1e-4);
+    if pts.len() > 512 {
+        let stride = pts.len().div_ceil(512);
+        pts = pts.iter().step_by(stride).copied().collect();
+    }
     if signed_area(&pts) < 0.0 {
         pts.reverse(); // normalise to CCW
     }
     if signed_area(&pts).abs() < 1e-6 {
         return Err(Error::BadObj);
+    }
+    // Normalise the OUTLINE, not the finished mesh: the hollow inset can
+    // overshoot on spiky shapes, and a mesh-wide normalisation would then
+    // let runaway INNER vertices shrink the user's drawn silhouette
+    // relative to its hitbox. The outer contour is the shape's truth.
+    let m = pts
+        .iter()
+        .map(|p| p[0].abs().max(p[1].abs()))
+        .fold(0.0f32, f32::max);
+    if m > 1e-6 && (m - 1.0).abs() > 1e-3 {
+        for p in &mut pts {
+            p[0] /= m;
+            p[1] /= m;
+        }
     }
     let d = depth.clamp(0.005, 0.5);
 
@@ -378,6 +427,62 @@ mod tests {
         )
         .unwrap();
         assert!(mtl.contains("newmtl Material.001"));
+    }
+
+    /// The review's bench: a dense, perfectly valid outline used to fail
+    /// as "crosses itself" because the ear test's absolute slack swallowed
+    /// razor-thin ears whole. Dense input now decimates and the slack is
+    /// relative, so valid shapes of any sampling density build.
+    #[test]
+    fn dense_valid_outlines_build_instead_of_failing() {
+        for n in [1600usize, 2000, 4000] {
+            let circle: Vec<[f32; 2]> = (0..n)
+                .map(|i| {
+                    let th = i as f32 / n as f32 * std::f32::consts::TAU;
+                    [th.cos(), th.sin()]
+                })
+                .collect();
+            let m = build_note_mesh(&circle, None, 0.05)
+                .unwrap_or_else(|_| panic!("dense circle n={n} failed"));
+            // Decimation keeps the cost bounded.
+            assert!(m.vertices.len() <= 512 * 2 + 4, "n={n} not decimated");
+        }
+    }
+
+    /// Freeform editors produce these: two points on the same spot, and
+    /// the closed-polygon convention with the first point repeated last.
+    #[test]
+    fn duplicate_points_are_cleaned_not_fatal() {
+        let mut sq = square();
+        sq.push(sq[0]); // first == last
+        assert!(build_note_mesh(&sq, None, 0.05).is_ok());
+        let stacked = vec![
+            [-1.0, -1.0],
+            [1.0, -1.0],
+            [1.0, -1.0], // exact duplicate from stacked corner points
+            [1.0, 1.0],
+            [-1.0, 1.0],
+        ];
+        assert!(build_note_mesh(&stacked, None, 0.05).is_ok());
+        assert!(build_note_mesh(&stacked, Some(0.2), 0.05).is_ok());
+    }
+
+    /// The inset clamp: at slider maxima the mitre used to shoot past the
+    /// silhouette, and normalising from the whole mesh then shrank the
+    /// drawn shape ~20% against its hitbox. The outer contour now defines
+    /// the scale and inner vertices stay inside it.
+    #[test]
+    fn spiky_hollow_keeps_the_outer_silhouette_at_unit_scale() {
+        let m = build_note_mesh(&wavy(160, 24.0, 0.6), Some(0.6), 0.05).unwrap();
+        let max = m
+            .vertices
+            .iter()
+            .map(|v| v.pos[0].abs().max(v.pos[1].abs()))
+            .fold(0.0f32, f32::max);
+        assert!(
+            (max - 1.0).abs() < 0.02,
+            "outer silhouette must define the unit scale, got {max}"
+        );
     }
 
     #[test]

@@ -1133,7 +1133,7 @@ fn load_hitsounds(s: &Settings, ffmpeg: &str) -> Option<rhythia_render::video::H
             let p = Path::new(path);
             std::fs::read(p)
                 .ok()
-                .filter(|b| b.starts_with(b"RIFF"))
+                .filter(|b| rhythia_render::audio::Clip::from_wav(b).is_some())
                 .or_else(|| decode_to_wav(ffmpeg, p))
                 .or_else(default_hit)
         }
@@ -4291,7 +4291,19 @@ async fn open_designer_window(app_handle: tauri::AppHandle) -> Result<(), String
         let _ = w.set_focus();
         return Ok(());
     }
-    WebviewWindowBuilder::new(
+    // The main window owns the app: when it goes, this window goes too,
+    // instead of keeping the process alive headless.
+    if let Some(main) = app_handle.get_webview_window("main") {
+        let handle = app_handle.clone();
+        main.on_window_event(move |e| {
+            if matches!(e, tauri::WindowEvent::Destroyed) {
+                if let Some(w) = handle.get_webview_window("designer") {
+                    let _ = w.close();
+                }
+            }
+        });
+    }
+    let built = WebviewWindowBuilder::new(
         &app_handle,
         "designer",
         WebviewUrl::App("designer.html".into()),
@@ -4299,8 +4311,17 @@ async fn open_designer_window(app_handle: tauri::AppHandle) -> Result<(), String
     .title("rhythr · Note Designer")
     .inner_size(1120.0, 730.0)
     .min_inner_size(940.0, 620.0)
-    .build()
-    .map_err(err_str)?;
+    .build();
+    if let Err(e) = built {
+        // A double-click races the existence check against the build; the
+        // second build fails on the duplicate label. That is the focus
+        // case, not an error.
+        if let Some(w) = app_handle.get_webview_window("designer") {
+            let _ = w.set_focus();
+            return Ok(());
+        }
+        return Err(err_str(e));
+    }
     Ok(())
 }
 
@@ -5154,6 +5175,18 @@ fn run_render_job(
         other => other.to_string(),
     };
     let _ = handle.emit("render-stage", format!("encoder: {encoder}"));
+    if job.hitsounds.is_none() {
+        let vol = {
+            let inner = app.lock();
+            inner.settings.hitsound_volume
+        };
+        if vol > 0 {
+            let _ = handle.emit(
+                "render-stage",
+                "warning: hit sounds are on but none could be loaded (connect the game, or check the chosen file)",
+            );
+        }
+    }
 
     // A chosen soundtrack wins over the map's own; without one the map's
     // embedded audio goes through a temp file for ffmpeg. A cache-JSON map

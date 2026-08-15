@@ -846,7 +846,7 @@ fn run() -> anyhow::Result<bool> {
                         let p = Path::new(path);
                         std::fs::read(p)
                             .ok()
-                            .filter(|b| b.starts_with(b"RIFF"))
+                            .filter(|b| rhythia_render::audio::Clip::from_wav(b).is_some())
                             .or_else(|| decode_to_wav(p))
                             .or_else(default_hit)
                     }
