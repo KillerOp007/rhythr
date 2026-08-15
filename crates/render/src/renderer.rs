@@ -126,6 +126,11 @@ pub struct Renderer {
     globals_buf: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
     color_tex: wgpu::Texture,
+    /// 4x multisampled scene target, resolved into `color_tex` each pass.
+    /// The SDF looks anti-alias in the shader; a MESH note's silhouette is
+    /// real geometry and rasterised hard, which reads as a low-resolution
+    /// note at any output size. MSAA smooths exactly that class of edge.
+    msaa_view: wgpu::TextureView,
     depth_view: wgpu::TextureView,
     /// The shared unit quad every shape is drawn on, uploaded once.
     quad: GpuMesh,
@@ -185,6 +190,8 @@ const INSTANCE_CAP: usize = 16 * 1024;
 const HUD_VERT_CAP: usize = 64 * 1024;
 
 const COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+/// Scene-pass multisampling. Universally supported at 4x.
+const MSAA_SAMPLES: u32 = 4;
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
 impl Renderer {
@@ -267,13 +274,28 @@ impl Renderer {
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
-            sample_count: 1,
+            sample_count: MSAA_SAMPLES,
             dimension: wgpu::TextureDimension::D2,
             format: DEPTH_FORMAT,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             view_formats: &[],
         });
         self.depth_view = depth_tex.create_view(&Default::default());
+        let msaa_tex = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("msaa-color"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: MSAA_SAMPLES,
+            dimension: wgpu::TextureDimension::D2,
+            format: COLOR_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        self.msaa_view = msaa_tex.create_view(&Default::default());
         self.queue.write_buffer(
             &self.hud_screen_buf,
             0,
@@ -492,7 +514,10 @@ impl Renderer {
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
-            multisample: wgpu::MultisampleState::default(),
+            multisample: wgpu::MultisampleState {
+                count: MSAA_SAMPLES,
+                ..Default::default()
+            },
             multiview_mask: None,
             cache: None,
         });
@@ -531,7 +556,10 @@ impl Renderer {
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
-            multisample: wgpu::MultisampleState::default(),
+            multisample: wgpu::MultisampleState {
+                count: MSAA_SAMPLES,
+                ..Default::default()
+            },
             multiview_mask: None,
             cache: None,
         });
@@ -560,13 +588,28 @@ impl Renderer {
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
-            sample_count: 1,
+            sample_count: MSAA_SAMPLES,
             dimension: wgpu::TextureDimension::D2,
             format: DEPTH_FORMAT,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             view_formats: &[],
         });
         let depth_view = depth_tex.create_view(&Default::default());
+        let msaa_tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("msaa-color"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: MSAA_SAMPLES,
+            dimension: wgpu::TextureDimension::D2,
+            format: COLOR_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let msaa_view = msaa_tex.create_view(&Default::default());
         let quad = upload_mesh(&device, &Mesh::quad());
 
         // 1×1 transparent texture stands in for any skin texture a pack
@@ -805,6 +848,7 @@ impl Renderer {
             dummy_tex: dummy,
             skin_sampler,
             hud_pipeline,
+            msaa_view,
             hud_bind_group,
             hud_atlas,
             hud_layout,
@@ -1868,8 +1912,12 @@ impl Renderer {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("main"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
+                    view: &self.msaa_view,
+                    // Resolved into the readback target every pass; the
+                    // multisampled copy is kept (Store) because a ghost
+                    // split renders two passes and the second loads the
+                    // first half's samples.
+                    resolve_target: Some(&view),
                     depth_slice: None,
                     ops: wgpu::Operations {
                         // Background colour from the config (default black);

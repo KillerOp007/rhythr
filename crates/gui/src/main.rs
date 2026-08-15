@@ -4350,18 +4350,39 @@ struct DesignerShape {
     colors: Vec<String>,
 }
 
-/// A tiny synthetic scene for the preview: three notes of consecutive
-/// colours at staggered approach depths, so one glance shows the mesh
-/// near the plane, mid-flight and freshly spawned, in the user's colours.
+/// The preview's gameplay loop in ms: nine notes on a steady beat, one
+/// over every cell of the grid, so every colour of a colorset up to nine
+/// entries shows within one pass and the mesh is seen at every position.
+pub const DESIGNER_LOOP_MS: f64 = 9.0 * 300.0;
+
+/// A synthetic scene for the preview: a nine-note snake over the whole
+/// grid on a steady beat. The animation clock wraps over
+/// [`DESIGNER_LOOP_MS`]; colours cycle per note exactly like the game.
 fn designer_scene() -> (rhythia_formats::map::Map, rhythia_formats::rhr::Replay) {
     let mut map = rhythia_formats::map::Map::default();
-    for (i, t) in [360i64, 480, 620].into_iter().enumerate() {
-        map.notes.push(rhythia_formats::map::Note {
-            time_ms: t,
-            x: i as f32,
-            y: 1.0,
-        });
+    const SNAKE: [(f32, f32); 9] = [
+        (0.0, 0.0),
+        (1.0, 0.0),
+        (2.0, 0.0),
+        (2.0, 1.0),
+        (1.0, 1.0),
+        (0.0, 1.0),
+        (0.0, 2.0),
+        (1.0, 2.0),
+        (2.0, 2.0),
+    ];
+    for (i, (x, y)) in SNAKE.into_iter().enumerate() {
+        // Two loops' worth of notes, so the seam of the wrapping clock
+        // always has approaching notes in the window.
+        for lap in 0..2 {
+            map.notes.push(rhythia_formats::map::Note {
+                time_ms: 500 + i as i64 * 300 + lap * DESIGNER_LOOP_MS as i64,
+                x,
+                y,
+            });
+        }
     }
+    map.notes.sort_by_key(|n| n.time_ms);
     let replay = rhythia_formats::rhr::Replay {
         version: rhythia_formats::rhr::V_PITCH_LOCK,
         timestamp_ticks: 0,
@@ -4415,6 +4436,7 @@ const DESIGNER_PREVIEW_H: u32 = 560;
 async fn designer_preview(
     state: tauri::State<'_, App>,
     shape: DesignerShape,
+    time_ms: f64,
 ) -> Result<String, String> {
     let app = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -4439,7 +4461,7 @@ async fn designer_preview(
         // THE NOTE (material, depth, colours), and at the gameplay FOV a
         // single note is a stamp in a dark field. Narrowing the FOV is a
         // legitimate config-driven zoom, no geometry is distorted.
-        cfg.camera_fov = 26.0;
+        cfg.camera_fov = 34.0;
         // The note is the subject; the synthetic cursor only covers it.
         cfg.cursor_opacity = 0.0;
         cfg.cursor_trail_enabled = false;
@@ -4461,8 +4483,11 @@ async fn designer_preview(
         let skin = renderer.prepare_skin(&cfg);
         let params = rhythia_render::scene::SceneParams::from(&cfg);
         let (map, replay) = designer_scene();
+        // The clock wraps over the loop; the map carries two laps so the
+        // seam always has notes in the approach window.
+        let t = 500.0 + time_ms.rem_euclid(DESIGNER_LOOP_MS);
         let px = renderer
-            .render_still(&params, &cfg, &skin, &replay, &map, 300.0, None)
+            .render_still(&params, &cfg, &skin, &replay, &map, t, None)
             .map_err(|e| e.to_string())?;
         let bytes = png_bytes(&px, DESIGNER_PREVIEW_W, DESIGNER_PREVIEW_H)?;
         use base64::Engine as _;

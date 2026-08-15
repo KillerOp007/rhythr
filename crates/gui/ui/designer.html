@@ -34,7 +34,7 @@
       </label>
       <label class="field" id="dz-n-row" hidden>
         <span>Sides <em id="dz-n-val" class="mono">6</em></span>
-        <input type="range" id="dz-n" min="3" max="12" step="1" value="6" />
+        <input type="range" id="dz-n" min="3" max="16" step="1" value="6" />
       </label>
       <label class="field">
         <span>Corner rounding <em id="dz-round-val" class="mono">30%</em></span>
@@ -55,15 +55,23 @@
       <h2>Modifiers</h2>
       <label class="field">
         <span>Waves <em id="dz-waves-val" class="mono">0</em></span>
-        <input type="range" id="dz-waves" min="0" max="24" step="1" value="0" />
+        <input type="range" id="dz-waves" min="0" max="32" step="1" value="0" />
       </label>
       <label class="field">
         <span>Wave depth <em id="dz-wavedepth-val" class="mono">25%</em></span>
-        <input type="range" id="dz-wavedepth" min="0" max="60" step="1" value="25" />
+        <input type="range" id="dz-wavedepth" min="0" max="80" step="1" value="25" />
+      </label>
+      <label class="field">
+        <span>Wave style</span>
+        <select id="dz-waveform">
+          <option value="sine" selected>Soft (sine)</option>
+          <option value="spike">Spiky (triangle)</option>
+          <option value="pulse">Blocky (pulse)</option>
+        </select>
       </label>
       <label class="field">
         <span>Twist <em id="dz-twist-val" class="mono">0°</em></span>
-        <input type="range" id="dz-twist" min="0" max="180" step="1" value="0" />
+        <input type="range" id="dz-twist" min="0" max="360" step="1" value="0" />
       </label>
 
       <h2>Freeform</h2>
@@ -87,7 +95,7 @@
       <h2>Colors</h2>
       <div id="dz-colors"></div>
       <button class="btn small" id="dz-color-add">Add color</button>
-      <p class="hint">The note cycles these per hit, exactly like the game's colorsets.</p>
+      <p class="hint">The preview loops one note over every grid cell; the colors play in THIS order, so drag the rows to decide which color lands where. Up to 9 show per loop.</p>
 
       <div id="dz-actions">
         <button class="btn primary" id="dz-save">Save as .rhs</button>

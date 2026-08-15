@@ -20,19 +20,34 @@ fn main() {
     let mut cfg = rhythia_render::config::SkinConfig::default();
     cfg.note_mesh = Some(obj.into_bytes());
     cfg.colorset = rhythia_render::config::parse_colorset("#ff5d6c\n#2fd6d0\n#f2c14e");
-    cfg.camera_fov = 26.0;
+    cfg.camera_fov = 34.0;
     // The note is the subject; the synthetic cursor only covers it.
     cfg.cursor_opacity = 0.0;
     cfg.cursor_trail_enabled = false;
 
+    let t_ms: f64 = args.next().and_then(|s| s.parse().ok()).unwrap_or(700.0);
     let mut map = rhythia_formats::map::Map::default();
-    for (i, t) in [360i64, 480, 620].into_iter().enumerate() {
-        map.notes.push(rhythia_formats::map::Note {
-            time_ms: t,
-            x: i as f32,
-            y: 1.0,
-        });
+    const SNAKE: [(f32, f32); 9] = [
+        (0.0, 0.0),
+        (1.0, 0.0),
+        (2.0, 0.0),
+        (2.0, 1.0),
+        (1.0, 1.0),
+        (0.0, 1.0),
+        (0.0, 2.0),
+        (1.0, 2.0),
+        (2.0, 2.0),
+    ];
+    for (i, (x, y)) in SNAKE.into_iter().enumerate() {
+        for lap in 0..2i64 {
+            map.notes.push(rhythia_formats::map::Note {
+                time_ms: 500 + i as i64 * 300 + lap * 2700,
+                x,
+                y,
+            });
+        }
     }
+    map.notes.sort_by_key(|n| n.time_ms);
     let data = {
         // Minimal synthetic replay via the parser (single idle frame).
         let mut b: Vec<u8> = Vec::new();
@@ -70,7 +85,15 @@ fn main() {
     let skin = renderer.prepare_skin(&cfg);
     let params = rhythia_render::scene::SceneParams::from(&cfg);
     let px = renderer
-        .render_still(&params, &cfg, &skin, &replay, &map, 300.0, None)
+        .render_still(
+            &params,
+            &cfg,
+            &skin,
+            &replay,
+            &map,
+            500.0 + t_ms.rem_euclid(2700.0),
+            None,
+        )
         .unwrap();
     rhythia_render::write_png(std::path::Path::new(&out), &px, 960, 560).unwrap();
     println!("wrote {out}");

@@ -40,6 +40,9 @@
   border-radius: var(--radius-sm); background: none; cursor: pointer;
 }
 .dz-color-row .hex { width: 6rem; }
+.dz-color-row { cursor: grab; }
+.dz-color-row.dragging { opacity: 0.4; }
+.dz-color-row .grip { color: var(--muted); cursor: grab; user-select: none; }
 .dz-color-row button { opacity: 0.6; }
 .dz-color-row button:hover { opacity: 1; }
 #dz-actions { display: flex; gap: 0.5rem; margin-top: 1rem; }

@@ -24,8 +24,17 @@ const P = {
   depth: 0.05,
   waves: 0,
   waveDepth: 0.25,
+  waveform: "sine",
   twist: 0,
 };
+
+/// The wave shape: soft, spiky or blocky, all with the same count/depth.
+function waveFn(k) {
+  const s = Math.sin(k);
+  if (P.waveform === "spike") return (2 / Math.PI) * Math.asin(s);
+  if (P.waveform === "pulse") return Math.tanh(3 * s) / Math.tanh(3);
+  return s;
+}
 // Freeform mode: control points in the unit plane, each {x, y, smooth}.
 // With symmetry s > 1 the points cover ONE wedge of 2π/s and the rest is
 // generated; with s == 1 they are the whole outline.
@@ -54,7 +63,7 @@ function paramOutline(samples = 160) {
       r = ngon + (1 - ngon) * P.round;
     }
     if (P.waves > 0) {
-      r *= 1 + P.waveDepth * Math.sin(P.waves * (th + tw));
+      r *= 1 + P.waveDepth * waveFn(P.waves * (th + tw));
     }
     pts.push([r * Math.cos(th), r * Math.sin(th)]);
   }
@@ -204,15 +213,23 @@ function draw() {
     for (const p of list.slice(1)) ctx.lineTo(...toPx(p));
     ctx.closePath();
   };
+  // Fill, then cut: nonzero on each contour separately. The evenodd rule
+  // cancelled the fill wherever a dragged outline overlapped itself,
+  // which read as the colour vanishing in stripes.
+  ctx.save();
   ctx.beginPath();
   path(plan.outer);
-  if (plan.inner) {
-    path(plan.inner);
-  }
   ctx.fillStyle = colors[0] || "#ffffff";
   ctx.globalAlpha = 0.9;
-  ctx.fill("evenodd");
-  ctx.globalAlpha = 1;
+  ctx.fill("nonzero");
+  if (plan.inner) {
+    ctx.globalCompositeOperation = "destination-out";
+    ctx.globalAlpha = 1;
+    ctx.beginPath();
+    path(plan.inner);
+    ctx.fill("nonzero");
+  }
+  ctx.restore();
   ctx.beginPath();
   path(plan.outer);
   ctx.strokeStyle = accent;
@@ -367,10 +384,6 @@ cv.addEventListener("contextmenu", (e) => {
 
 // ------------------------------------------------------------ preview
 
-let previewTimer = null;
-let previewBusy = false;
-let previewAgain = false;
-
 function shapePayload() {
   const pts = outline();
   return {
@@ -381,23 +394,36 @@ function shapePayload() {
   };
 }
 
-async function refreshPreview() {
-  if (previewBusy) {
-    previewAgain = true;
-    return;
-  }
-  previewBusy = true;
-  try {
-    const url = await invoke("designer_preview", { shape: shapePayload() });
-    $("dz-preview").src = url;
-    setStatus("");
-  } catch (e) {
-    setStatus(String(e), true);
-  } finally {
-    previewBusy = false;
-    if (previewAgain) {
-      previewAgain = false;
-      refreshPreview();
+// The preview is GAMEPLAY: a nine-note snake over the whole grid on a
+// steady beat, looping. A self-paced loop renders as fast as the backend
+// returns frames and always reads the CURRENT shape, so edits show up in
+// the running animation without any scheduling dance.
+const LOOP_MS = 2700;
+let anim0 = performance.now();
+let animOn = true;
+
+async function animLoop() {
+  let lastErr = "";
+  while (true) {
+    if (!animOn || document.hidden) {
+      await new Promise((r) => setTimeout(r, 150));
+      continue;
+    }
+    const t = (performance.now() - anim0) % LOOP_MS;
+    try {
+      const url = await invoke("designer_preview", { shape: shapePayload(), timeMs: t });
+      $("dz-preview").src = url;
+      if (lastErr) {
+        lastErr = "";
+        setStatus("");
+      }
+    } catch (e) {
+      const msg = String(e);
+      if (msg !== lastErr) {
+        lastErr = msg;
+        setStatus(msg, true);
+      }
+      await new Promise((r) => setTimeout(r, 250));
     }
   }
 }
@@ -410,12 +436,9 @@ function setStatus(text, err) {
 
 function scheduleAll() {
   // The contours come from the backend and repaint on arrival (sub-ms
-  // maths, coalesced during a drag); the render preview follows live the
-  // same way, with a trailing call so the final state always lands.
+  // maths, coalesced during a drag); the animated preview reads the
+  // current shape every frame on its own.
   refreshPlan();
-  if (!previewBusy) refreshPreview();
-  clearTimeout(previewTimer);
-  previewTimer = setTimeout(refreshPreview, 120);
 }
 
 // ------------------------------------------------------------ controls
@@ -443,6 +466,10 @@ function wireControls() {
   bindSlider("dz-waves", () => P.waves, (v) => (P.waves = v), (v) => String(v));
   bindSlider("dz-wavedepth", () => P.waveDepth * 100, (v) => (P.waveDepth = v / 100), (v) => `${v}%`);
   bindSlider("dz-twist", () => P.twist, (v) => (P.twist = v), (v) => `${v}°`);
+  $("dz-waveform").addEventListener("change", () => {
+    P.waveform = $("dz-waveform").value;
+    scheduleAll();
+  });
   $("dz-hollow").addEventListener("change", () => {
     P.hollow = $("dz-hollow").checked;
     $("dz-thick-row").hidden = !P.hollow;
@@ -507,12 +534,40 @@ function wireControls() {
   });
 }
 
+let dragColorIdx = -1;
+
 function renderColors() {
   const box = $("dz-colors");
   box.innerHTML = "";
   colors.forEach((c, i) => {
     const row = document.createElement("div");
     row.className = "dz-color-row";
+    // The order IS the beat order in the preview loop, so it is worth
+    // rearranging: drag a row where you want its colour to land.
+    row.draggable = true;
+    const grip = document.createElement("span");
+    grip.className = "grip";
+    grip.textContent = "⠿";
+    grip.title = "Drag to reorder: the notes play the colors in this order";
+    row.appendChild(grip);
+    row.addEventListener("dragstart", () => {
+      dragColorIdx = i;
+      row.classList.add("dragging");
+    });
+    row.addEventListener("dragend", () => {
+      dragColorIdx = -1;
+      row.classList.remove("dragging");
+    });
+    row.addEventListener("dragover", (e) => e.preventDefault());
+    row.addEventListener("drop", (e) => {
+      e.preventDefault();
+      if (dragColorIdx < 0 || dragColorIdx === i) return;
+      const [moved] = colors.splice(dragColorIdx, 1);
+      colors.splice(i, 0, moved);
+      dragColorIdx = -1;
+      renderColors();
+      scheduleAll();
+    });
     const pick = document.createElement("input");
     pick.type = "color";
     pick.value = c;
@@ -555,4 +610,4 @@ renderColors();
 $("dz-n-row").hidden = true;
 fitCanvas();
 refreshPlan();
-refreshPreview();
+animLoop();

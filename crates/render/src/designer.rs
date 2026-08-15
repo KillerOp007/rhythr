@@ -131,6 +131,30 @@ fn inset(pts: &[[f32; 2]], t: f32) -> Outline {
         }
         out.push(p);
     }
+    // De-loop: where the rim is thicker than the shape is wide, the inset
+    // contour runs BACKWARDS against its outer segment and loops, which
+    // renders as black arrow-shaped notches punched into the rim (the
+    // triangles between outer and inner cross). Collapsing every reversed
+    // segment to its midpoint turns the loop into a clean pinch, in the
+    // editor and in the mesh alike, since both draw this same contour.
+    let n = out.len();
+    for _ in 0..6 {
+        let mut changed = false;
+        for i in 0..n {
+            let j = (i + 1) % n;
+            let od = [pts[j][0] - pts[i][0], pts[j][1] - pts[i][1]];
+            let id = [out[j][0] - out[i][0], out[j][1] - out[i][1]];
+            if od[0] * id[0] + od[1] * id[1] < 0.0 {
+                let mid = [(out[i][0] + out[j][0]) * 0.5, (out[i][1] + out[j][1]) * 0.5];
+                out[i] = mid;
+                out[j] = mid;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
     out
 }
 
