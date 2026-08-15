@@ -58,6 +58,15 @@ function paramOutline(samples = 160) {
     }
     pts.push([r * Math.cos(th), r * Math.sin(th)]);
   }
+  // Waves can push the radius past the unit cap; scale the whole shape
+  // back so the drawn outline IS the exported one, never larger.
+  const max = pts.reduce((m, p) => Math.max(m, Math.abs(p[0]), Math.abs(p[1])), 0);
+  if (max > 1) {
+    for (const p of pts) {
+      p[0] /= max;
+      p[1] /= max;
+    }
+  }
   return pts;
 }
 
@@ -109,19 +118,32 @@ const outline = () => (free ? freeOutline() : paramOutline());
 
 const cv = $("dz-canvas");
 const ctx = cv.getContext("2d");
-const S = cv.width; // world [-1.25, 1.25] fills the canvas
-const toPx = (p) => [S / 2 + (p[0] * S) / 2.5, S / 2 - (p[1] * S) / 2.5];
-const toWorld = (x, y) => [((x - S / 2) * 2.5) / S, -((y - S / 2) * 2.5) / S];
+const S = cv.width; // world [-1.45, 1.45] fills the canvas
+const toPx = (p) => [S / 2 + (p[0] * S) / 2.9, S / 2 - (p[1] * S) / 2.9];
+const toWorld = (x, y) => [((x - S / 2) * 2.9) / S, -((y - S / 2) * 2.9) / S];
+// The game's TRUE hit area in note units: hitbox half-extent 0.56875
+// cells over the note's visual half-size 0.45 cells. The note itself is
+// HARD-capped at the unit square (like every real skin), so a designed
+// note can never outgrow the box that judges it.
+const HITBOX = 0.56875 / 0.45;
+const clampUnit = (x, y) => [
+  Math.max(-1, Math.min(1, x)),
+  Math.max(-1, Math.min(1, y)),
+];
 
 function draw() {
   ctx.clearRect(0, 0, S, S);
   const styles = getComputedStyle(document.documentElement);
   const accent = styles.getPropertyValue("--accent").trim() || "#2fd6d0";
-  // Faint hitbox square for scale (the game's box, half-extent ~0.57 of
-  // the note's half-size 1 -> the note itself spans ±1).
-  ctx.strokeStyle = "rgba(139,152,169,0.25)";
+  // Two reference squares. Solid: the hard note limit (the unit square
+  // every real skin uses; nothing here may cross it). Dashed, outside:
+  // the game's TRUE hit area, which is a quarter bigger than the note,
+  // shown so the size relationship is visible rather than guessed.
+  ctx.strokeStyle = "rgba(139,152,169,0.35)";
+  ctx.strokeRect(...toPx([-1, 1]), (S * 2) / 2.9, (S * 2) / 2.9);
+  ctx.strokeStyle = "rgba(242,193,78,0.35)";
   ctx.setLineDash([4, 4]);
-  ctx.strokeRect(...toPx([-1, 1]), (S * 2) / 2.5, (S * 2) / 2.5);
+  ctx.strokeRect(...toPx([-HITBOX, HITBOX]), (S * 2 * HITBOX) / 2.9, (S * 2 * HITBOX) / 2.9);
   ctx.setLineDash([]);
 
   const pts = outline();
@@ -204,6 +226,7 @@ cv.addEventListener("pointerdown", (e) => {
   // Click near the outline: insert a point there (folded into the wedge).
   let [wx, wy] = toWorld(mx, my);
   [wx, wy] = foldToWedge(wx, wy);
+  [wx, wy] = clampUnit(wx, wy);
   // Insert in angular order so the wedge stays a simple arc of points.
   // Angles normalised to [0, 2pi): atan2 goes negative below the x-axis,
   // and comparing raw values put every lower-half click at index 0,
@@ -241,11 +264,7 @@ cv.addEventListener("pointermove", (e) => {
     wx = rr * Math.cos(a);
     wy = rr * Math.sin(a);
   }
-  const r = Math.hypot(wx, wy);
-  if (r > 1.2) {
-    wx *= 1.2 / r;
-    wy *= 1.2 / r;
-  }
+  [wx, wy] = clampUnit(wx, wy);
   free[dragging] = { ...free[dragging], x: wx, y: wy };
   scheduleAll();
 });

@@ -3,7 +3,13 @@
 //! its `.obj`/`.mtl` export.
 //!
 //! The whole pipeline works in the note convention the renderer and the
-//! game share: x/y half-extent 1, a thin z extrusion. Every real note
+//! game share: x/y half-extent 1, a thin z extrusion. That unit cap is
+//! also a HARD size rule: the game's true hit area is a quarter larger
+//! than the note (hitbox half 0.56875 cells over note half 0.45), and a
+//! note drawn bigger than its hitbox lies to the player about what a hit
+//! is. Everything this module emits is normalised to the unit square, so
+//! a designed note can never outgrow the box that judges it, in rhythr
+//! or in the game (which renders meshes at their authored scale). Every real note
 //! mesh observed (the game's four built-ins and a player export) is
 //! exactly this: a flat silhouette pulled into a slab, so the designer
 //! never needs 3D editing, only a good outline.
@@ -483,6 +489,44 @@ mod tests {
             (max - 1.0).abs() < 0.02,
             "outer silhouette must define the unit scale, got {max}"
         );
+    }
+
+    /// The hard rule: nothing this module emits may exceed the unit
+    /// square, because the game renders meshes at authored scale and its
+    /// hit area is only a quarter larger than the unit note. An outline
+    /// handed in at ANY size (a buggy or hostile frontend included) must
+    /// come out capped.
+    #[test]
+    fn no_export_can_outgrow_the_hitbox() {
+        const HITBOX: f32 = 0.56875 / 0.45;
+        for scale in [0.2f32, 1.0, 1.26, 5.0, 50.0] {
+            let big: Vec<[f32; 2]> = wavy(96, 6.0, 0.3)
+                .into_iter()
+                .map(|p| [p[0] * scale, p[1] * scale])
+                .collect();
+            for hollow in [None, Some(0.2)] {
+                let m = build_note_mesh(&big, hollow, 0.05).unwrap();
+                let max = m
+                    .vertices
+                    .iter()
+                    .map(|v| v.pos[0].abs().max(v.pos[1].abs()))
+                    .fold(0.0f32, f32::max);
+                assert!(
+                    max <= 1.0 + 1e-4,
+                    "scale {scale} hollow {hollow:?}: extent {max} escaped the unit cap"
+                );
+                assert!(max < HITBOX, "and therefore stays inside the hit area");
+                // And the exported FILE carries the cap too: the game
+                // renders what is in the file, not what we meant.
+                let back = Mesh::from_obj_str(&to_obj(&m, "cap")).unwrap();
+                let fmax = back
+                    .vertices
+                    .iter()
+                    .map(|v| v.pos[0].abs().max(v.pos[1].abs()))
+                    .fold(0.0f32, f32::max);
+                assert!(fmax <= 1.0 + 1e-4);
+            }
+        }
     }
 
     #[test]
