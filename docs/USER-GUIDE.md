@@ -163,6 +163,11 @@ endorsed by Rhythia or Capo Games.
   where it goes and can read it first; it deliberately leaves out the
   player name and any path the window does not already show, so sending
   it gives away no more than a screenshot would.
+- **Hit sound choice**: under the Hit sounds slider, pick the game's
+  default or one of its four alternative packs (Bass, Creamy, Pick,
+  Vulnus), or choose your own audio file: anything your ffmpeg reads is
+  decoded on the fly. A choice that cannot be honoured falls back to the
+  default sound rather than rendering silently.
 - **Mesh note skins**: the game's four built-in note meshes (cube,
   circle, plane, rounded thin) and custom `.obj` note skins bundled in an
   imported `.rhs` render as real 3D geometry, tinted by the colorset. A

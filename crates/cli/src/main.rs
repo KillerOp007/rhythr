@@ -4,7 +4,7 @@
 mod manifest;
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use anyhow::Context;
@@ -113,6 +113,10 @@ enum Command {
         /// soundtrack rather than the map's song.
         #[arg(long)]
         audio_own_speed: bool,
+        /// Which hit sound plays: "default", one of the game's packs
+        /// (bass, creamy, pick, vulnus), or a path to an audio file.
+        #[arg(long, default_value = "default")]
+        hitsound: String,
         /// What a speed mod does to the song's pitch: auto follows the
         /// replay (its recorded Pitch Lock toggle on new files, pitched on
         /// older ones), locked keeps the pitch, pitched shifts it with the
@@ -603,6 +607,7 @@ fn run() -> anyhow::Result<bool> {
             out,
             audio,
             audio_own_speed,
+            hitsound,
             pitch,
             start,
             end,
@@ -795,19 +800,67 @@ fn run() -> anyhow::Result<bool> {
                     _ => "libx264 (software)",
                 }
             );
-            // Hit sounds come from the extracted game assets folder.
-            let hitsounds = game_assets
+            // Hit sounds: the game's default, one of its packs, or a
+            // user file, decoded through ffmpeg when it is not WAV. A
+            // choice that cannot be honoured falls back to the default
+            // rather than silently rendering without hit sounds.
+            let decode_to_wav = |path: &Path| -> Option<Vec<u8>> {
+                let mut cmd = std::process::Command::new(&ffmpeg);
+                let out = cmd
+                    .args(["-v", "error", "-i"])
+                    .arg(path)
+                    .args([
+                        "-f",
+                        "s16le",
+                        "-acodec",
+                        "pcm_s16le",
+                        "-ar",
+                        "44100",
+                        "-ac",
+                        "2",
+                        "pipe:1",
+                    ])
+                    .stdin(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .output()
+                    .ok()?;
+                (out.status.success() && !out.stdout.is_empty())
+                    .then(|| rhythia_render::audio::wrap_pcm16_wav(&out.stdout, 2, 44_100))
+            };
+            let sounds_dir = game_assets
                 .as_ref()
-                .filter(|_| hitsound_volume > 0)
-                .and_then(|dir| {
-                    let sounds = dir.join("builtin_assets").join("sounds");
-                    let hit_wav = std::fs::read(sounds.join("hit.wav")).ok()?;
-                    Some(rhythia_render::video::HitsoundOptions {
-                        hit_wav,
-                        miss_wav: std::fs::read(sounds.join("miss.wav")).ok(),
-                        volume: hitsound_volume.min(150) as f32 / 100.0,
-                    })
-                });
+                .map(|d| d.join("builtin_assets").join("sounds"));
+            let hitsounds = if hitsound_volume > 0 {
+                let default_hit = || {
+                    sounds_dir
+                        .as_ref()
+                        .and_then(|d| std::fs::read(d.join("hit.wav")).ok())
+                };
+                let hit_wav = match hitsound.as_str() {
+                    "default" => default_hit(),
+                    pack @ ("bass" | "creamy" | "pick" | "vulnus") => sounds_dir
+                        .as_ref()
+                        .and_then(|d| decode_to_wav(&d.join(format!("{pack}.mp3"))))
+                        .or_else(default_hit),
+                    path => {
+                        let p = Path::new(path);
+                        std::fs::read(p)
+                            .ok()
+                            .filter(|b| b.starts_with(b"RIFF"))
+                            .or_else(|| decode_to_wav(p))
+                            .or_else(default_hit)
+                    }
+                };
+                hit_wav.map(|hit_wav| rhythia_render::video::HitsoundOptions {
+                    hit_wav,
+                    miss_wav: sounds_dir
+                        .as_ref()
+                        .and_then(|d| std::fs::read(d.join("miss.wav")).ok()),
+                    volume: hitsound_volume.min(150) as f32 / 100.0,
+                })
+            } else {
+                None
+            };
             if hitsound_volume > 0 && hitsounds.is_none() {
                 eprintln!("note: hit sounds requested but not found (need --game-assets with extracted sounds)");
             }

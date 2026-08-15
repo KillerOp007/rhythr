@@ -5,6 +5,12 @@ endorsed by Rhythia or Capo Games.
 
 ## Unreleased
 
+- **Pick your hit sound.** The game ships four alternative hit sounds
+  next to the default (Bass, Creamy, Pick, Vulnus) and rhythr always used
+  the default. All five are now a dropdown under the volume slider, plus
+  "choose a file": any audio ffmpeg reads works, decoded on the fly. CLI:
+  `--hitsound <name-or-path>`.
+
 - **Mesh note skins render.** The game supports note skins that are 3D
   meshes (`.obj`), and rhythr treated them as an image it could not
   decode, silently falling back to the default look. The four built-in

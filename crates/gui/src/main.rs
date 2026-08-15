@@ -127,6 +127,11 @@ struct Settings {
     music_volume: u32,
     /// Hit/miss-sound volume in percent (0 = off).
     hitsound_volume: u32,
+    /// Which hit sound plays: "default" (the game's hit.wav), one of the
+    /// game's alternative packs ("bass", "creamy", "pick", "vulnus"), or
+    /// an absolute path to the user's own audio file. Non-WAV files are
+    /// decoded through ffmpeg at render time.
+    hitsound: String,
     /// HUD element key -> forced on/off. Absent key = follow the config.
     hud_overrides: BTreeMap<String, bool>,
     /// Drag-editor positions per HUD element (normalised frame centre).
@@ -195,6 +200,7 @@ impl Default for Settings {
             last_render_fps: 0.0,
             music_volume: 100,
             hitsound_volume: 50,
+            hitsound: "default".into(),
             hud_overrides: BTreeMap::new(),
             hud_positions: BTreeMap::new(),
             hud_scales: BTreeMap::new(),
@@ -1068,18 +1074,75 @@ fn suggested_name(inner: &Inner) -> String {
     sanitize_filename(&format!("{player} - {song}.mp4"))
 }
 
-/// The game's hit/miss sounds from the extracted assets, when present and
-/// the volume is above zero.
-fn load_hitsounds(s: &Settings) -> Option<rhythia_render::video::HitsoundOptions> {
+/// The game ships four alternative hit sounds next to the default; these
+/// are their extracted file names.
+const HITSOUND_PACKS: [&str; 4] = ["bass", "creamy", "pick", "vulnus"];
+
+/// Decodes any audio file to plain PCM16 WAV bytes through ffmpeg, for
+/// the mixer, which reads WAV alone. The game's alternative packs are
+/// mp3, and a user's own pick can be anything their ffmpeg reads.
+fn decode_to_wav(ffmpeg: &str, path: &Path) -> Option<Vec<u8>> {
+    let mut cmd = std::process::Command::new(ffmpeg);
+    rhythia_render::video::hide_console_window(&mut cmd);
+    let out = cmd
+        .args(["-v", "error", "-i"])
+        .arg(path)
+        .args([
+            "-f",
+            "s16le",
+            "-acodec",
+            "pcm_s16le",
+            "-ar",
+            "44100",
+            "-ac",
+            "2",
+            "pipe:1",
+        ])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    (out.status.success() && !out.stdout.is_empty())
+        .then(|| rhythia_render::audio::wrap_pcm16_wav(&out.stdout, 2, 44_100))
+}
+
+/// The chosen hit sound plus the game's miss sound, when present and the
+/// volume is above zero. A choice that cannot be honoured (missing file,
+/// failed decode) falls back to the default hit.wav rather than silently
+/// rendering without hit sounds: the user turned the volume up.
+fn load_hitsounds(s: &Settings, ffmpeg: &str) -> Option<rhythia_render::video::HitsoundOptions> {
     if s.hitsound_volume == 0 {
         return None;
     }
-    let dir = PathBuf::from(s.game_assets.as_ref()?)
-        .join("builtin_assets")
-        .join("sounds");
+    let sounds_dir = s
+        .game_assets
+        .as_ref()
+        .map(|p| PathBuf::from(p).join("builtin_assets").join("sounds"));
+    let default_hit = || {
+        sounds_dir
+            .as_ref()
+            .and_then(|d| std::fs::read(d.join("hit.wav")).ok())
+    };
+    let hit_wav = match s.hitsound.as_str() {
+        "default" | "" => default_hit(),
+        pack if HITSOUND_PACKS.contains(&pack) => sounds_dir
+            .as_ref()
+            .and_then(|d| decode_to_wav(ffmpeg, &d.join(format!("{pack}.mp3"))))
+            .or_else(default_hit),
+        path => {
+            let p = Path::new(path);
+            std::fs::read(p)
+                .ok()
+                .filter(|b| b.starts_with(b"RIFF"))
+                .or_else(|| decode_to_wav(ffmpeg, p))
+                .or_else(default_hit)
+        }
+    }?;
     Some(rhythia_render::video::HitsoundOptions {
-        hit_wav: std::fs::read(dir.join("hit.wav")).ok()?,
-        miss_wav: std::fs::read(dir.join("miss.wav")).ok(),
+        hit_wav,
+        miss_wav: sounds_dir
+            .as_ref()
+            .and_then(|d| std::fs::read(d.join("miss.wav")).ok()),
         volume: s.hitsound_volume.min(150) as f32 / 100.0,
     })
 }
@@ -3036,6 +3099,7 @@ struct OutputUpdate {
     pitch_mode: Option<String>,
     music_volume: Option<u32>,
     hitsound_volume: Option<u32>,
+    hitsound: Option<String>,
     output_dir: Option<String>,
     file_name: Option<String>,
     ffmpeg: Option<String>,
@@ -3114,6 +3178,17 @@ fn set_output(state: tauri::State<'_, App>, update: OutputUpdate) -> Result<Stat
     }
     if let Some(v) = update.hitsound_volume {
         s.hitsound_volume = v.min(150);
+    }
+    if let Some(v) = update.hitsound {
+        // A known name, or a non-empty path; anything else means default.
+        s.hitsound = if v == "default"
+            || HITSOUND_PACKS.contains(&v.as_str())
+            || Path::new(&v).is_absolute()
+        {
+            v
+        } else {
+            "default".into()
+        };
     }
     if let Some(v) = update.output_dir {
         s.output_dir = if v.trim().is_empty() { None } else { Some(v) };
@@ -4653,7 +4728,7 @@ fn start_render(
             results_secs: s.results_secs,
             motion_blur: s.motion_blur,
             music_volume: s.music_volume.min(150) as f32 / 100.0,
-            hitsounds: load_hitsounds(s),
+            hitsounds: load_hitsounds(s, &resolve_ffmpeg(s)),
             ghost: inner
                 .ghost
                 .as_ref()

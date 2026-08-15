@@ -17,6 +17,30 @@ pub struct Clip {
     samples: Vec<f32>,
 }
 
+/// Wraps raw little-endian PCM16 in a minimal RIFF/WAVE header. For audio
+/// decoded through ffmpeg's stdout: its own piped WAV carries streaming
+/// placeholders (0xFFFFFFFF sizes) that a strict parser rightly rejects,
+/// so the honest route is raw samples plus a header with real numbers.
+pub fn wrap_pcm16_wav(pcm: &[u8], channels: u16, rate: u32) -> Vec<u8> {
+    let byte_rate = rate * u32::from(channels) * 2;
+    let block_align = channels * 2;
+    let mut w = Vec::with_capacity(44 + pcm.len());
+    w.extend_from_slice(b"RIFF");
+    w.extend_from_slice(&(36 + pcm.len() as u32).to_le_bytes());
+    w.extend_from_slice(b"WAVEfmt ");
+    w.extend_from_slice(&16u32.to_le_bytes());
+    w.extend_from_slice(&1u16.to_le_bytes()); // PCM
+    w.extend_from_slice(&channels.to_le_bytes());
+    w.extend_from_slice(&rate.to_le_bytes());
+    w.extend_from_slice(&byte_rate.to_le_bytes());
+    w.extend_from_slice(&block_align.to_le_bytes());
+    w.extend_from_slice(&16u16.to_le_bytes()); // bits
+    w.extend_from_slice(b"data");
+    w.extend_from_slice(&(pcm.len() as u32).to_le_bytes());
+    w.extend_from_slice(pcm);
+    w
+}
+
 impl Clip {
     /// Parses a RIFF/WAVE file (PCM16, mono or stereo). Sample rates other
     /// than 44.1 kHz are resampled naively (nearest). The game's own clips

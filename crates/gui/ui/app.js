@@ -829,6 +829,27 @@ function renderOutputTab() {
   $("musicvol-val").textContent = `${s.music_volume}%`;
   $("set-hitvol").value = String(s.hitsound_volume);
   $("hitvol-val").textContent = `${s.hitsound_volume}%`;
+  // A custom file shows as its own option carrying the full path, so the
+  // select reflects what will actually play instead of snapping back.
+  {
+    const sel = $("set-hitsound");
+    const v = s.hitsound || "default";
+    const named = ["default", "bass", "creamy", "pick", "vulnus"];
+    let extra = sel.querySelector("option[data-custom]");
+    if (!named.includes(v)) {
+      if (!extra) {
+        extra = document.createElement("option");
+        extra.dataset.custom = "1";
+        sel.insertBefore(extra, sel.querySelector('option[value="__custom"]'));
+      }
+      extra.value = v;
+      extra.textContent = `File: ${v.split(/[\\/]/).pop()}`;
+      extra.title = v;
+    } else if (extra) {
+      extra.remove();
+    }
+    sel.value = v;
+  }
   $("set-outdir").value = s.output_dir || "";
   // Typed-into fields own their value: a background status refresh landing
   // mid-keystroke used to wipe what was being typed.
@@ -2423,6 +2444,25 @@ function initControls() {
   $("set-targetsize").addEventListener("change", () =>
     pushOutput({ target_size_mb: Number($("set-targetsize").value) }),
   );
+  $("set-hitsound").addEventListener("change", async () => {
+    const v = $("set-hitsound").value;
+    if (v !== "__custom") {
+      pushOutput({ hitsound: v });
+      return;
+    }
+    const p = await dialog.open({
+      filters: [
+        { name: "Audio", extensions: ["wav", "mp3", "ogg", "flac", "m4a", "aac", "opus"].flatMap((e) => [e, e.toUpperCase()]) },
+        { name: "All files", extensions: ["*"] },
+      ],
+    });
+    // Cancelled: fall back to what the settings still hold.
+    if (!p) {
+      $("set-hitsound").value = status?.settings?.hitsound || "default";
+      return;
+    }
+    pushOutput({ hitsound: p });
+  });
   $("btn-audio").addEventListener("click", async () => {
     const p = await dialog.open({
       filters: [

@@ -315,7 +315,15 @@
         <label class="field">
           <span>Hit sounds <em id="hitvol-val" class="mono">50%</em></span>
           <input type="range" id="set-hitvol" min="0" max="150" step="5" value="50" />
-          <span class="sub">The game's hit/miss sounds at the exact hit times. Needs the game connected (Game card). 0% = off.</span>
+          <select id="set-hitsound" style="margin-top:4px">
+            <option value="default" selected>Default (the game's hit sound)</option>
+            <option value="bass">Bass</option>
+            <option value="creamy">Creamy</option>
+            <option value="pick">Pick</option>
+            <option value="vulnus">Vulnus</option>
+            <option value="__custom">Choose a file…</option>
+          </select>
+          <span class="sub">Hit/miss sounds at the exact hit times. The named packs are the game's own alternatives; a chosen file can be any audio your ffmpeg reads. Needs the game connected for the built-ins. 0% = off.</span>
         </label>
         <label class="field">
           <span>Results screen</span>
