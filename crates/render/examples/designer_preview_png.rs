@@ -20,9 +20,13 @@ fn main() {
     let mut cfg = rhythia_render::config::SkinConfig::default();
     cfg.note_mesh = Some(obj.into_bytes());
     cfg.colorset = rhythia_render::config::parse_colorset("#ff5d6c\n#2fd6d0\n#f2c14e");
+    cfg.camera_fov = 26.0;
+    // The note is the subject; the synthetic cursor only covers it.
+    cfg.cursor_opacity = 0.0;
+    cfg.cursor_trail_enabled = false;
 
     let mut map = rhythia_formats::map::Map::default();
-    for (i, t) in [480i64, 620, 780].into_iter().enumerate() {
+    for (i, t) in [360i64, 480, 620].into_iter().enumerate() {
         map.notes.push(rhythia_formats::map::Note {
             time_ms: t,
             x: i as f32,
@@ -62,12 +66,12 @@ fn main() {
     };
     let replay = rhythia_formats::rhr::Replay::parse(&data).unwrap();
 
-    let renderer = rhythia_render::Renderer::new(560, 350, cfg.hud_fonts().as_slice()).unwrap();
+    let renderer = rhythia_render::Renderer::new(960, 560, cfg.hud_fonts().as_slice()).unwrap();
     let skin = renderer.prepare_skin(&cfg);
     let params = rhythia_render::scene::SceneParams::from(&cfg);
     let px = renderer
         .render_still(&params, &cfg, &skin, &replay, &map, 300.0, None)
         .unwrap();
-    rhythia_render::write_png(std::path::Path::new(&out), &px, 560, 350).unwrap();
+    rhythia_render::write_png(std::path::Path::new(&out), &px, 960, 560).unwrap();
     println!("wrote {out}");
 }

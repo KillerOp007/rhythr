@@ -4355,7 +4355,7 @@ struct DesignerShape {
 /// near the plane, mid-flight and freshly spawned, in the user's colours.
 fn designer_scene() -> (rhythia_formats::map::Map, rhythia_formats::rhr::Replay) {
     let mut map = rhythia_formats::map::Map::default();
-    for (i, t) in [480i64, 620, 780].into_iter().enumerate() {
+    for (i, t) in [360i64, 480, 620].into_iter().enumerate() {
         map.notes.push(rhythia_formats::map::Note {
             time_ms: t,
             x: i as f32,
@@ -4425,6 +4425,14 @@ async fn designer_preview(
         if !cs.is_empty() {
             cfg.colorset = cs;
         }
+        // A tele lens on the standard camera: the preview's job is to show
+        // THE NOTE (material, depth, colours), and at the gameplay FOV a
+        // single note is a stamp in a dark field. Narrowing the FOV is a
+        // legitimate config-driven zoom, no geometry is distorted.
+        cfg.camera_fov = 26.0;
+        // The note is the subject; the synthetic cursor only covers it.
+        cfg.cursor_opacity = 0.0;
+        cfg.cursor_trail_enabled = false;
         let mut slot = app
             .designer_renderer
             .lock()
