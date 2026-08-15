@@ -19,10 +19,18 @@
 }
 #dz-canvas-hint { flex: 0 0 auto; }
 #dz-preview-box {
-  flex: 1 1 40%; min-height: 0;
-  display: flex; flex-direction: column; gap: 0.25rem;
+  /* A band, not a hall: tall enough to read the note, never dominating
+     the editor above it. */
+  flex: 0 0 clamp(180px, 26vh, 300px); min-height: 0;
 }
-#dz-preview {
+#dz-preview-row {
+  display: flex; gap: 0.5rem; height: 100%;
+}
+#dz-preview-row figure {
+  flex: 1 1 50%; min-width: 0; margin: 0;
+  display: flex; flex-direction: column; gap: 0.15rem;
+}
+#dz-preview-row img {
   flex: 1 1 auto; min-height: 0; width: 100%;
   object-fit: contain; object-position: center;
   border: 1px solid var(--border); border-radius: var(--radius);

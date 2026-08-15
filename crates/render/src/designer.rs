@@ -131,12 +131,9 @@ fn inset(pts: &[[f32; 2]], t: f32) -> Outline {
         }
         out.push(p);
     }
-    // De-loop: where the rim is thicker than the shape is wide, the inset
-    // contour runs BACKWARDS against its outer segment and loops, which
-    // renders as black arrow-shaped notches punched into the rim (the
-    // triangles between outer and inner cross). Collapsing every reversed
-    // segment to its midpoint turns the loop into a clean pinch, in the
-    // editor and in the mesh alike, since both draw this same contour.
+    // De-loop pass 1: where the rim is thicker than the shape is wide,
+    // an inset segment runs BACKWARDS against its outer segment;
+    // collapsing it to its midpoint removes the direct reversal.
     let n = out.len();
     for _ in 0..6 {
         let mut changed = false;
@@ -152,6 +149,52 @@ fn inset(pts: &[[f32; 2]], t: f32) -> Outline {
             }
         }
         if !changed {
+            break;
+        }
+    }
+    // De-loop pass 2: sharp curvature makes the inset cross NEIGHBOURING
+    // segments, leaving little bow-tie loops that render as black
+    // arrow-shaped notches punched into the rim. Every crossing has the
+    // loop between its two segments collapsed onto the intersection
+    // point, which turns the notch into a clean pinch. n is capped at
+    // 512, so the quadratic sweep stays well under a millisecond.
+    fn seg_hit(a: [f32; 2], b: [f32; 2], c: [f32; 2], d: [f32; 2]) -> Option<[f32; 2]> {
+        let r = [b[0] - a[0], b[1] - a[1]];
+        let s2 = [d[0] - c[0], d[1] - c[1]];
+        let den = r[0] * s2[1] - r[1] * s2[0];
+        if den.abs() < 1e-12 {
+            return None;
+        }
+        let t = ((c[0] - a[0]) * s2[1] - (c[1] - a[1]) * s2[0]) / den;
+        let u = ((c[0] - a[0]) * r[1] - (c[1] - a[1]) * r[0]) / den;
+        ((0.001..0.999).contains(&t) && (0.001..0.999).contains(&u))
+            .then(|| [a[0] + t * r[0], a[1] + t * r[1]])
+    }
+    for _ in 0..8 {
+        let n = out.len();
+        let mut fixed = false;
+        'outer: for i in 0..n {
+            // Only nearby crossings: a rim loop is local by nature, and
+            // distant intersections would be the shape itself.
+            for off in 2..12.min(n - 1) {
+                let j = (i + off) % n;
+                let (a, b) = (out[i], out[(i + 1) % n]);
+                let (c, d) = (out[j], out[(j + 1) % n]);
+                if let Some(p) = seg_hit(a, b, c, d) {
+                    let mut k = (i + 1) % n;
+                    loop {
+                        out[k] = p;
+                        if k == j {
+                            break;
+                        }
+                        k = (k + 1) % n;
+                    }
+                    fixed = true;
+                    break 'outer;
+                }
+            }
+        }
+        if !fixed {
             break;
         }
     }

@@ -4415,6 +4415,36 @@ fn designer_scene() -> (rhythia_formats::map::Map, rhythia_formats::rhr::Replay)
     (map, replay)
 }
 
+/// The currently selected hit sound as a playable data URL, so the
+/// Output tab can preview it before anyone sits through a render. Same
+/// resolution chain as the render itself (packs decoded through ffmpeg,
+/// fallback to the default), so what plays is what will be mixed.
+#[tauri::command]
+async fn hitsound_preview(state: tauri::State<'_, App>) -> Result<String, String> {
+    let app = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let (settings, ffmpeg) = {
+            let inner = app.lock();
+            (inner.settings.clone(), resolve_ffmpeg(&inner.settings))
+        };
+        let mut s = settings;
+        // The preview must play even with the volume slider at zero:
+        // hearing the sound is how one decides to turn it up.
+        if s.hitsound_volume == 0 {
+            s.hitsound_volume = 100;
+        }
+        let hs = load_hitsounds(&s, &ffmpeg)
+            .ok_or("no hit sound available: connect the game or choose a file")?;
+        use base64::Engine as _;
+        Ok(format!(
+            "data:audio/wav;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(hs.hit_wav)
+        ))
+    })
+    .await
+    .map_err(err_str)?
+}
+
 /// The cleaned contours the canvas draws: the SAME cleanup, normalise and
 /// inset the mesh build runs, served from one place so the note being
 /// edited and the note being rendered are the same note. Pure maths,
@@ -6003,6 +6033,7 @@ fn main() {
             open_analyze_window,
             toggle_analyze_fullscreen,
             open_designer_window,
+            hitsound_preview,
             designer_outline,
             designer_preview,
             designer_export,

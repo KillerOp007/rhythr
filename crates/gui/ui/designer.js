@@ -293,15 +293,33 @@ function foldToWedge(x, y) {
 
 cv.addEventListener("pointerdown", (e) => {
   if (!free) return;
+  // Left button only: middle and side buttons were adding points too.
+  if (e.button !== 0) return;
   const rect = cv.getBoundingClientRect();
   const mx = e.clientX - rect.left;
   const my = e.clientY - rect.top;
-  if (e.button === 2) return; // context handler removes
   const hit = pointAt(mx, my);
   if (hit >= 0) {
     dragging = hit;
     cv.setPointerCapture(e.pointerId);
     return;
+  }
+  // Insert only when the click actually lands NEAR the outline: a click
+  // in empty space (or outside the note entirely) is not a request for a
+  // point there.
+  if (plan?.outer) {
+    let best = Infinity;
+    const n = plan.outer.length;
+    for (let i = 0; i < n; i++) {
+      const [ax, ay] = toPx(plan.outer[i]);
+      const [bx, by] = toPx(plan.outer[(i + 1) % n]);
+      const dx = bx - ax, dy = by - ay;
+      const len2 = dx * dx + dy * dy || 1e-9;
+      const t = Math.max(0, Math.min(1, ((mx - ax) * dx + (my - ay) * dy) / len2));
+      const qx = ax + t * dx, qy = ay + t * dy;
+      best = Math.min(best, Math.hypot(mx - qx, my - qy));
+    }
+    if (best > 18) return;
   }
   // Click near the outline: insert a point there (folded into the wedge).
   let [wx, wy] = toWorld(mx, my);
@@ -399,8 +417,26 @@ function shapePayload() {
 // returns frames and always reads the CURRENT shape, so edits show up in
 // the running animation without any scheduling dance.
 const LOOP_MS = 2700;
+// The snake's centre-cell note sits exactly at the hit plane at 1700 ms:
+// the still renders that moment, so it is always one big centred note.
+const STILL_MS = 1700;
 let anim0 = performance.now();
 let animOn = true;
+let stillTimer = null;
+let stillBusy = false;
+
+async function refreshStill() {
+  if (stillBusy) return;
+  stillBusy = true;
+  try {
+    const url = await invoke("designer_preview", { shape: shapePayload(), timeMs: STILL_MS });
+    $("dz-still").src = url;
+  } catch {
+    // The animated loop already reports outline errors.
+  } finally {
+    stillBusy = false;
+  }
+}
 
 async function animLoop() {
   let lastErr = "";
@@ -437,8 +473,11 @@ function setStatus(text, err) {
 function scheduleAll() {
   // The contours come from the backend and repaint on arrival (sub-ms
   // maths, coalesced during a drag); the animated preview reads the
-  // current shape every frame on its own.
+  // current shape every frame on its own. The still re-renders shortly
+  // after the last change.
   refreshPlan();
+  clearTimeout(stillTimer);
+  stillTimer = setTimeout(refreshStill, 250);
 }
 
 // ------------------------------------------------------------ controls

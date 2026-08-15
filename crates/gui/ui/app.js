@@ -2447,6 +2447,16 @@ function initControls() {
   $("set-targetsize").addEventListener("change", () =>
     pushOutput({ target_size_mb: Number($("set-targetsize").value) }),
   );
+  $("btn-hitsound-play").addEventListener("click", async () => {
+    // Hear it before rendering with it: the same resolution chain the
+    // render uses, played right here.
+    try {
+      const url = await invoke("hitsound_preview");
+      new Audio(url).play();
+    } catch (e) {
+      loadNote(String(e));
+    }
+  });
   $("set-hitsound").addEventListener("change", async () => {
     const v = $("set-hitsound").value;
     if (v !== "__custom") {
