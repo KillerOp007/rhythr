@@ -163,6 +163,16 @@ endorsed by Rhythia or Capo Games.
   where it goes and can read it first; it deliberately leaves out the
   player name and any path the window does not already show, so sending
   it gives away no more than a screenshot would.
+- **Note Designer** (button in the toolbar): design your own note skin
+  without any modelling tools. Start from sliders (shape, rounding,
+  hollow rim, depth), bend it with wave and twist modifiers (a wavy
+  circle is two sliders), or convert to points and drag the outline
+  freehand: with radial symmetry on, you edit one wedge and the rest
+  follows. Pick the colors the note cycles through, watch the preview
+  (rendered by the real renderer, so it is the truth), and save as a
+  `.rhs` pack that works in rhythr's Config slot and imports into the
+  game. The material file is always bundled, so exports from here never
+  trip the game's missing-mtl crash.
 - **Hit sound choice**: under the Hit sounds slider, pick the game's
   default or one of its four alternative packs (Bass, Creamy, Pick,
   Vulnus), or choose your own audio file: anything your ffmpeg reads is

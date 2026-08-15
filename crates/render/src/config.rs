@@ -522,7 +522,7 @@ fn first_zip_entry_under(zip: &mut ZipCursor, prefix: &str) -> Result<Option<Vec
 
 /// Parses a colorset `.txt` (one `#rrggbb` per line) to sRGB components
 /// triples in [0,1].
-fn parse_colorset(text: &str) -> Vec<[f32; 3]> {
+pub fn parse_colorset(text: &str) -> Vec<[f32; 3]> {
     text.lines()
         .filter_map(|line| {
             let hex = line.trim().trim_start_matches('#');

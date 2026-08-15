@@ -4280,6 +4280,167 @@ fn save_analyze_rect(handle: &tauri::AppHandle) {
     }
 }
 
+/// Opens (or focuses) the note designer: a small window where an outline
+/// becomes a mesh note skin, previewed through the real renderer.
+#[tauri::command]
+async fn open_designer_window(app_handle: tauri::AppHandle) -> Result<(), String> {
+    use tauri::{WebviewUrl, WebviewWindowBuilder};
+    if let Some(w) = app_handle.get_webview_window("designer") {
+        let _ = w.unminimize();
+        let _ = w.show();
+        let _ = w.set_focus();
+        return Ok(());
+    }
+    WebviewWindowBuilder::new(
+        &app_handle,
+        "designer",
+        WebviewUrl::App("designer.html".into()),
+    )
+    .title("rhythr · Note Designer")
+    .inner_size(1120.0, 730.0)
+    .min_inner_size(940.0, 620.0)
+    .build()
+    .map_err(err_str)?;
+    Ok(())
+}
+
+/// What the designer window sends: the outline it drew plus the choices
+/// around it.
+#[derive(Deserialize)]
+struct DesignerShape {
+    outline: Vec<[f32; 2]>,
+    /// None = filled silhouette; Some(t) = hollow rim of thickness t.
+    hollow: Option<f32>,
+    depth: f32,
+    colors: Vec<String>,
+}
+
+/// A tiny synthetic scene for the preview: three notes of consecutive
+/// colours at staggered approach depths, so one glance shows the mesh
+/// near the plane, mid-flight and freshly spawned, in the user's colours.
+fn designer_scene() -> (rhythia_formats::map::Map, rhythia_formats::rhr::Replay) {
+    let mut map = rhythia_formats::map::Map::default();
+    for (i, t) in [480i64, 620, 780].into_iter().enumerate() {
+        map.notes.push(rhythia_formats::map::Note {
+            time_ms: t,
+            x: i as f32,
+            y: 1.0,
+        });
+    }
+    let replay = rhythia_formats::rhr::Replay {
+        version: rhythia_formats::rhr::V_PITCH_LOCK,
+        timestamp_ticks: 0,
+        player_name: String::new(),
+        legacy_map_id: String::new(),
+        map_id: 0,
+        start_from_ms: 0,
+        mode: String::new(),
+        passed: true,
+        mods: "[]".into(),
+        spin: false,
+        speed: 1.0,
+        total_score: 0,
+        accuracy_pct: 100.0,
+        hits: 0,
+        misses: 0,
+        points: 0.0,
+        fail_time_ms: -1,
+        beatmap_hash: String::new(),
+        pitch_lock: false,
+        frames: vec![rhythia_formats::rhr::Frame {
+            ms: 0.0,
+            x: 0.0,
+            y: 0.0,
+            health: 1.0,
+            hit: false,
+        }],
+        trailing_bytes: 0,
+    };
+    (map, replay)
+}
+
+const DESIGNER_PREVIEW_W: u32 = 560;
+const DESIGNER_PREVIEW_H: u32 = 350;
+
+/// Renders the designed note through the REAL pipeline and returns the
+/// picture as a data URL. A fresh small renderer per call: the designer
+/// debounces, and an honest preview beats a fast approximation here.
+#[tauri::command]
+async fn designer_preview(shape: DesignerShape) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mesh =
+            rhythia_render::designer::build_note_mesh(&shape.outline, shape.hollow, shape.depth)
+                .map_err(|_| {
+                    "the outline crosses itself - move the crossing points apart".to_string()
+                })?;
+        let obj = rhythia_render::designer::to_obj(&mesh, "preview");
+        let mut cfg = rhythia_render::config::SkinConfig::default();
+        cfg.note_mesh = Some(obj.into_bytes());
+        let hex: String = shape.colors.iter().fold(String::new(), |mut a, c| {
+            a.push_str(c);
+            a.push('\n');
+            a
+        });
+        let cs = rhythia_render::config::parse_colorset(&hex);
+        if !cs.is_empty() {
+            cfg.colorset = cs;
+        }
+        let renderer = rhythia_render::Renderer::new(
+            DESIGNER_PREVIEW_W,
+            DESIGNER_PREVIEW_H,
+            cfg.hud_fonts().as_slice(),
+        )
+        .map_err(|e| e.to_string())?;
+        let skin = renderer.prepare_skin(&cfg);
+        let params = rhythia_render::scene::SceneParams::from(&cfg);
+        let (map, replay) = designer_scene();
+        let px = renderer
+            .render_still(&params, &cfg, &skin, &replay, &map, 300.0, None)
+            .map_err(|e| e.to_string())?;
+        let tmp = tempfile::Builder::new()
+            .prefix("rhythr-designer-")
+            .suffix(".png")
+            .tempfile()
+            .map_err(err_str)?;
+        rhythia_render::write_png(tmp.path(), &px, DESIGNER_PREVIEW_W, DESIGNER_PREVIEW_H)
+            .map_err(|e| e.to_string())?;
+        let bytes = std::fs::read(tmp.path()).map_err(err_str)?;
+        use base64::Engine as _;
+        Ok(format!(
+            "data:image/png;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(bytes)
+        ))
+    })
+    .await
+    .map_err(err_str)?
+}
+
+/// Writes the designed note as a complete .rhs pack at `path` (picked by
+/// the user through the save dialog). Loadable by rhythr and importable
+/// by the game, mtl always bundled.
+#[tauri::command]
+async fn designer_export(shape: DesignerShape, path: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mesh =
+            rhythia_render::designer::build_note_mesh(&shape.outline, shape.hollow, shape.depth)
+                .map_err(|_| "the outline crosses itself".to_string())?;
+        let stem = Path::new(&path)
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "note".into());
+        let name: String = stem
+            .chars()
+            .map(|c| if c.is_alphanumeric() { c } else { '_' })
+            .collect();
+        let pack = rhythia_render::designer::export_rhs(&mesh, &name, &shape.colors)
+            .map_err(|e| e.to_string())?;
+        std::fs::write(&path, pack).map_err(err_str)?;
+        Ok(path)
+    })
+    .await
+    .map_err(err_str)?
+}
+
 /// Opens (or focuses) the Analyze window: a second webview showing the
 /// replay full size with its own controls.
 #[tauri::command]
@@ -5743,6 +5904,9 @@ fn main() {
             set_preview_quality,
             open_analyze_window,
             toggle_analyze_fullscreen,
+            open_designer_window,
+            designer_preview,
+            designer_export,
             set_clip,
             clear_clip,
             add_clip_bookmark,

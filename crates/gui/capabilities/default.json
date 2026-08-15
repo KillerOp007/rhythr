@@ -4,7 +4,8 @@
   "description": "Main window capabilities",
   "windows": [
     "main",
-    "analyze"
+    "analyze",
+    "designer"
   ],
   "permissions": [
     "core:default",

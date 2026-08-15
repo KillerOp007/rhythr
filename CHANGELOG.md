@@ -5,6 +5,14 @@ endorsed by Rhythia or Capo Games.
 
 ## Unreleased
 
+- **A note designer.** A new window (toolbar button) where an outline
+  becomes a note skin: shape sliders, wave/twist modifiers, freehand
+  point editing with radial symmetry, your own colorset, a preview
+  through the real renderer, and export as a `.rhs` pack usable in
+  rhythr and importable into the game. Exports always bundle their
+  material file, the thing whose absence crashes the game on other
+  people's mesh skins.
+
 - **Pick your hit sound.** The game ships four alternative hit sounds
   next to the default (Bass, Creamy, Pick, Vulnus) and rhythr always used
   the default. All five are now a dropdown under the volume slider, plus

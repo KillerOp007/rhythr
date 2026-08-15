@@ -53,9 +53,9 @@ fn triangulate(pts: &[[f32; 2]]) -> Result<Vec<[u32; 3]>, Error> {
             if cross(a, b, c) <= 1e-9 {
                 continue; // reflex or degenerate corner: not an ear
             }
-            let blocked = idx.iter().any(|&j| {
-                j != pi && j != ci && j != ni && inside(a, b, c, pts[j as usize])
-            });
+            let blocked = idx
+                .iter()
+                .any(|&j| j != pi && j != ci && j != ni && inside(a, b, c, pts[j as usize]));
             if blocked {
                 continue;
             }
@@ -225,13 +225,62 @@ pub fn to_obj(mesh: &Mesh, name: &str) -> String {
     s.push_str("mtllib note.mtl\n");
     s.push_str(&format!("o {name}\n"));
     for v in &mesh.vertices {
-        s.push_str(&format!("v {:.6} {:.6} {:.6}\n", v.pos[0], v.pos[1], v.pos[2]));
+        s.push_str(&format!(
+            "v {:.6} {:.6} {:.6}\n",
+            v.pos[0], v.pos[1], v.pos[2]
+        ));
     }
     s.push_str("usemtl Material.001\n");
     for t in mesh.indices.chunks_exact(3) {
         s.push_str(&format!("f {} {} {}\n", t[0] + 1, t[1] + 1, t[2] + 1));
     }
     s
+}
+
+/// A complete, shareable `.rhs` skin pack: the mesh, its material, the
+/// colorset, and a minimal config naming them. The same container the
+/// game exports, loadable by rhythr's `--config` and importable as a
+/// skin, so a note designed here works in both worlds.
+pub fn export_rhs(mesh: &Mesh, name: &str, colors_hex: &[String]) -> Result<Vec<u8>, Error> {
+    use std::io::Write;
+    let obj = to_obj(mesh, name);
+    let colorset: String = colors_hex
+        .iter()
+        .filter(|c| {
+            let h = c.trim().trim_start_matches('#');
+            h.len() == 6 && h.chars().all(|ch| ch.is_ascii_hexdigit())
+        })
+        .map(|c| {
+            let h = c.trim().trim_start_matches('#');
+            format!("#{h}\r\n")
+        })
+        .collect();
+    let config =
+        format!(r#"{{"NoteSkin":{{"Value":"{name}.obj"}},"ColorSet":{{"Value":"{name}"}}}}"#);
+    let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let opts = zip::write::SimpleFileOptions::default();
+    let write = |zw: &mut zip::ZipWriter<std::io::Cursor<Vec<u8>>>,
+                 path: &str,
+                 bytes: &[u8]|
+     -> Result<(), Error> {
+        zw.start_file(path, opts).map_err(|_| Error::BadObj)?;
+        zw.write_all(bytes).map_err(|_| Error::BadObj)?;
+        Ok(())
+    };
+    write(&mut zw, "config", config.as_bytes())?;
+    write(&mut zw, &format!("noteSkin/{name}.obj"), obj.as_bytes())?;
+    // The .mtl rides along unconditionally: the game crashes at map end
+    // on a mesh whose material file was not bundled.
+    write(&mut zw, "noteSkin/note.mtl", NOTE_MTL.as_bytes())?;
+    if !colorset.is_empty() {
+        write(
+            &mut zw,
+            &format!("colorSet/{name}.txt"),
+            colorset.as_bytes(),
+        )?;
+    }
+    let cur = zw.finish().map_err(|_| Error::BadObj)?;
+    Ok(cur.into_inner())
 }
 
 #[cfg(test)]
@@ -278,7 +327,10 @@ mod tests {
         let m = build_note_mesh(&outline, None, 0.05).unwrap();
         assert_eq!(m.indices.len() / 3, (96 - 2) + (96 - 2) + 96 * 2);
         let hollow = build_note_mesh(&outline, Some(0.15), 0.05).unwrap();
-        assert!(hollow.indices.iter().all(|&i| (i as usize) < hollow.vertices.len()));
+        assert!(hollow
+            .indices
+            .iter()
+            .all(|&i| (i as usize) < hollow.vertices.len()));
     }
 
     /// The renderer's convention: the export must parse back through the
@@ -298,6 +350,34 @@ mod tests {
         assert!((max - 1.0).abs() < 1e-3, "unit convention, got {max}");
         assert!(obj.contains("mtllib note.mtl"), "the mtl is never optional");
         assert!(NOTE_MTL.contains("newmtl Material.001"));
+    }
+
+    /// The pack has to load back through the SAME .rhs path real skins
+    /// take: mesh in the mesh slot, colours parsed, material bundled.
+    #[test]
+    fn exported_rhs_loads_back_as_a_skin() {
+        let m = build_note_mesh(&wavy(48, 6.0, 0.2), Some(0.2), 0.05).unwrap();
+        let pack = export_rhs(
+            &m,
+            "meine_note",
+            &["#ff0080".into(), "#00a8ff".into(), "kaputt".into()],
+        )
+        .unwrap();
+        let cfg = crate::config::SkinConfig::from_rhs(&pack).unwrap();
+        let mesh_bytes = cfg.note_mesh.as_deref().expect("mesh slot");
+        let back = Mesh::from_obj_str(std::str::from_utf8(mesh_bytes).unwrap()).unwrap();
+        assert_eq!(back.indices, m.indices);
+        assert_eq!(cfg.colorset.len(), 2, "the broken colour is dropped");
+        assert!((cfg.colorset[0][0] - 1.0).abs() < 0.01, "#ff0080 red");
+        // And the mtl is in the archive, name-matched to the obj's usemtl.
+        let mut z = zip::ZipArchive::new(std::io::Cursor::new(pack)).unwrap();
+        let mut mtl = String::new();
+        std::io::Read::read_to_string(
+            &mut z.by_name("noteSkin/note.mtl").expect("mtl bundled"),
+            &mut mtl,
+        )
+        .unwrap();
+        assert!(mtl.contains("newmtl Material.001"));
     }
 
     #[test]

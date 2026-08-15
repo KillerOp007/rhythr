@@ -1,0 +1,32 @@
+/* Note designer window. Inherits the app tokens from style.css. */
+#designer-body { overflow: auto; }
+#dz-root {
+  display: flex; gap: 1rem; padding: 1rem;
+  min-height: 100vh; box-sizing: border-box;
+}
+#dz-left { flex: 0 0 auto; display: flex; flex-direction: column; gap: 0.5rem; }
+#dz-canvas {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: var(--radius); cursor: crosshair; touch-action: none;
+}
+#dz-canvas-hint { max-width: 520px; }
+#dz-preview-box { margin-top: 0.3rem; }
+#dz-preview {
+  width: 520px; border: 1px solid var(--border); border-radius: var(--radius);
+  background: #000; display: block; min-height: 120px;
+}
+#dz-controls { flex: 1 1 auto; min-width: 300px; max-width: 420px; }
+#dz-controls h2 { font-size: var(--fs-md); margin: 0.9rem 0 0.35rem; color: var(--muted); }
+#dz-controls h2:first-child { margin-top: 0; }
+#dz-colors { display: flex; flex-direction: column; gap: 0.25rem; margin-bottom: 0.4rem; }
+.dz-color-row { display: flex; align-items: center; gap: 0.4rem; }
+.dz-color-row input[type="color"] {
+  width: 2.2rem; height: 1.6rem; padding: 0; border: 1px solid var(--border);
+  border-radius: var(--radius-sm); background: none; cursor: pointer;
+}
+.dz-color-row .hex { width: 6rem; }
+.dz-color-row button { opacity: 0.6; }
+.dz-color-row button:hover { opacity: 1; }
+#dz-actions { display: flex; gap: 0.5rem; margin-top: 1rem; }
+#dz-status { margin-top: 0.5rem; min-height: 1.2em; }
+#dz-status.err { color: var(--danger); }
