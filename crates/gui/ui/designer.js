@@ -266,6 +266,38 @@ function draw() {
   }
 }
 
+// ---- editor/preview split
+
+/// The divider between the editor canvas and the preview band: drag it
+/// and the balance is yours, remembered across sessions. A fixed split
+/// always starved one side or the other.
+function initSplitter() {
+  const bar = $("dz-splitter");
+  const box = $("dz-preview-box");
+  const KEY = "rhythr.designer.previewH";
+  const saved = Number(localStorage.getItem(KEY));
+  if (saved >= 120 && saved <= window.innerHeight * 0.7) {
+    box.style.flexBasis = `${saved}px`;
+  }
+  let startY = 0;
+  let startH = 0;
+  bar.addEventListener("pointerdown", (e) => {
+    startY = e.clientY;
+    startH = box.getBoundingClientRect().height;
+    bar.setPointerCapture(e.pointerId);
+  });
+  bar.addEventListener("pointermove", (e) => {
+    if (!bar.hasPointerCapture(e.pointerId)) return;
+    const h = Math.max(120, Math.min(window.innerHeight * 0.7, startH - (e.clientY - startY)));
+    box.style.flexBasis = `${h}px`;
+  });
+  bar.addEventListener("pointerup", (e) => {
+    if (!bar.hasPointerCapture(e.pointerId)) return;
+    bar.releasePointerCapture(e.pointerId);
+    localStorage.setItem(KEY, String(Math.round(box.getBoundingClientRect().height)));
+  });
+}
+
 // ---- point editing (freeform only)
 
 let dragging = -1;
@@ -424,9 +456,15 @@ let anim0 = performance.now();
 let animOn = true;
 let stillTimer = null;
 let stillBusy = false;
+let stillAgain = false;
 
 async function refreshStill() {
-  if (stillBusy) return;
+  if (stillBusy) {
+    // A drop here left the close-up permanently empty when calls landed
+    // while one was in flight; remember and re-run instead.
+    stillAgain = true;
+    return;
+  }
   stillBusy = true;
   try {
     const url = await invoke("designer_preview", { shape: shapePayload(), timeMs: STILL_MS });
@@ -435,6 +473,10 @@ async function refreshStill() {
     // The animated loop already reports outline errors.
   } finally {
     stillBusy = false;
+    if (stillAgain) {
+      stillAgain = false;
+      refreshStill();
+    }
   }
 }
 
@@ -649,4 +691,6 @@ renderColors();
 $("dz-n-row").hidden = true;
 fitCanvas();
 refreshPlan();
+refreshStill();
 animLoop();
+initSplitter();

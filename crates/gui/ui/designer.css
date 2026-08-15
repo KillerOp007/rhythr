@@ -18,10 +18,15 @@
   border-radius: var(--radius); cursor: crosshair; touch-action: none;
 }
 #dz-canvas-hint { flex: 0 0 auto; }
+#dz-splitter {
+  flex: 0 0 8px; margin: -2px 0;
+  cursor: ns-resize; border-radius: 4px;
+  background: transparent; touch-action: none;
+}
+#dz-splitter:hover { background: var(--accent-soft); }
 #dz-preview-box {
-  /* A band, not a hall: tall enough to read the note, never dominating
-     the editor above it. */
-  flex: 0 0 clamp(180px, 26vh, 300px); min-height: 0;
+  /* Default balance; the splitter above hands the choice to the user. */
+  flex: 0 0 clamp(140px, 26vh, 340px); min-height: 120px;
 }
 #dz-preview-row {
   display: flex; gap: 0.5rem; height: 100%;
