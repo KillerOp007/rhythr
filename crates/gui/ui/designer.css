@@ -1,21 +1,36 @@
-/* Note designer window. Inherits the app tokens from style.css. */
-#designer-body { overflow: auto; }
+/* Note designer window. Inherits the app tokens from style.css.
+   The layout FILLS the window: left column (editor canvas above, render
+   preview below) takes every pixel the controls column does not need,
+   and both panes grow with the window instead of leaving it empty. */
+#designer-body { overflow: hidden; }
 #dz-root {
   display: flex; gap: 1rem; padding: 1rem;
-  min-height: 100vh; box-sizing: border-box;
+  height: 100vh; box-sizing: border-box;
 }
-#dz-left { flex: 0 0 auto; display: flex; flex-direction: column; gap: 0.5rem; }
+#dz-left {
+  flex: 1 1 auto; min-width: 0;
+  display: flex; flex-direction: column; gap: 0.5rem;
+}
+#dz-canvas-box { flex: 1 1 60%; min-height: 0; position: relative; }
 #dz-canvas {
+  position: absolute; inset: 0; width: 100%; height: 100%;
   background: var(--panel); border: 1px solid var(--border);
   border-radius: var(--radius); cursor: crosshair; touch-action: none;
 }
-#dz-canvas-hint { max-width: 520px; }
-#dz-preview-box { margin-top: 0.3rem; }
-#dz-preview {
-  width: 520px; border: 1px solid var(--border); border-radius: var(--radius);
-  background: #000; display: block; min-height: 120px;
+#dz-canvas-hint { flex: 0 0 auto; }
+#dz-preview-box {
+  flex: 1 1 40%; min-height: 0;
+  display: flex; flex-direction: column; gap: 0.25rem;
 }
-#dz-controls { flex: 1 1 auto; min-width: 300px; max-width: 420px; }
+#dz-preview {
+  flex: 1 1 auto; min-height: 0; width: 100%;
+  object-fit: contain; object-position: left center;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: #000; display: block;
+}
+#dz-controls {
+  flex: 0 0 360px; overflow-y: auto; padding-right: 0.25rem;
+}
 #dz-controls h2 { font-size: var(--fs-md); margin: 0.9rem 0 0.35rem; color: var(--muted); }
 #dz-controls h2:first-child { margin-top: 0; }
 #dz-colors { display: flex; flex-direction: column; gap: 0.25rem; margin-bottom: 0.4rem; }

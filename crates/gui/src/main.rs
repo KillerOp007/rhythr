@@ -569,6 +569,11 @@ struct Shared {
     frame_jobs: std::sync::atomic::AtomicUsize,
     /// Join handle of the active render thread (used on app exit).
     render_thread: Mutex<Option<std::thread::JoinHandle<()>>>,
+    /// The note designer's preview renderer, created on first use and kept:
+    /// a fresh wgpu device per preview call put a device-init pause between
+    /// a slider drag and its picture, which is the difference between a
+    /// live preview and a slideshow.
+    designer_renderer: Mutex<Option<rhythia_render::Renderer>>,
     /// How many renders this process has run. The first one pays for GPU
     /// pipeline setup and cold file caches, which is a candidate for
     /// "slower right after a restart".
@@ -4304,9 +4309,23 @@ async fn open_designer_window(app_handle: tauri::AppHandle) -> Result<(), String
         WebviewUrl::App("designer.html".into()),
     )
     .title("rhythr · Note Designer")
-    .inner_size(1120.0, 730.0)
-    .min_inner_size(940.0, 620.0)
+    .inner_size(1380.0, 860.0)
+    .min_inner_size(1000.0, 660.0)
     .build();
+    if let Ok(w) = &built {
+        // The cached preview renderer holds a wgpu device; the window
+        // going away is the moment to let it go.
+        let handle = app_handle.clone();
+        w.on_window_event(move |e| {
+            if matches!(e, tauri::WindowEvent::Destroyed) {
+                if let Some(app) = handle.try_state::<App>() {
+                    if let Ok(mut slot) = app.designer_renderer.lock() {
+                        *slot = None;
+                    }
+                }
+            }
+        });
+    }
     if let Err(e) = built {
         // A double-click races the existence check against the build; the
         // second build fails on the duplicate label. That is the focus
@@ -4375,14 +4394,19 @@ fn designer_scene() -> (rhythia_formats::map::Map, rhythia_formats::rhr::Replay)
     (map, replay)
 }
 
-const DESIGNER_PREVIEW_W: u32 = 560;
-const DESIGNER_PREVIEW_H: u32 = 350;
+const DESIGNER_PREVIEW_W: u32 = 960;
+const DESIGNER_PREVIEW_H: u32 = 560;
 
 /// Renders the designed note through the REAL pipeline and returns the
-/// picture as a data URL. A fresh small renderer per call: the designer
-/// debounces, and an honest preview beats a fast approximation here.
+/// picture as a data URL. The renderer is created once and kept on the
+/// shared state: the preview follows a slider drag live, and a wgpu
+/// device init per frame would turn that into a slideshow.
 #[tauri::command]
-async fn designer_preview(shape: DesignerShape) -> Result<String, String> {
+async fn designer_preview(
+    state: tauri::State<'_, App>,
+    shape: DesignerShape,
+) -> Result<String, String> {
+    let app = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let mesh =
             rhythia_render::designer::build_note_mesh(&shape.outline, shape.hollow, shape.depth)
@@ -4401,12 +4425,21 @@ async fn designer_preview(shape: DesignerShape) -> Result<String, String> {
         if !cs.is_empty() {
             cfg.colorset = cs;
         }
-        let renderer = rhythia_render::Renderer::new(
-            DESIGNER_PREVIEW_W,
-            DESIGNER_PREVIEW_H,
-            cfg.hud_fonts().as_slice(),
-        )
-        .map_err(|e| e.to_string())?;
+        let mut slot = app
+            .designer_renderer
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        if slot.is_none() {
+            *slot = Some(
+                rhythia_render::Renderer::new(
+                    DESIGNER_PREVIEW_W,
+                    DESIGNER_PREVIEW_H,
+                    cfg.hud_fonts().as_slice(),
+                )
+                .map_err(|e| e.to_string())?,
+            );
+        }
+        let renderer = slot.as_ref().expect("just created");
         let skin = renderer.prepare_skin(&cfg);
         let params = rhythia_render::scene::SceneParams::from(&cfg);
         let (map, replay) = designer_scene();
@@ -5589,6 +5622,7 @@ fn main() {
         segment: Mutex::new(SegmentState::default()),
         segment_gen: std::sync::atomic::AtomicU64::new(0),
         render_thread: Mutex::new(None),
+        designer_renderer: Mutex::new(None),
         renders_done: std::sync::atomic::AtomicU64::new(0),
         last_render: Mutex::new(None),
     });

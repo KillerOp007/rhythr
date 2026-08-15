@@ -118,9 +118,61 @@ const outline = () => (free ? freeOutline() : paramOutline());
 
 const cv = $("dz-canvas");
 const ctx = cv.getContext("2d");
-const S = cv.width; // world [-1.45, 1.45] fills the canvas
-const toPx = (p) => [S / 2 + (p[0] * S) / 2.9, S / 2 - (p[1] * S) / 2.9];
-const toWorld = (x, y) => [((x - S / 2) * 2.9) / S, -((y - S / 2) * 2.9) / S];
+// The canvas fills its box and follows the window: world coordinates map
+// through a scale derived from the CURRENT size, so growing the window
+// grows the note instead of leaving dead space.
+let CW = 520, CH = 520, UNIT = 520 / 2.9;
+function fitCanvas() {
+  const box = $("dz-canvas-box");
+  const dpr = window.devicePixelRatio || 1;
+  const w = Math.max(200, box.clientWidth);
+  const h = Math.max(200, box.clientHeight);
+  cv.width = Math.round(w * dpr);
+  cv.height = Math.round(h * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  CW = w;
+  CH = h;
+  UNIT = Math.min(w, h) / 2.9;
+  draw();
+}
+new ResizeObserver(fitCanvas).observe($("dz-canvas-box"));
+const toPx = (p) => [CW / 2 + p[0] * UNIT, CH / 2 - p[1] * UNIT];
+const toWorld = (x, y) => [(x - CW / 2) / UNIT, -(y - CH / 2) / UNIT];
+
+/// The same inward inset the mesh builder uses (angle bisector, clamped
+/// mitre, never past the outer contour), so the canvas shows the RIM the
+/// export will actually have: rim thickness is part of the note, and a
+/// drawing that ignores it made the slider look dead.
+function insetOutline(pts, t) {
+  const n = pts.length;
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const p = pts[(i + n - 1) % n];
+    const c = pts[i];
+    const q = pts[(i + 1) % n];
+    const norm = (v) => {
+      const l = Math.hypot(v[0], v[1]) || 1e-9;
+      return [v[0] / l, v[1] / l];
+    };
+    const d1 = norm([c[0] - p[0], c[1] - p[1]]);
+    const d2 = norm([q[0] - c[0], q[1] - c[1]]);
+    const n1 = [d1[1], -d1[0]];
+    const n2 = [d2[1], -d2[0]];
+    let b = norm([n1[0] + n2[0], n1[1] + n2[1]]);
+    const dot = Math.min(1, Math.max(0.25, b[0] * n1[0] + b[1] * n1[1]));
+    b = [b[0] / dot, b[1] / dot];
+    let x = c[0] - b[0] * t, y = c[1] - b[1] * t;
+    const ro = Math.hypot(c[0], c[1]);
+    const ri = Math.hypot(x, y);
+    if (ri > ro * 0.98 && ri > 1e-9) {
+      const sc = (ro * 0.98) / ri;
+      x *= sc;
+      y *= sc;
+    }
+    out.push([x, y]);
+  }
+  return out;
+}
 // The game's TRUE hit area in note units: hitbox half-extent 0.56875
 // cells over the note's visual half-size 0.45 cells. The note itself is
 // HARD-capped at the unit square (like every real skin), so a designed
@@ -132,36 +184,52 @@ const clampUnit = (x, y) => [
 ];
 
 function draw() {
-  ctx.clearRect(0, 0, S, S);
+  ctx.clearRect(0, 0, CW, CH);
   const styles = getComputedStyle(document.documentElement);
   const accent = styles.getPropertyValue("--accent").trim() || "#2fd6d0";
   // Two reference squares. Solid: the hard note limit (the unit square
   // every real skin uses; nothing here may cross it). Dashed, outside:
   // the game's TRUE hit area, which is a quarter bigger than the note,
   // shown so the size relationship is visible rather than guessed.
+  ctx.lineWidth = 1;
   ctx.strokeStyle = "rgba(139,152,169,0.35)";
-  ctx.strokeRect(...toPx([-1, 1]), (S * 2) / 2.9, (S * 2) / 2.9);
+  ctx.strokeRect(...toPx([-1, 1]), 2 * UNIT, 2 * UNIT);
   ctx.strokeStyle = "rgba(242,193,78,0.35)";
   ctx.setLineDash([4, 4]);
-  ctx.strokeRect(...toPx([-HITBOX, HITBOX]), (S * 2 * HITBOX) / 2.9, (S * 2 * HITBOX) / 2.9);
+  ctx.strokeRect(...toPx([-HITBOX, HITBOX]), 2 * UNIT * HITBOX, 2 * UNIT * HITBOX);
   ctx.setLineDash([]);
 
   const pts = outline();
   if (!pts || pts.length < 3) return;
+  // The note as it will exist: filled silhouette, or the rim between the
+  // outline and its inset, in the FIRST colorset colour. Every slider
+  // (rim thickness included) changes THIS drawing immediately, not just
+  // the render preview below.
+  const path = (list) => {
+    const [px, py] = toPx(list[0]);
+    ctx.moveTo(px, py);
+    for (const p of list.slice(1)) ctx.lineTo(...toPx(p));
+    ctx.closePath();
+  };
   ctx.beginPath();
-  const [x0, y0] = toPx(pts[0]);
-  ctx.moveTo(x0, y0);
-  for (const p of pts.slice(1)) ctx.lineTo(...toPx(p));
-  ctx.closePath();
+  path(pts);
+  if (P.hollow) {
+    path(insetOutline(pts, Math.min(Math.max(P.thick, 0.01), 0.9)));
+  }
+  ctx.fillStyle = colors[0] || "#ffffff";
+  ctx.globalAlpha = 0.9;
+  ctx.fill("evenodd");
+  ctx.globalAlpha = 1;
+  ctx.beginPath();
+  path(pts);
   ctx.strokeStyle = accent;
-  ctx.lineWidth = 2;
+  ctx.lineWidth = 1.5;
   ctx.stroke();
-  ctx.fillStyle = "rgba(47,214,208,0.10)";
-  ctx.fill();
 
   if (free) {
     // Symmetry wedge: the editable region.
     if (symmetry > 1) {
+      ctx.lineWidth = 1;
       ctx.strokeStyle = "rgba(139,152,169,0.35)";
       ctx.beginPath();
       ctx.moveTo(...toPx([0, 0]));
@@ -214,8 +282,8 @@ function foldToWedge(x, y) {
 cv.addEventListener("pointerdown", (e) => {
   if (!free) return;
   const rect = cv.getBoundingClientRect();
-  const mx = ((e.clientX - rect.left) * S) / rect.width;
-  const my = ((e.clientY - rect.top) * S) / rect.height;
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
   if (e.button === 2) return; // context handler removes
   const hit = pointAt(mx, my);
   if (hit >= 0) {
@@ -249,8 +317,8 @@ cv.addEventListener("pointerdown", (e) => {
 cv.addEventListener("pointermove", (e) => {
   if (dragging < 0 || !free) return;
   const rect = cv.getBoundingClientRect();
-  const mx = ((e.clientX - rect.left) * S) / rect.width;
-  const my = ((e.clientY - rect.top) * S) / rect.height;
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
   let [wx, wy] = toWorld(mx, my);
   // Clamp into the wedge instead of folding: folding teleports a point
   // sitting near the boundary to the wedge's far side the moment the
@@ -274,10 +342,7 @@ cv.addEventListener("pointerup", () => (dragging = -1));
 cv.addEventListener("dblclick", (e) => {
   if (!free) return;
   const rect = cv.getBoundingClientRect();
-  const hit = pointAt(
-    ((e.clientX - rect.left) * S) / rect.width,
-    ((e.clientY - rect.top) * S) / rect.height,
-  );
+  const hit = pointAt(e.clientX - rect.left, e.clientY - rect.top);
   if (hit >= 0) {
     free[hit].smooth = !free[hit].smooth;
     scheduleAll();
@@ -288,10 +353,7 @@ cv.addEventListener("contextmenu", (e) => {
   e.preventDefault();
   if (!free || free.length <= 3) return;
   const rect = cv.getBoundingClientRect();
-  const hit = pointAt(
-    ((e.clientX - rect.left) * S) / rect.width,
-    ((e.clientY - rect.top) * S) / rect.height,
-  );
+  const hit = pointAt(e.clientX - rect.left, e.clientY - rect.top);
   if (hit >= 0) {
     free.splice(hit, 1);
     // A removal invalidates whatever a concurrent left-drag was holding.
@@ -345,8 +407,12 @@ function setStatus(text, err) {
 
 function scheduleAll() {
   draw();
+  // Live, not after-the-fact: kick a render immediately when none is in
+  // flight (the busy/again pair coalesces a drag into back-to-back
+  // renders), plus a trailing call so the final state always lands.
+  if (!previewBusy) refreshPreview();
   clearTimeout(previewTimer);
-  previewTimer = setTimeout(refreshPreview, 350);
+  previewTimer = setTimeout(refreshPreview, 120);
 }
 
 // ------------------------------------------------------------ controls
@@ -473,5 +539,5 @@ function renderColors() {
 wireControls();
 renderColors();
 $("dz-n-row").hidden = true;
-draw();
+fitCanvas();
 refreshPreview();
