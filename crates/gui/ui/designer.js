@@ -450,6 +450,17 @@ function wireControls() {
   });
 
   $("dz-to-points").addEventListener("click", () => {
+    // A five-wave shape frozen into four-fold symmetry is a different
+    // shape: converting adopts the wave count as the symmetry when waves
+    // are active, so the points reproduce what is on screen.
+    if (P.waves >= 2 && P.waves <= 12) {
+      const sel = $("dz-symmetry");
+      const fit = [...sel.options].some((o) => Number(o.value) === P.waves)
+        ? P.waves
+        : 1;
+      symmetry = fit;
+      sel.value = String(fit);
+    }
     // Freeze the current outline into a handful of control points per
     // wedge: dense sampling would give 160 handles nobody wants to drag.
     const pts = paramOutline(symmetry * 8);
