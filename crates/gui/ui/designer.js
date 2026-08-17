@@ -449,9 +449,11 @@ function shapePayload() {
 // returns frames and always reads the CURRENT shape, so edits show up in
 // the running animation without any scheduling dance.
 const LOOP_MS = 2700;
-// The snake's centre-cell note sits exactly at the hit plane at 1700 ms:
-// the still renders that moment, so it is always one big centred note.
-const STILL_MS = 1700;
+// The still shows the snake's centre-cell note exactly at the hit plane.
+// That note lives at 1700 ms scene time and the backend maps the loop
+// clock as 500 + t, so the clock value is 1200: the earlier 1700 landed
+// between notes and the close-up showed a small off-centre note instead.
+const STILL_MS = 1200;
 let anim0 = performance.now();
 let animOn = true;
 let stillTimer = null;
