@@ -4467,6 +4467,7 @@ async fn designer_preview(
     state: tauri::State<'_, App>,
     shape: DesignerShape,
     time_ms: f64,
+    still: Option<bool>,
 ) -> Result<String, String> {
     let app = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -4512,10 +4513,30 @@ async fn designer_preview(
         let renderer = slot.as_ref().expect("just created");
         let skin = renderer.prepare_skin(&cfg);
         let params = rhythia_render::scene::SceneParams::from(&cfg);
-        let (map, replay) = designer_scene();
+        // The still is its own scene: three notes SIDE BY SIDE at staggered
+        // approach depths, so the first three colours all stay visible
+        // instead of queueing behind one grid cell the way the loop's
+        // snake does. The loop keeps the snake.
+        let (map, replay) = if still.unwrap_or(false) {
+            let mut map = rhythia_formats::map::Map::default();
+            for (i, t) in [360i64, 480, 620].into_iter().enumerate() {
+                map.notes.push(rhythia_formats::map::Note {
+                    time_ms: t,
+                    x: i as f32,
+                    y: 1.0,
+                });
+            }
+            (map, designer_scene().1)
+        } else {
+            designer_scene()
+        };
         // The clock wraps over the loop; the map carries two laps so the
         // seam always has notes in the approach window.
-        let t = 500.0 + time_ms.rem_euclid(DESIGNER_LOOP_MS);
+        let t = if still.unwrap_or(false) {
+            300.0
+        } else {
+            500.0 + time_ms.rem_euclid(DESIGNER_LOOP_MS)
+        };
         let px = renderer
             .render_still(&params, &cfg, &skin, &replay, &map, t, None)
             .map_err(|e| e.to_string())?;

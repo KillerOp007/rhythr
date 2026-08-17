@@ -26,6 +26,9 @@ fn main() {
     cfg.cursor_trail_enabled = false;
 
     let t_ms: f64 = args.next().and_then(|s| s.parse().ok()).unwrap_or(700.0);
+    // "still" as the sixth arg renders the designer's still scene instead:
+    // three notes side by side at staggered approach depths.
+    let still = args.next().as_deref() == Some("still");
     let mut map = rhythia_formats::map::Map::default();
     const SNAKE: [(f32, f32); 9] = [
         (0.0, 0.0),
@@ -38,13 +41,23 @@ fn main() {
         (1.0, 2.0),
         (2.0, 2.0),
     ];
-    for (i, (x, y)) in SNAKE.into_iter().enumerate() {
-        for lap in 0..2i64 {
+    if still {
+        for (i, t) in [360i64, 480, 620].into_iter().enumerate() {
             map.notes.push(rhythia_formats::map::Note {
-                time_ms: 500 + i as i64 * 300 + lap * 2700,
-                x,
-                y,
+                time_ms: t,
+                x: i as f32,
+                y: 1.0,
             });
+        }
+    } else {
+        for (i, (x, y)) in SNAKE.into_iter().enumerate() {
+            for lap in 0..2i64 {
+                map.notes.push(rhythia_formats::map::Note {
+                    time_ms: 500 + i as i64 * 300 + lap * 2700,
+                    x,
+                    y,
+                });
+            }
         }
     }
     map.notes.sort_by_key(|n| n.time_ms);
@@ -91,7 +104,11 @@ fn main() {
             &skin,
             &replay,
             &map,
-            500.0 + t_ms.rem_euclid(2700.0),
+            if still {
+                300.0
+            } else {
+                500.0 + t_ms.rem_euclid(2700.0)
+            },
             None,
         )
         .unwrap();

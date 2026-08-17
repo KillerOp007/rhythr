@@ -449,11 +449,9 @@ function shapePayload() {
 // returns frames and always reads the CURRENT shape, so edits show up in
 // the running animation without any scheduling dance.
 const LOOP_MS = 2700;
-// The still shows the snake's centre-cell note exactly at the hit plane.
-// That note lives at 1700 ms scene time and the backend maps the loop
-// clock as 500 + t, so the clock value is 1200: the earlier 1700 landed
-// between notes and the close-up showed a small off-centre note instead.
-const STILL_MS = 1200;
+// The still is its own backend scene (three notes side by side at
+// staggered depths), so the clock value is ignored there.
+const STILL_MS = 0;
 let anim0 = performance.now();
 let animOn = true;
 let stillTimer = null;
@@ -469,7 +467,11 @@ async function refreshStill() {
   }
   stillBusy = true;
   try {
-    const url = await invoke("designer_preview", { shape: shapePayload(), timeMs: STILL_MS });
+    const url = await invoke("designer_preview", {
+      shape: shapePayload(),
+      timeMs: STILL_MS,
+      still: true,
+    });
     $("dz-still").src = url;
   } catch {
     // The animated loop already reports outline errors.
