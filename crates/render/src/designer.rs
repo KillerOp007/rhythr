@@ -97,6 +97,9 @@ fn triangulate(pts: &[[f32; 2]]) -> Result<Vec<[u32; 3]>, Error> {
 fn inset(pts: &[[f32; 2]], t: f32) -> Outline {
     let n = pts.len();
     let mut out = Vec::with_capacity(n);
+    // Inward unit direction per vertex, kept as the push fallback for the
+    // distance solver below when a vertex sits exactly on the wall.
+    let mut inw: Vec<[f32; 2]> = Vec::with_capacity(n);
     for i in 0..n {
         let p = pts[(i + n - 1) % n];
         let c = pts[i];
@@ -115,6 +118,7 @@ fn inset(pts: &[[f32; 2]], t: f32) -> Outline {
         // Mitre scale so the inset distance holds through the corner,
         // clamped: a near-reversal would otherwise shoot the vertex out.
         let dot = (b[0] * n1[0] + b[1] * n1[1]).clamp(0.25, 1.0);
+        inw.push([-b[0], -b[1]]);
         b = [b[0] / dot, b[1] / dot];
         let mut p = [c[0] - b[0] * t, c[1] - b[1] * t];
         // An inner vertex further from the centre than its outer partner
@@ -131,24 +135,52 @@ fn inset(pts: &[[f32; 2]], t: f32) -> Outline {
         }
         out.push(p);
     }
-    // De-loop pass 1: where the rim is thicker than the shape is wide,
-    // an inset segment runs BACKWARDS against its outer segment;
-    // collapsing it to its midpoint removes the direct reversal.
-    let n = out.len();
-    for _ in 0..6 {
-        let mut changed = false;
-        for i in 0..n {
-            let j = (i + 1) % n;
-            let od = [pts[j][0] - pts[i][0], pts[j][1] - pts[i][1]];
-            let id = [out[j][0] - out[i][0], out[j][1] - out[i][1]];
-            if od[0] * id[0] + od[1] * id[1] < 0.0 {
-                let mid = [(out[i][0] + out[j][0]) * 0.5, (out[i][1] + out[j][1]) * 0.5];
-                out[i] = mid;
-                out[j] = mid;
-                changed = true;
+    // Distance solver: wherever the outer contour curves tighter than the
+    // rim is thick, the raw mitre offset folds and its vertices end up too
+    // CLOSE to some other stretch of wall, which used to render as notches
+    // punched clean through the rim. The true trimmed offset keeps every
+    // inner vertex at distance t from the whole outer boundary, so each
+    // violating vertex is pushed away from its nearest wall point, damped,
+    // until it either reaches distance t or settles on the local midline
+    // where the shape is thinner than two rims. Vertex count (and with it
+    // the outer/inner correspondence the ring faces need) is untouched.
+    let nearest_on_wall = |p: [f32; 2]| -> ([f32; 2], f32) {
+        let mut best = f32::MAX;
+        let mut bq = pts[0];
+        for i in 0..pts.len() {
+            let a = pts[i];
+            let b = pts[(i + 1) % pts.len()];
+            let ab = [b[0] - a[0], b[1] - a[1]];
+            let len2 = (ab[0] * ab[0] + ab[1] * ab[1]).max(1e-12);
+            let s = (((p[0] - a[0]) * ab[0] + (p[1] - a[1]) * ab[1]) / len2).clamp(0.0, 1.0);
+            let q = [a[0] + s * ab[0], a[1] + s * ab[1]];
+            let d2 = (p[0] - q[0]) * (p[0] - q[0]) + (p[1] - q[1]) * (p[1] - q[1]);
+            if d2 < best {
+                best = d2;
+                bq = q;
             }
         }
-        if !changed {
+        (bq, best.sqrt())
+    };
+    let n = out.len();
+    for _ in 0..12 {
+        let mut moved = false;
+        for i in 0..n {
+            let (q, d) = nearest_on_wall(out[i]);
+            if d >= t * 0.92 {
+                continue;
+            }
+            let u = if d > 1e-6 {
+                [(out[i][0] - q[0]) / d, (out[i][1] - q[1]) / d]
+            } else {
+                inw[i]
+            };
+            let push = (t * 0.98 - d) * 0.65;
+            out[i][0] += u[0] * push;
+            out[i][1] += u[1] * push;
+            moved = true;
+        }
+        if !moved {
             break;
         }
     }
@@ -175,8 +207,10 @@ fn inset(pts: &[[f32; 2]], t: f32) -> Outline {
         let mut fixed = false;
         'outer: for i in 0..n {
             // Only nearby crossings: a rim loop is local by nature, and
-            // distant intersections would be the shape itself.
-            for off in 2..12.min(n - 1) {
+            // distant intersections would be the shape itself. The window
+            // scales with the sampling, since a folded trough's loop spans
+            // a fixed FRACTION of the contour, not a fixed vertex count.
+            for off in 2..(n / 4).max(13).min(n - 1) {
                 let j = (i + off) % n;
                 let (a, b) = (out[i], out[(i + 1) % n]);
                 let (c, d) = (out[j], out[(j + 1) % n]);
