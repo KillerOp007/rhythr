@@ -137,15 +137,24 @@ pub fn flatten_controls(points: &[ControlPoint]) -> Vec<[f32; 2]> {
 /// outlines are legal input: the nonzero fill rule resolves them into
 /// clean regions the way the editor canvas already paints them.
 pub fn plan_note(outline: &[[f32; 2]], hollow: Option<f32>) -> Result<NotePlan, Error> {
-    if outline.len() < 3
-        || outline
+    plan_note_multi(std::slice::from_ref(&outline.to_vec()), hollow)
+}
+
+/// [`plan_note`] over several contours at once, the import path: an SVG
+/// or a glyph arrives as many contours whose ORIENTATION already encodes
+/// holes (clockwise inside counterclockwise counts back to zero under
+/// the nonzero rule), so letters keep their counters.
+pub fn plan_note_multi(contours: &[Vec<[f32; 2]>], hollow: Option<f32>) -> Result<NotePlan, Error> {
+    let input: Vec<Vec<[f32; 2]>> = contours.iter().filter(|c| c.len() >= 3).cloned().collect();
+    if input.is_empty()
+        || input
             .iter()
+            .flatten()
             .any(|p| !p[0].is_finite() || !p[1].is_finite())
     {
         return Err(Error::BadObj);
     }
-    let contour: Vec<[f32; 2]> = outline.to_vec();
-    let mut shapes: Shapes<[f32; 2]> = contour.simplify_shape(FillRule::NonZero);
+    let mut shapes: Shapes<[f32; 2]> = input.simplify_shape(FillRule::NonZero);
     shapes.retain(|s| !s.is_empty() && s[0].len() >= 3);
     if shapes.is_empty() {
         return Err(Error::BadObj);
@@ -298,6 +307,43 @@ pub fn build_note_mesh(
     depth: f32,
 ) -> Result<Mesh, Error> {
     mesh_from_plan(&plan_note(outline, hollow)?, depth)
+}
+
+/// [`build_note_mesh`] over several contours (the import path).
+pub fn build_note_mesh_multi(
+    contours: &[Vec<[f32; 2]>],
+    hollow: Option<f32>,
+    depth: f32,
+) -> Result<Mesh, Error> {
+    mesh_from_plan(&plan_note_multi(contours, hollow)?, depth)
+}
+
+/// Resolves raw contours under a fill rule into oriented plain contours
+/// (outer counterclockwise, holes clockwise). The import path cleans
+/// every SVG path with ITS OWN fill rule here, so an even-odd donut
+/// stays a donut before everything merges under nonzero.
+pub fn clean_contours(contours: &[Vec<[f32; 2]>], even_odd: bool) -> Vec<Vec<[f32; 2]>> {
+    let rule = if even_odd {
+        FillRule::EvenOdd
+    } else {
+        FillRule::NonZero
+    };
+    let input: Vec<Vec<[f32; 2]>> = contours.iter().filter(|c| c.len() >= 3).cloned().collect();
+    let mut shapes: Shapes<[f32; 2]> = input.simplify_shape(rule);
+    let mut out = Vec::new();
+    for s in &mut shapes {
+        for (i, c) in s.iter_mut().enumerate() {
+            if c.len() < 3 {
+                continue;
+            }
+            let ccw = signed_area(c) > 0.0;
+            if (i == 0) != ccw {
+                c.reverse();
+            }
+            out.push(c.clone());
+        }
+    }
+    out
 }
 
 /// The exported material. Always written alongside the .obj, with the

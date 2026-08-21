@@ -84,6 +84,23 @@
         <input type="range" id="dz-twist" min="0" max="360" step="1" value="0" />
       </label>
 
+      <h2>Import</h2>
+      <div class="row" style="gap:6px">
+        <button class="btn small" id="dz-imp-svg">SVG…</button>
+        <input type="text" id="dz-glyph" class="mono" maxlength="2" size="2" placeholder="A" title="A letter or symbol to turn into a note" />
+        <button class="btn small" id="dz-imp-glyph">Letter</button>
+        <button class="btn small ghost" id="dz-imp-clear" hidden>Clear import</button>
+      </div>
+      <div class="row" style="gap:6px; margin-top:0.35rem">
+        <button class="btn small" id="dz-ref-img">Reference image…</button>
+        <button class="btn small ghost" id="dz-ref-clear" hidden>✕</button>
+      </div>
+      <label class="field" id="dz-ref-opacity-row" hidden>
+        <span>Reference opacity <em id="dz-ref-opacity-val" class="mono">35%</em></span>
+        <input type="range" id="dz-ref-opacity" min="5" max="90" step="1" value="35" />
+      </label>
+      <p class="hint">SVG: all filled paths, holes included; design in Inkscape or Figma and load it here. The reference image only shows in the editor for tracing, it is never exported.</p>
+
       <h2>Presets</h2>
       <div id="dz-presets">
         <button class="btn small" data-preset="star">Star</button>

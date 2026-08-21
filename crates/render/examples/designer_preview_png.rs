@@ -8,14 +8,24 @@ fn main() {
     let waves: f32 = args.next().and_then(|s| s.parse().ok()).unwrap_or(8.0);
     let amp: f32 = args.next().and_then(|s| s.parse().ok()).unwrap_or(0.25);
     let rim: f32 = args.next().and_then(|s| s.parse().ok()).unwrap_or(0.22);
-    let outline: Vec<[f32; 2]> = (0..160)
-        .map(|i| {
-            let th = i as f32 / 160.0 * std::f32::consts::TAU;
-            let r = 1.0 + amp * (waves * th).sin();
-            [r * th.cos(), r * th.sin()]
-        })
-        .collect();
-    let mesh = rhythia_render::designer::build_note_mesh(&outline, Some(rim), 0.05).unwrap();
+    // RHYTHR_SHAPE_JSON: a file with {"import":[[[x,y]..]..],"hollow":t|null}
+    // overrides the wavy default, so any designed shape can be rendered.
+    let mesh = if let Ok(json_path) = std::env::var("RHYTHR_SHAPE_JSON") {
+        let v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(json_path).unwrap()).unwrap();
+        let contours: Vec<Vec<[f32; 2]>> = serde_json::from_value(v["import"].clone()).unwrap();
+        let hollow = v["hollow"].as_f64().map(|t| t as f32);
+        rhythia_render::designer::build_note_mesh_multi(&contours, hollow, 0.05).unwrap()
+    } else {
+        let outline: Vec<[f32; 2]> = (0..160)
+            .map(|i| {
+                let th = i as f32 / 160.0 * std::f32::consts::TAU;
+                let r = 1.0 + amp * (waves * th).sin();
+                [r * th.cos(), r * th.sin()]
+            })
+            .collect();
+        rhythia_render::designer::build_note_mesh(&outline, Some(rim), 0.05).unwrap()
+    };
     let obj = rhythia_render::designer::to_obj(&mesh, "preview");
     let mut cfg = rhythia_render::config::SkinConfig::default();
     cfg.note_mesh = Some(obj.into_bytes());

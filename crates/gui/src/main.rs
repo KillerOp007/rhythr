@@ -4361,6 +4361,10 @@ struct DesignerShape {
     /// outline itself (spline flattening), and `outline` is ignored.
     #[serde(default)]
     control: Option<Vec<rhythia_render::designer::ControlPoint>>,
+    /// Imported contours (SVG or glyph), orientation encoding holes.
+    /// Wins over `control` and `outline` when present.
+    #[serde(default)]
+    import: Option<Vec<Vec<[f32; 2]>>>,
     /// None = filled silhouette; Some(t) = hollow rim of thickness t.
     hollow: Option<f32>,
     depth: f32,
@@ -4368,12 +4372,20 @@ struct DesignerShape {
 }
 
 impl DesignerShape {
-    /// The dense outline the geometry pipeline runs on: flattened from
-    /// control points when the editor sent them, verbatim otherwise.
-    fn resolved_outline(&self) -> Vec<[f32; 2]> {
+    /// The dense contours the geometry pipeline runs on: the import when
+    /// one is loaded, else the flattened control spline, else the
+    /// parametric outline verbatim.
+    fn resolved_contours(&self) -> Vec<Vec<[f32; 2]>> {
+        if let Some(imp) = &self.import {
+            if imp.iter().any(|c| c.len() >= 3) {
+                return imp.clone();
+            }
+        }
         match &self.control {
-            Some(c) if c.len() >= 3 => rhythia_render::designer::flatten_controls(c),
-            _ => self.outline.clone(),
+            Some(c) if c.len() >= 3 => {
+                vec![rhythia_render::designer::flatten_controls(c)]
+            }
+            _ => vec![self.outline.clone()],
         }
     }
 
@@ -4392,6 +4404,15 @@ impl DesignerShape {
                 p.x.to_bits().hash(&mut h);
                 p.y.to_bits().hash(&mut h);
                 p.smooth.hash(&mut h);
+            }
+        }
+        if let Some(imp) = &self.import {
+            for c in imp {
+                c.len().hash(&mut h);
+                for p in c {
+                    p[0].to_bits().hash(&mut h);
+                    p[1].to_bits().hash(&mut h);
+                }
             }
         }
         self.hollow.map(|t| t.to_bits()).hash(&mut h);
@@ -4502,7 +4523,7 @@ async fn hitsound_preview(state: tauri::State<'_, App>) -> Result<String, String
 /// sub-millisecond, called live while dragging.
 #[tauri::command]
 fn designer_outline(shape: DesignerShape) -> Result<rhythia_render::designer::NotePlan, String> {
-    rhythia_render::designer::plan_note(&shape.resolved_outline(), shape.hollow)
+    rhythia_render::designer::plan_note_multi(&shape.resolved_contours(), shape.hollow)
         .map_err(|_| "the outline encloses no area - draw a bigger shape".to_string())
 }
 
@@ -4542,8 +4563,8 @@ async fn designer_preview(
         let mut cache = app.designer_skin.lock().unwrap_or_else(|p| p.into_inner());
         let stale = cache.as_ref().map(|(h, _, _)| *h != hash).unwrap_or(true);
         if stale {
-            let mesh = rhythia_render::designer::build_note_mesh(
-                &shape.resolved_outline(),
+            let mesh = rhythia_render::designer::build_note_mesh_multi(
+                &shape.resolved_contours(),
                 shape.hollow,
                 shape.depth,
             )
@@ -4611,6 +4632,249 @@ async fn designer_preview(
     .map_err(err_str)?
 }
 
+/// Splits a kurbo path into flat contours at an adaptive tolerance, in
+/// y-up coordinates, centred on the origin and scaled to the unit box:
+/// the shared tail of every import route.
+fn contours_from_bezpath(path: &kurbo::BezPath) -> Vec<Vec<[f32; 2]>> {
+    let mut extent = 0.0f64;
+    for el in path.elements() {
+        let pts: &[kurbo::Point] = match el {
+            kurbo::PathEl::MoveTo(p) | kurbo::PathEl::LineTo(p) => std::slice::from_ref(p),
+            kurbo::PathEl::QuadTo(a, b) => {
+                extent = extent.max(a.x.abs()).max(a.y.abs());
+                std::slice::from_ref(b)
+            }
+            kurbo::PathEl::CurveTo(a, b, c) => {
+                extent = extent
+                    .max(a.x.abs())
+                    .max(a.y.abs())
+                    .max(b.x.abs())
+                    .max(b.y.abs());
+                std::slice::from_ref(c)
+            }
+            kurbo::PathEl::ClosePath => &[],
+        };
+        for p in pts {
+            extent = extent.max(p.x.abs()).max(p.y.abs());
+        }
+    }
+    let tol = extent.max(1.0) * 0.0015;
+    let mut contours: Vec<Vec<[f32; 2]>> = Vec::new();
+    let mut current: Vec<[f32; 2]> = Vec::new();
+    kurbo::flatten(path.elements().iter().copied(), tol, |el| match el {
+        kurbo::PathEl::MoveTo(p) => {
+            if current.len() >= 3 {
+                contours.push(std::mem::take(&mut current));
+            } else {
+                current.clear();
+            }
+            current.push([p.x as f32, p.y as f32]);
+        }
+        kurbo::PathEl::LineTo(p) => current.push([p.x as f32, p.y as f32]),
+        kurbo::PathEl::ClosePath => {
+            if current.len() >= 3 {
+                contours.push(std::mem::take(&mut current));
+            } else {
+                current.clear();
+            }
+        }
+        _ => {}
+    });
+    if current.len() >= 3 {
+        contours.push(current);
+    }
+    contours
+}
+
+/// Centres the contours on the origin and scales the longest half-extent
+/// to 1, so imports land in the editor the size a note should be instead
+/// of wherever the source file's coordinate system put them.
+fn centre_contours(mut contours: Vec<Vec<[f32; 2]>>) -> Vec<Vec<[f32; 2]>> {
+    let (mut min_x, mut min_y, mut max_x, mut max_y) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+    for p in contours.iter().flatten() {
+        min_x = min_x.min(p[0]);
+        min_y = min_y.min(p[1]);
+        max_x = max_x.max(p[0]);
+        max_y = max_y.max(p[1]);
+    }
+    if min_x > max_x {
+        return contours;
+    }
+    let (cx, cy) = ((min_x + max_x) * 0.5, (min_y + max_y) * 0.5);
+    let half = ((max_x - min_x).max(max_y - min_y) * 0.5).max(1e-6);
+    for c in &mut contours {
+        for p in c.iter_mut() {
+            p[0] = (p[0] - cx) / half;
+            p[1] = (p[1] - cy) / half;
+        }
+    }
+    contours
+}
+
+/// Imports every FILLED path of an SVG as note contours: each path is
+/// resolved under its own fill rule (an even-odd donut stays a donut),
+/// then everything merges under nonzero in the geometry pipeline. Design
+/// anywhere (Inkscape, Figma, Illustrator), render here.
+#[tauri::command]
+async fn designer_import_svg(path: String) -> Result<Vec<Vec<[f32; 2]>>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let data = std::fs::read(&path).map_err(|e| e.to_string())?;
+        svg_to_contours(&data)
+    })
+    .await
+    .map_err(err_str)?
+}
+
+/// The SVG import core, separated from the command for testability.
+fn svg_to_contours(data: &[u8]) -> Result<Vec<Vec<[f32; 2]>>, String> {
+    {
+        let tree = usvg::Tree::from_data(data, &usvg::Options::default())
+            .map_err(|e| format!("not a readable SVG: {e}"))?;
+        let mut all: Vec<Vec<[f32; 2]>> = Vec::new();
+        fn walk(group: &usvg::Group, all: &mut Vec<Vec<[f32; 2]>>) {
+            for node in group.children() {
+                match node {
+                    usvg::Node::Group(g) => walk(g, all),
+                    usvg::Node::Path(p) => {
+                        let Some(fill) = p.fill() else { continue };
+                        let even_odd = matches!(fill.rule(), usvg::FillRule::EvenOdd);
+                        let t = p.abs_transform();
+                        let mut bez = kurbo::BezPath::new();
+                        let map = |pt: tiny_skia_path::Point| {
+                            let x = t.sx * pt.x + t.kx * pt.y + t.tx;
+                            let y = t.ky * pt.x + t.sy * pt.y + t.ty;
+                            // SVG y grows downward; the note plane is y-up.
+                            kurbo::Point::new(x as f64, -y as f64)
+                        };
+                        for seg in p.data().segments() {
+                            use tiny_skia_path::PathSegment as S;
+                            match seg {
+                                S::MoveTo(a) => bez.move_to(map(a)),
+                                S::LineTo(a) => bez.line_to(map(a)),
+                                S::QuadTo(a, b) => bez.quad_to(map(a), map(b)),
+                                S::CubicTo(a, b, c) => bez.curve_to(map(a), map(b), map(c)),
+                                S::Close => bez.close_path(),
+                            }
+                        }
+                        let contours = contours_from_bezpath(&bez);
+                        all.extend(rhythia_render::designer::clean_contours(
+                            &contours, even_odd,
+                        ));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        walk(tree.root(), &mut all);
+        if all.is_empty() {
+            return Err("the SVG has no filled paths (strokes and text are not imported)".into());
+        }
+        Ok(centre_contours(all))
+    }
+}
+
+/// Imports a typed character as note contours, using the first system
+/// font that covers it. Regular glyphs outline cleanly; color emoji
+/// fonts carry no outlines and report as not found.
+#[tauri::command]
+async fn designer_import_glyph(ch: String) -> Result<Vec<Vec<[f32; 2]>>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let c = ch.trim().chars().next().ok_or("type a character first")?;
+        struct B {
+            bez: kurbo::BezPath,
+        }
+        impl ttf_parser::OutlineBuilder for B {
+            fn move_to(&mut self, x: f32, y: f32) {
+                self.bez.move_to((x as f64, y as f64));
+            }
+            fn line_to(&mut self, x: f32, y: f32) {
+                self.bez.line_to((x as f64, y as f64));
+            }
+            fn quad_to(&mut self, x1: f32, y1: f32, x: f32, y: f32) {
+                self.bez
+                    .quad_to((x1 as f64, y1 as f64), (x as f64, y as f64));
+            }
+            fn curve_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, x: f32, y: f32) {
+                self.bez.curve_to(
+                    (x1 as f64, y1 as f64),
+                    (x2 as f64, y2 as f64),
+                    (x as f64, y as f64),
+                );
+            }
+            fn close(&mut self) {
+                self.bez.close_path();
+            }
+        }
+        let mut db = fontdb::Database::new();
+        db.load_system_fonts();
+        let mut ids: Vec<fontdb::ID> = Vec::new();
+        // Prefer a plain sans face so letters look like letters; fall
+        // back to anything that covers the character.
+        if let Some(id) = db.query(&fontdb::Query {
+            families: &[fontdb::Family::SansSerif],
+            ..Default::default()
+        }) {
+            ids.push(id);
+        }
+        ids.extend(db.faces().map(|f| f.id));
+        for id in ids {
+            let out = db.with_face_data(id, |data, index| {
+                let face = ttf_parser::Face::parse(data, index).ok()?;
+                let glyph = face.glyph_index(c)?;
+                let mut b = B {
+                    bez: kurbo::BezPath::new(),
+                };
+                face.outline_glyph(glyph, &mut b)?;
+                let contours = contours_from_bezpath(&b.bez);
+                if contours.is_empty() {
+                    return None;
+                }
+                Some(rhythia_render::designer::clean_contours(&contours, false))
+            });
+            if let Some(Some(contours)) = out {
+                if !contours.is_empty() {
+                    return Ok(centre_contours(contours));
+                }
+            }
+        }
+        Err(format!("no installed font has an outline for '{c}'"))
+    })
+    .await
+    .map_err(err_str)?
+}
+
+/// Reads a local image as a data URL for the tracing underlay. The file
+/// never leaves the machine; the canvas just needs something drawable.
+#[tauri::command]
+async fn designer_read_image(path: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+        if bytes.len() > 24 * 1024 * 1024 {
+            return Err("image too large (24 MB limit)".into());
+        }
+        let mime = match std::path::Path::new(&path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase())
+            .as_deref()
+        {
+            Some("png") => "image/png",
+            Some("jpg") | Some("jpeg") => "image/jpeg",
+            Some("webp") => "image/webp",
+            Some("gif") => "image/gif",
+            Some("bmp") => "image/bmp",
+            _ => return Err("use a png, jpg, webp, gif or bmp image".into()),
+        };
+        use base64::Engine as _;
+        Ok(format!(
+            "data:{mime};base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(bytes)
+        ))
+    })
+    .await
+    .map_err(err_str)?
+}
+
 /// Saves the EDITABLE design document (the designer's own state, not the
 /// baked mesh) so a note can be reopened and reworked any time. Plain
 /// JSON on disk, picked through the save dialog.
@@ -4644,8 +4908,8 @@ async fn designer_doc_load(path: String) -> Result<String, String> {
 #[tauri::command]
 async fn designer_export(shape: DesignerShape, path: String) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let mesh = rhythia_render::designer::build_note_mesh(
-            &shape.resolved_outline(),
+        let mesh = rhythia_render::designer::build_note_mesh_multi(
+            &shape.resolved_contours(),
             shape.hollow,
             shape.depth,
         )
@@ -6149,6 +6413,9 @@ fn main() {
             designer_outline,
             designer_doc_save,
             designer_doc_load,
+            designer_import_svg,
+            designer_import_glyph,
+            designer_read_image,
             designer_preview,
             designer_export,
             set_clip,
@@ -6499,7 +6766,10 @@ mod settings_migration_tests {
 
 #[cfg(test)]
 mod diagnostics_tests {
-    use super::{diagnostics_report, err_str, redact_path, App, Shared};
+    use super::{
+        designer_import_glyph, diagnostics_report, err_str, redact_path, svg_to_contours, App,
+        Shared,
+    };
     use std::sync::Arc;
 
     /// The report exists to be sent to a stranger, so the test that matters
@@ -6576,5 +6846,68 @@ mod diagnostics_tests {
 
         // Paths outside the home folder are nobody's name and stay readable.
         assert_eq!(redact_path("/usr/bin/ffmpeg"), "/usr/bin/ffmpeg");
+    }
+
+    #[test]
+    fn svg_import_keeps_donut_holes_and_merges_shapes() {
+        // A donut drawn with even-odd (both rings wound the same way,
+        // only the rule makes the hole) plus an overlapping square.
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+          <path fill="red" fill-rule="evenodd"
+            d="M50 10 A40 40 0 1 0 50 90 A40 40 0 1 0 50 10 Z
+               M50 30 A20 20 0 1 0 50 70 A20 20 0 1 0 50 30 Z"/>
+          <rect x="70" y="40" width="25" height="20" fill="blue"/>
+        </svg>"##;
+        let contours = svg_to_contours(svg.as_bytes()).unwrap();
+        // Donut outer + donut hole + rect: three contours, one clockwise.
+        assert!(contours.len() >= 3, "got {} contours", contours.len());
+        let area = |c: &Vec<[f32; 2]>| -> f32 {
+            let mut a = 0.0;
+            for i in 0..c.len() {
+                let p = c[i];
+                let q = c[(i + 1) % c.len()];
+                a += p[0] * q[1] - q[0] * p[1];
+            }
+            a * 0.5
+        };
+        assert!(
+            contours.iter().any(|c| area(c) < 0.0),
+            "no clockwise hole survived the even-odd resolve"
+        );
+        // Centred and unit-scaled: the extent must touch 1.
+        let m = contours
+            .iter()
+            .flatten()
+            .map(|p| p[0].abs().max(p[1].abs()))
+            .fold(0.0f32, f32::max);
+        assert!((0.99..=1.01).contains(&m), "extent {m}");
+        // And the geometry pipeline accepts it with the hole intact.
+        let plan = rhythia_render::designer::plan_note_multi(&contours, None).unwrap();
+        assert!(
+            plan.shapes.iter().any(|s| !s.holes.is_empty()),
+            "the donut hole vanished in the plan"
+        );
+    }
+
+    #[test]
+    fn svg_without_filled_paths_reports_cleanly() {
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">
+          <path d="M0 0 L10 10" stroke="red" fill="none"/>
+        </svg>"##;
+        assert!(svg_to_contours(svg.as_bytes()).is_err());
+    }
+
+    #[test]
+    fn glyph_import_outlines_a_letter_with_its_counter() {
+        // Depends on system fonts; any sane install has a face with 'A'.
+        let rt = tauri::async_runtime::block_on(designer_import_glyph("A".into()));
+        let Ok(contours) = rt else {
+            // A fontless CI box is not a designer bug.
+            return;
+        };
+        assert!(!contours.is_empty());
+        let plan = rhythia_render::designer::plan_note_multi(&contours, None).unwrap();
+        // The letter A encloses a triangular counter: it must be a hole.
+        assert!(plan.shapes.iter().any(|s| !s.holes.is_empty()));
     }
 }

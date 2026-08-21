@@ -24,8 +24,16 @@ fn main() {
             })
             .collect(),
     };
+    let import: Option<Vec<Vec<[f32; 2]>>> = v
+        .get("import")
+        .filter(|c| c.is_array())
+        .map(|c| serde_json::from_value(c.clone()).expect("import"));
     let hollow = v["hollow"].as_f64().map(|t| t as f32);
-    match rhythia_render::designer::plan_note(&outline, hollow) {
+    let contours = match import {
+        Some(imp) if imp.iter().any(|c| c.len() >= 3) => imp,
+        _ => vec![outline],
+    };
+    match rhythia_render::designer::plan_note_multi(&contours, hollow) {
         Ok(plan) => println!("{}", serde_json::to_string(&plan).unwrap()),
         Err(_) => println!("{{\"error\":\"outline encloses no area\"}}"),
     }
