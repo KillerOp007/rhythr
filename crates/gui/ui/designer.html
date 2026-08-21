@@ -84,6 +84,17 @@
         <input type="range" id="dz-twist" min="0" max="360" step="1" value="0" />
       </label>
 
+      <h2>Presets</h2>
+      <div id="dz-presets">
+        <button class="btn small" data-preset="star">Star</button>
+        <button class="btn small" data-preset="heart">Heart</button>
+        <button class="btn small" data-preset="shield">Shield</button>
+        <button class="btn small" data-preset="gear">Gear</button>
+        <button class="btn small" data-preset="blade">Blade</button>
+        <button class="btn small" data-preset="squircle">Squircle</button>
+      </div>
+      <p class="hint">Editable starting points, not stamps: every preset opens in freeform with its points ready to drag.</p>
+
       <h2>Freeform</h2>
       <div class="row" style="gap:6px">
         <button class="btn small" id="dz-to-points">Convert to points</button>
@@ -100,6 +111,12 @@
         </select>
         <button class="btn small ghost" id="dz-back-params" hidden>Back to sliders</button>
       </div>
+      <label class="field">
+        <span class="check"><input type="checkbox" id="dz-mirror" /> Mirror wedge (hearts, shields)</span>
+      </label>
+      <label class="field">
+        <span class="check"><input type="checkbox" id="dz-snap" checked /> Snap to grid and axes</span>
+      </label>
       <p class="hint">Converting freezes the current shape into draggable points. With symmetry on, you edit one wedge and the rest follows.</p>
 
       <h2>Colors</h2>

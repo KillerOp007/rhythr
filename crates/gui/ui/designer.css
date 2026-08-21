@@ -17,6 +17,7 @@
   opacity: 0.75;
 }
 #dz-doc-actions { display: flex; gap: 0.4rem; }
+#dz-presets { display: flex; flex-wrap: wrap; gap: 0.35rem; }
 #dz-recent { width: 100%; margin-top: 0.35rem; }
 #dz-canvas {
   position: absolute; inset: 0; width: 100%; height: 100%;
