@@ -15,7 +15,8 @@ fn main() {
             serde_json::from_str(&std::fs::read_to_string(json_path).unwrap()).unwrap();
         let contours: Vec<Vec<[f32; 2]>> = serde_json::from_value(v["import"].clone()).unwrap();
         let hollow = v["hollow"].as_f64().map(|t| t as f32);
-        rhythia_render::designer::build_note_mesh_multi(&contours, hollow, 0.05).unwrap()
+        let depth = v["depth"].as_f64().unwrap_or(0.05) as f32;
+        rhythia_render::designer::build_note_mesh_multi(&contours, hollow, depth).unwrap()
     } else {
         let outline: Vec<[f32; 2]> = (0..160)
             .map(|i| {
