@@ -574,6 +574,16 @@ struct Shared {
     /// a slider drag and its picture, which is the difference between a
     /// live preview and a slideshow.
     designer_renderer: Mutex<Option<rhythia_render::Renderer>>,
+    /// Prepared designer skin keyed by shape hash: the animation loop
+    /// renders many frames of the SAME shape, and rebuilding mesh plus
+    /// GPU textures per frame was the preview's whole cost.
+    designer_skin: Mutex<
+        Option<(
+            u64,
+            rhythia_render::config::SkinConfig,
+            rhythia_render::renderer::SkinTextures,
+        )>,
+    >,
     /// How many renders this process has run. The first one pays for GPU
     /// pipeline setup and cold file caches, which is a candidate for
     /// "slower right after a restart".
@@ -4319,6 +4329,9 @@ async fn open_designer_window(app_handle: tauri::AppHandle) -> Result<(), String
         w.on_window_event(move |e| {
             if matches!(e, tauri::WindowEvent::Destroyed) {
                 if let Some(app) = handle.try_state::<App>() {
+                    if let Ok(mut skin) = app.designer_skin.lock() {
+                        *skin = None;
+                    }
                     if let Ok(mut slot) = app.designer_renderer.lock() {
                         *slot = None;
                     }
@@ -4344,10 +4357,48 @@ async fn open_designer_window(app_handle: tauri::AppHandle) -> Result<(), String
 #[derive(Deserialize)]
 struct DesignerShape {
     outline: Vec<[f32; 2]>,
+    /// Freeform control points; when present, the backend builds the
+    /// outline itself (spline flattening), and `outline` is ignored.
+    #[serde(default)]
+    control: Option<Vec<rhythia_render::designer::ControlPoint>>,
     /// None = filled silhouette; Some(t) = hollow rim of thickness t.
     hollow: Option<f32>,
     depth: f32,
     colors: Vec<String>,
+}
+
+impl DesignerShape {
+    /// The dense outline the geometry pipeline runs on: flattened from
+    /// control points when the editor sent them, verbatim otherwise.
+    fn resolved_outline(&self) -> Vec<[f32; 2]> {
+        match &self.control {
+            Some(c) if c.len() >= 3 => rhythia_render::designer::flatten_controls(c),
+            _ => self.outline.clone(),
+        }
+    }
+
+    /// A stable hash over everything that changes the prepared skin, so
+    /// the preview only rebuilds mesh and textures when the shape truly
+    /// changed instead of once per animation frame.
+    fn skin_hash(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        for p in &self.outline {
+            p[0].to_bits().hash(&mut h);
+            p[1].to_bits().hash(&mut h);
+        }
+        if let Some(c) = &self.control {
+            for p in c {
+                p.x.to_bits().hash(&mut h);
+                p.y.to_bits().hash(&mut h);
+                p.smooth.hash(&mut h);
+            }
+        }
+        self.hollow.map(|t| t.to_bits()).hash(&mut h);
+        self.depth.to_bits().hash(&mut h);
+        self.colors.hash(&mut h);
+        h.finish()
+    }
 }
 
 /// The preview's gameplay loop in ms: nine notes on a steady beat, one
@@ -4451,8 +4502,8 @@ async fn hitsound_preview(state: tauri::State<'_, App>) -> Result<String, String
 /// sub-millisecond, called live while dragging.
 #[tauri::command]
 fn designer_outline(shape: DesignerShape) -> Result<rhythia_render::designer::NotePlan, String> {
-    rhythia_render::designer::plan_note(&shape.outline, shape.hollow)
-        .map_err(|_| "the outline crosses itself - move the crossing points apart".to_string())
+    rhythia_render::designer::plan_note(&shape.resolved_outline(), shape.hollow)
+        .map_err(|_| "the outline encloses no area - draw a bigger shape".to_string())
 }
 
 const DESIGNER_PREVIEW_W: u32 = 960;
@@ -4471,36 +4522,13 @@ async fn designer_preview(
 ) -> Result<String, String> {
     let app = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let mesh =
-            rhythia_render::designer::build_note_mesh(&shape.outline, shape.hollow, shape.depth)
-                .map_err(|_| {
-                    "the outline crosses itself - move the crossing points apart".to_string()
-                })?;
-        let obj = rhythia_render::designer::to_obj(&mesh, "preview");
-        let mut cfg = rhythia_render::config::SkinConfig::default();
-        cfg.note_mesh = Some(obj.into_bytes());
-        let hex: String = shape.colors.iter().fold(String::new(), |mut a, c| {
-            a.push_str(c);
-            a.push('\n');
-            a
-        });
-        let cs = rhythia_render::config::parse_colorset(&hex);
-        if !cs.is_empty() {
-            cfg.colorset = cs;
-        }
-        // A tele lens on the standard camera: the preview's job is to show
-        // THE NOTE (material, depth, colours), and at the gameplay FOV a
-        // single note is a stamp in a dark field. Narrowing the FOV is a
-        // legitimate config-driven zoom, no geometry is distorted.
-        cfg.camera_fov = 34.0;
-        // The note is the subject; the synthetic cursor only covers it.
-        cfg.cursor_opacity = 0.0;
-        cfg.cursor_trail_enabled = false;
+        let hash = shape.skin_hash();
         let mut slot = app
             .designer_renderer
             .lock()
             .unwrap_or_else(|p| p.into_inner());
         if slot.is_none() {
+            let cfg = rhythia_render::config::SkinConfig::default();
             *slot = Some(
                 rhythia_render::Renderer::new(
                     DESIGNER_PREVIEW_W,
@@ -4511,8 +4539,40 @@ async fn designer_preview(
             );
         }
         let renderer = slot.as_ref().expect("just created");
-        let skin = renderer.prepare_skin(&cfg);
-        let params = rhythia_render::scene::SceneParams::from(&cfg);
+        let mut cache = app.designer_skin.lock().unwrap_or_else(|p| p.into_inner());
+        let stale = cache.as_ref().map(|(h, _, _)| *h != hash).unwrap_or(true);
+        if stale {
+            let mesh = rhythia_render::designer::build_note_mesh(
+                &shape.resolved_outline(),
+                shape.hollow,
+                shape.depth,
+            )
+            .map_err(|_| "the outline encloses no area - draw a bigger shape".to_string())?;
+            let obj = rhythia_render::designer::to_obj(&mesh, "preview");
+            let mut cfg = rhythia_render::config::SkinConfig::default();
+            cfg.note_mesh = Some(obj.into_bytes());
+            let hex: String = shape.colors.iter().fold(String::new(), |mut a, c| {
+                a.push_str(c);
+                a.push('\n');
+                a
+            });
+            let cs = rhythia_render::config::parse_colorset(&hex);
+            if !cs.is_empty() {
+                cfg.colorset = cs;
+            }
+            // A tele lens on the standard camera: the preview's job is to
+            // show THE NOTE (material, depth, colours), and at the gameplay
+            // FOV a single note is a stamp in a dark field. Narrowing the
+            // FOV is a legitimate config-driven zoom, no distortion.
+            cfg.camera_fov = 34.0;
+            // The note is the subject; the synthetic cursor only covers it.
+            cfg.cursor_opacity = 0.0;
+            cfg.cursor_trail_enabled = false;
+            let skin = renderer.prepare_skin(&cfg);
+            *cache = Some((hash, cfg, skin));
+        }
+        let (_, cfg, skin) = cache.as_ref().expect("just filled");
+        let params = rhythia_render::scene::SceneParams::from(cfg);
         // The still is its own scene: three notes SIDE BY SIDE at staggered
         // approach depths, so the first three colours all stay visible
         // instead of queueing behind one grid cell the way the loop's
@@ -4538,7 +4598,7 @@ async fn designer_preview(
             500.0 + time_ms.rem_euclid(DESIGNER_LOOP_MS)
         };
         let px = renderer
-            .render_still(&params, &cfg, &skin, &replay, &map, t, None)
+            .render_still(&params, cfg, skin, &replay, &map, t, None)
             .map_err(|e| e.to_string())?;
         let bytes = png_bytes(&px, DESIGNER_PREVIEW_W, DESIGNER_PREVIEW_H)?;
         use base64::Engine as _;
@@ -4557,9 +4617,12 @@ async fn designer_preview(
 #[tauri::command]
 async fn designer_export(shape: DesignerShape, path: String) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let mesh =
-            rhythia_render::designer::build_note_mesh(&shape.outline, shape.hollow, shape.depth)
-                .map_err(|_| "the outline crosses itself".to_string())?;
+        let mesh = rhythia_render::designer::build_note_mesh(
+            &shape.resolved_outline(),
+            shape.hollow,
+            shape.depth,
+        )
+        .map_err(|_| "the outline encloses no area".to_string())?;
         let stem = Path::new(&path)
             .file_stem()
             .map(|s| s.to_string_lossy().into_owned())
@@ -5717,6 +5780,7 @@ fn main() {
         segment_gen: std::sync::atomic::AtomicU64::new(0),
         render_thread: Mutex::new(None),
         designer_renderer: Mutex::new(None),
+        designer_skin: Mutex::new(None),
         renders_done: std::sync::atomic::AtomicU64::new(0),
         last_render: Mutex::new(None),
     });

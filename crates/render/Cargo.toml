@@ -18,6 +18,9 @@ serde.workspace = true
 serde_json.workspace = true
 zip.workspace = true
 fontdue = { version = "0.9.3", default-features = false, features = ["std", "hashbrown"] }
+i_overlay = "8"
+i_triangle = "0.47"
+kurbo = "0.13"
 
 [dependencies.tempfile]
 version = "3"

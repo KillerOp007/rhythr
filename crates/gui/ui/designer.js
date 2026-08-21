@@ -79,9 +79,10 @@ function paramOutline(samples = 160) {
   return pts;
 }
 
-/// Expands the freeform control points through the symmetry, then samples
-/// a closed Catmull-Rom through them (corner points pass straight lines).
-function freeOutline() {
+/// Expands the freeform control points through the symmetry into the full
+/// control loop. The BACKEND turns this into a curve (spline flattening
+/// with adaptive tolerance), so the editor never samples curves itself.
+function controlLoop() {
   const ctrl = [];
   for (let s = 0; s < symmetry; s++) {
     const a = (s * Math.PI * 2) / symmetry;
@@ -90,38 +91,9 @@ function freeOutline() {
       ctrl.push({ x: p.x * ca - p.y * sa, y: p.x * sa + p.y * ca, smooth: p.smooth });
     }
   }
-  const n = ctrl.length;
-  if (n < 3) return null;
-  const out = [];
-  const SEG = 10;
-  for (let i = 0; i < n; i++) {
-    const p0 = ctrl[(i + n - 1) % n];
-    const p1 = ctrl[i];
-    const p2 = ctrl[(i + 1) % n];
-    const p3 = ctrl[(i + 2) % n];
-    if (!p1.smooth && !p2.smooth) {
-      out.push([p1.x, p1.y]);
-      continue;
-    }
-    for (let k = 0; k < SEG; k++) {
-      const t = k / SEG;
-      // Catmull-Rom; a corner endpoint collapses its tangent so the curve
-      // actually reaches the corner instead of rounding it away.
-      const m1 = p1.smooth ? { x: (p2.x - p0.x) / 2, y: (p2.y - p0.y) / 2 } : { x: 0, y: 0 };
-      const m2 = p2.smooth ? { x: (p3.x - p1.x) / 2, y: (p3.y - p1.y) / 2 } : { x: 0, y: 0 };
-      const t2 = t * t, t3 = t2 * t;
-      const h00 = 2 * t3 - 3 * t2 + 1, h10 = t3 - 2 * t2 + t;
-      const h01 = -2 * t3 + 3 * t2, h11 = t3 - t2;
-      out.push([
-        h00 * p1.x + h10 * m1.x + h01 * p2.x + h11 * m2.x,
-        h00 * p1.y + h10 * m1.y + h01 * p2.y + h11 * m2.y,
-      ]);
-    }
-  }
-  return out;
+  return ctrl.length >= 3 ? ctrl : null;
 }
 
-const outline = () => (free ? freeOutline() : paramOutline());
 
 // ------------------------------------------------------------ canvas
 
@@ -203,35 +175,26 @@ function draw() {
   ctx.strokeRect(...toPx([-HITBOX, HITBOX]), 2 * UNIT * HITBOX, 2 * UNIT * HITBOX);
   ctx.setLineDash([]);
 
-  if (!plan || !plan.outer || plan.outer.length < 3) return;
-  // The note as the export will have it: the backend's contours, filled
-  // (or rimmed) in the FIRST colorset colour. Every slider changes THIS
-  // drawing, and it is the same geometry the preview and the .rhs get.
+  if (!plan || !plan.shapes || !plan.shapes.length) return;
+  // The note as the export will have it: the backend's resolved regions,
+  // filled (or rimmed) in the FIRST colorset colour. The backend
+  // guarantees orientation (outer counterclockwise, holes clockwise), so
+  // ONE nonzero fill over all contours cuts the holes by itself.
   const path = (list) => {
     const [px, py] = toPx(list[0]);
     ctx.moveTo(px, py);
     for (const p of list.slice(1)) ctx.lineTo(...toPx(p));
     ctx.closePath();
   };
-  // Fill, then cut: nonzero on each contour separately. The evenodd rule
-  // cancelled the fill wherever a dragged outline overlapped itself,
-  // which read as the colour vanishing in stripes.
-  ctx.save();
   ctx.beginPath();
-  path(plan.outer);
+  for (const sh of plan.shapes) {
+    path(sh.outer);
+    for (const h of sh.holes) path(h);
+  }
   ctx.fillStyle = colors[0] || "#ffffff";
   ctx.globalAlpha = 0.9;
   ctx.fill("nonzero");
-  if (plan.inner) {
-    ctx.globalCompositeOperation = "destination-out";
-    ctx.globalAlpha = 1;
-    ctx.beginPath();
-    path(plan.inner);
-    ctx.fill("nonzero");
-  }
-  ctx.restore();
-  ctx.beginPath();
-  path(plan.outer);
+  ctx.globalAlpha = 1;
   ctx.strokeStyle = accent;
   ctx.lineWidth = 1.5;
   ctx.stroke();
@@ -339,17 +302,23 @@ cv.addEventListener("pointerdown", (e) => {
   // Insert only when the click actually lands NEAR the outline: a click
   // in empty space (or outside the note entirely) is not a request for a
   // point there.
-  if (plan?.outer) {
+  if (plan?.shapes?.length) {
     let best = Infinity;
-    const n = plan.outer.length;
-    for (let i = 0; i < n; i++) {
-      const [ax, ay] = toPx(plan.outer[i]);
-      const [bx, by] = toPx(plan.outer[(i + 1) % n]);
-      const dx = bx - ax, dy = by - ay;
-      const len2 = dx * dx + dy * dy || 1e-9;
-      const t = Math.max(0, Math.min(1, ((mx - ax) * dx + (my - ay) * dy) / len2));
-      const qx = ax + t * dx, qy = ay + t * dy;
-      best = Math.min(best, Math.hypot(mx - qx, my - qy));
+    const near = (list) => {
+      const n = list.length;
+      for (let i = 0; i < n; i++) {
+        const [ax, ay] = toPx(list[i]);
+        const [bx, by] = toPx(list[(i + 1) % n]);
+        const dx = bx - ax, dy = by - ay;
+        const len2 = dx * dx + dy * dy || 1e-9;
+        const t = Math.max(0, Math.min(1, ((mx - ax) * dx + (my - ay) * dy) / len2));
+        const qx = ax + t * dx, qy = ay + t * dy;
+        best = Math.min(best, Math.hypot(mx - qx, my - qy));
+      }
+    };
+    for (const sh of plan.shapes) {
+      near(sh.outer);
+      for (const h of sh.holes) near(h);
     }
     if (best > 18) return;
   }
@@ -435,9 +404,9 @@ cv.addEventListener("contextmenu", (e) => {
 // ------------------------------------------------------------ preview
 
 function shapePayload() {
-  const pts = outline();
   return {
-    outline: pts,
+    outline: free ? [] : paramOutline(),
+    control: free ? controlLoop() : null,
     hollow: P.hollow ? P.thick : null,
     depth: P.depth,
     colors: colors.slice(),
@@ -491,13 +460,20 @@ async function animLoop() {
       await new Promise((r) => setTimeout(r, 150));
       continue;
     }
-    const t = (performance.now() - anim0) % LOOP_MS;
+    const frame0 = performance.now();
+    const t = (frame0 - anim0) % LOOP_MS;
     try {
       const url = await invoke("designer_preview", { shape: shapePayload(), timeMs: t });
       $("dz-preview").src = url;
       if (lastErr) {
         lastErr = "";
         setStatus("");
+      }
+      // The skin is cached backend-side, so frames come back fast; pace
+      // the loop instead of spinning the CPU at whatever rate that is.
+      const took = performance.now() - frame0;
+      if (took < 33) {
+        await new Promise((r) => setTimeout(r, 33 - took));
       }
     } catch (e) {
       const msg = String(e);
