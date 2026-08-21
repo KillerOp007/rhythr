@@ -9,12 +9,13 @@
 <body id="designer-body">
   <main id="dz-root">
     <section id="dz-left">
-      <div id="dz-canvas-box"><canvas id="dz-canvas"></canvas></div>
+      <div id="dz-canvas-box"><canvas id="dz-canvas"></canvas><button id="dz-view-reset" class="btn small ghost" title="Reset zoom and pan">100%</button></div>
       <div id="dz-canvas-hint" class="hint">
         Drag points to shape the outline · click the line to add a point ·
-        double-click a point to toggle smooth/corner · right-click removes.
-        The solid square is the hard size limit (no note may exceed it);
-        the dashed one outside is the game's true hit area.
+        double-click toggles smooth/corner · right-click removes · arrows
+        nudge the selected point · Ctrl+Z undoes · wheel zooms, middle
+        drag (or Space+drag) pans. The solid square is the hard size
+        limit; the dashed one outside is the game's true hit area.
       </div>
       <div id="dz-splitter" title="Drag to resize editor vs. preview"></div>
       <div id="dz-preview-box">
@@ -105,6 +106,16 @@
       <div id="dz-colors"></div>
       <button class="btn small" id="dz-color-add">Add color</button>
       <p class="hint">The preview loops one note over every grid cell; the colors play in THIS order, so drag the rows to decide which color lands where. Up to 9 show per loop.</p>
+
+      <h2>Design file</h2>
+      <div id="dz-doc-actions">
+        <button class="btn small" id="dz-doc-save">Save design</button>
+        <button class="btn small" id="dz-doc-load">Load design</button>
+      </div>
+      <select id="dz-recent">
+        <option value="">Recent designs…</option>
+      </select>
+      <p class="hint">The design file stays editable forever; the .rhs below is the baked export for the game. Your work also autosaves in this window.</p>
 
       <div id="dz-actions">
         <button class="btn primary" id="dz-save">Save as .rhs</button>

@@ -42,6 +42,100 @@ let free = null;
 let symmetry = 4;
 let colors = ["#ffffff", "#a2e0ff", "#a2e0ff"]; // the game's Arctic
 
+// ---- the design document: one JSON string carrying the WHOLE editable
+// state. Undo, autosave and the design file all speak this format, so
+// they can never disagree about what a design is.
+const DOC_KEY = "rhythr.designer.doc";
+const RECENT_KEY = "rhythr.designer.recent";
+let DEFAULT_DOC = null;
+const undoStack = [];
+const redoStack = [];
+let lastSnap = -1e9;
+let saveTimer = null;
+
+function docState() {
+  return JSON.stringify({ P: { ...P }, free, symmetry, colors });
+}
+
+function applyDocRaw(json) {
+  const d = JSON.parse(json);
+  Object.assign(P, d.P || {});
+  free = Array.isArray(d.free) ? d.free : null;
+  symmetry = Number(d.symmetry) || 4;
+  colors = Array.isArray(d.colors) && d.colors.length ? d.colors : ["#ffffff"];
+  selected = -1;
+  dragging = -1;
+  renderColors();
+  syncControls();
+  scheduleAll();
+}
+
+/// Snapshot BEFORE a mutation. A positive coalesce keeps a continuous
+/// gesture (slider drag, arrow-key repeat) to one undo step: the window
+/// slides with every call and only an idle gap opens a new step.
+function commit(coalesceMs = 350) {
+  const now = performance.now();
+  if (coalesceMs > 0 && now - lastSnap < coalesceMs) {
+    lastSnap = now;
+    return;
+  }
+  lastSnap = now;
+  undoStack.push(docState());
+  if (undoStack.length > 120) undoStack.shift();
+  redoStack.length = 0;
+}
+
+function undo() {
+  if (!undoStack.length) return;
+  redoStack.push(docState());
+  applyDocRaw(undoStack.pop());
+}
+
+function redo() {
+  if (!redoStack.length) return;
+  undoStack.push(docState());
+  applyDocRaw(redoStack.pop());
+}
+
+function recentList() {
+  try {
+    return JSON.parse(localStorage.getItem(RECENT_KEY)) || [];
+  } catch {
+    return [];
+  }
+}
+
+function addRecent(path) {
+  const list = recentList().filter((x) => x !== path);
+  list.unshift(path);
+  localStorage.setItem(RECENT_KEY, JSON.stringify(list.slice(0, 8)));
+  renderRecent();
+}
+
+function renderRecent() {
+  const sel = $("dz-recent");
+  while (sel.options.length > 1) sel.remove(1);
+  for (const path of recentList()) {
+    const opt = document.createElement("option");
+    opt.value = path;
+    opt.textContent = path.split(/[\\/]/).pop();
+    opt.title = path;
+    sel.appendChild(opt);
+  }
+}
+
+async function loadDocFrom(path) {
+  try {
+    const json = await invoke("designer_doc_load", { path });
+    commit(0);
+    applyDocRaw(json);
+    addRecent(path);
+    setStatus(`Design loaded: ${path}`);
+  } catch (e) {
+    setStatus(String(e), true);
+  }
+}
+
 // ------------------------------------------------------------ outline
 
 /// Slider outline: radius as a function of angle, sampled densely.
@@ -117,8 +211,58 @@ function fitCanvas() {
   draw();
 }
 new ResizeObserver(fitCanvas).observe($("dz-canvas-box"));
-const toPx = (p) => [CW / 2 + p[0] * UNIT, CH / 2 - p[1] * UNIT];
-const toWorld = (x, y) => [(x - CW / 2) / UNIT, -(y - CH / 2) / UNIT];
+
+// The view: zoom about the cursor plus panning, purely a screen-space
+// transform. Precise point placement is physically impossible at a fixed
+// fit, so the canvas behaves like every other canvas tool.
+const view = { z: 1, cx: 0, cy: 0 };
+const toPx = (p) => [
+  CW / 2 + (p[0] - view.cx) * UNIT * view.z,
+  CH / 2 - (p[1] - view.cy) * UNIT * view.z,
+];
+const toWorld = (x, y) => [
+  (x - CW / 2) / (UNIT * view.z) + view.cx,
+  -(y - CH / 2) / (UNIT * view.z) + view.cy,
+];
+
+function resetView() {
+  view.z = 1;
+  view.cx = 0;
+  view.cy = 0;
+  $("dz-view-reset").textContent = "100%";
+  draw();
+}
+
+cv.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  const rect = cv.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
+  const [wx, wy] = toWorld(mx, my);
+  const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+  view.z = Math.max(0.4, Math.min(12, view.z * factor));
+  // The point under the cursor stays under the cursor.
+  view.cx = wx - (mx - CW / 2) / (UNIT * view.z);
+  view.cy = wy + (my - CH / 2) / (UNIT * view.z);
+  $("dz-view-reset").textContent = `${Math.round(view.z * 100)}%`;
+  draw();
+}, { passive: false });
+
+let spaceDown = false;
+let panning = null;
+window.addEventListener("keydown", (e) => {
+  if (e.code === "Space" && !isTyping()) {
+    spaceDown = true;
+    e.preventDefault();
+  }
+});
+window.addEventListener("keyup", (e) => {
+  if (e.code === "Space") spaceDown = false;
+});
+function isTyping() {
+  const t = document.activeElement?.tagName;
+  return t === "INPUT" || t === "SELECT" || t === "TEXTAREA";
+}
 
 // The note's contours come from the BACKEND (designer_outline), which
 // runs the identical cleanup, normalisation and rim inset the mesh build
@@ -180,10 +324,15 @@ function draw() {
   // filled (or rimmed) in the FIRST colorset colour. The backend
   // guarantees orientation (outer counterclockwise, holes clockwise), so
   // ONE nonzero fill over all contours cuts the holes by itself.
+  //
+  // Drawn in INPUT space (contours divided by the normalisation scale):
+  // the picture is proportionally identical to the export, and dragging
+  // one point no longer rescales the whole drawing under the cursor.
+  const inv = 1 / (plan.scale || 1);
   const path = (list) => {
-    const [px, py] = toPx(list[0]);
+    const [px, py] = toPx([list[0][0] * inv, list[0][1] * inv]);
     ctx.moveTo(px, py);
-    for (const p of list.slice(1)) ctx.lineTo(...toPx(p));
+    for (const p of list.slice(1)) ctx.lineTo(...toPx([p[0] * inv, p[1] * inv]));
     ctx.closePath();
   };
   ctx.beginPath();
@@ -212,9 +361,15 @@ function draw() {
       ctx.lineTo(...toPx([1.25 * Math.cos(a), 1.25 * Math.sin(a)]));
       ctx.stroke();
     }
-    const ps = plan?.scale || 1;
-    for (const p of free) {
-      const [x, y] = toPx([p.x * ps, p.y * ps]);
+    free.forEach((p, i) => {
+      const [x, y] = toPx([p.x, p.y]);
+      if (i === selected) {
+        ctx.beginPath();
+        ctx.arc(x, y, 9, 0, Math.PI * 2);
+        ctx.strokeStyle = accent;
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      }
       ctx.beginPath();
       if (p.smooth) {
         ctx.arc(x, y, 5, 0, Math.PI * 2);
@@ -225,7 +380,7 @@ function draw() {
       ctx.fill();
       ctx.strokeStyle = "#0b0e12";
       ctx.stroke();
-    }
+    });
   }
 }
 
@@ -264,13 +419,13 @@ function initSplitter() {
 // ---- point editing (freeform only)
 
 let dragging = -1;
+let selected = -1;
 
 function pointAt(mx, my) {
   if (!free) return -1;
-  const ps = plan?.scale || 1;
   for (let i = 0; i < free.length; i++) {
-    const [x, y] = toPx([free[i].x * ps, free[i].y * ps]);
-    if (Math.hypot(mx - x, my - y) < 9) return i;
+    const [x, y] = toPx([free[i].x, free[i].y]);
+    if (Math.hypot(mx - x, my - y) < 12) return i;
   }
   return -1;
 }
@@ -287,6 +442,19 @@ function foldToWedge(x, y) {
 }
 
 cv.addEventListener("pointerdown", (e) => {
+  const rect0 = cv.getBoundingClientRect();
+  if (e.button === 1 || (e.button === 0 && spaceDown)) {
+    panning = {
+      px: e.clientX - rect0.left,
+      py: e.clientY - rect0.top,
+      cx: view.cx,
+      cy: view.cy,
+    };
+    cv.style.cursor = "grabbing";
+    cv.setPointerCapture(e.pointerId);
+    e.preventDefault();
+    return;
+  }
   if (!free) return;
   // Left button only: middle and side buttons were adding points too.
   if (e.button !== 0) return;
@@ -295,8 +463,11 @@ cv.addEventListener("pointerdown", (e) => {
   const my = e.clientY - rect.top;
   const hit = pointAt(mx, my);
   if (hit >= 0) {
+    commit(0);
+    selected = hit;
     dragging = hit;
     cv.setPointerCapture(e.pointerId);
+    draw();
     return;
   }
   // Insert only when the click actually lands NEAR the outline: a click
@@ -304,11 +475,12 @@ cv.addEventListener("pointerdown", (e) => {
   // point there.
   if (plan?.shapes?.length) {
     let best = Infinity;
+    const inv = 1 / (plan.scale || 1);
     const near = (list) => {
       const n = list.length;
       for (let i = 0; i < n; i++) {
-        const [ax, ay] = toPx(list[i]);
-        const [bx, by] = toPx(list[(i + 1) % n]);
+        const [ax, ay] = toPx([list[i][0] * inv, list[i][1] * inv]);
+        const [bx, by] = toPx([list[(i + 1) % n][0] * inv, list[(i + 1) % n][1] * inv]);
         const dx = bx - ax, dy = by - ay;
         const len2 = dx * dx + dy * dy || 1e-9;
         const t = Math.max(0, Math.min(1, ((mx - ax) * dx + (my - ay) * dy) / len2));
@@ -323,10 +495,8 @@ cv.addEventListener("pointerdown", (e) => {
     if (best > 18) return;
   }
   // Click near the outline: insert a point there (folded into the wedge).
+  commit(0);
   let [wx, wy] = toWorld(mx, my);
-  const ps0 = plan?.scale || 1;
-  wx /= ps0;
-  wy /= ps0;
   [wx, wy] = foldToWedge(wx, wy);
   [wx, wy] = clampUnit(wx, wy);
   // Insert in angular order so the wedge stays a simple arc of points.
@@ -344,21 +514,36 @@ cv.addEventListener("pointerdown", (e) => {
   }
   free.splice(at, 0, { x: wx, y: wy, smooth: true });
   dragging = at;
+  selected = at;
   cv.setPointerCapture(e.pointerId);
   scheduleAll();
 });
 
 cv.addEventListener("pointermove", (e) => {
-  if (dragging < 0 || !free) return;
   const rect = cv.getBoundingClientRect();
   const mx = e.clientX - rect.left;
   const my = e.clientY - rect.top;
-  let [wx, wy] = toWorld(mx, my);
-  {
-    const ps1 = plan?.scale || 1;
-    wx /= ps1;
-    wy /= ps1;
+  if (panning) {
+    view.cx = panning.cx - (mx - panning.px) / (UNIT * view.z);
+    view.cy = panning.cy + (my - panning.py) / (UNIT * view.z);
+    draw();
+    return;
   }
+  if (dragging < 0) {
+    // Hover feedback: the cursor names the action before the click.
+    if (spaceDown) {
+      cv.style.cursor = "grab";
+    } else if (free && pointAt(mx, my) >= 0) {
+      cv.style.cursor = "grab";
+    } else if (free) {
+      cv.style.cursor = "crosshair";
+    } else {
+      cv.style.cursor = "default";
+    }
+    return;
+  }
+  if (!free) return;
+  let [wx, wy] = toWorld(mx, my);
   // Clamp into the wedge instead of folding: folding teleports a point
   // sitting near the boundary to the wedge's far side the moment the
   // cursor slips across, which reads as the point jumping away.
@@ -376,13 +561,20 @@ cv.addEventListener("pointermove", (e) => {
   scheduleAll();
 });
 
-cv.addEventListener("pointerup", () => (dragging = -1));
+cv.addEventListener("pointerup", () => {
+  dragging = -1;
+  if (panning) {
+    panning = null;
+    cv.style.cursor = "default";
+  }
+});
 
 cv.addEventListener("dblclick", (e) => {
   if (!free) return;
   const rect = cv.getBoundingClientRect();
   const hit = pointAt(e.clientX - rect.left, e.clientY - rect.top);
   if (hit >= 0) {
+    commit(0);
     free[hit].smooth = !free[hit].smooth;
     scheduleAll();
   }
@@ -394,11 +586,61 @@ cv.addEventListener("contextmenu", (e) => {
   const rect = cv.getBoundingClientRect();
   const hit = pointAt(e.clientX - rect.left, e.clientY - rect.top);
   if (hit >= 0) {
+    commit(0);
     free.splice(hit, 1);
     // A removal invalidates whatever a concurrent left-drag was holding.
     dragging = -1;
+    selected = -1;
     scheduleAll();
   }
+});
+
+// Keyboard editing: arrows nudge the selected point, Delete removes it,
+// Escape deselects. Undo/redo lives on the document level below.
+window.addEventListener("keydown", (e) => {
+  if (isTyping()) return;
+  const mod = e.ctrlKey || e.metaKey;
+  if (mod && e.key.toLowerCase() === "z") {
+    e.preventDefault();
+    if (e.shiftKey) redo();
+    else undo();
+    return;
+  }
+  if (mod && e.key.toLowerCase() === "y") {
+    e.preventDefault();
+    redo();
+    return;
+  }
+  if (!free) return;
+  if (e.key === "Escape") {
+    selected = -1;
+    draw();
+    return;
+  }
+  if (selected < 0 || selected >= free.length) return;
+  if (e.key === "Delete" || e.key === "Backspace") {
+    if (free.length <= 3) return;
+    commit(0);
+    free.splice(selected, 1);
+    selected = -1;
+    scheduleAll();
+    e.preventDefault();
+    return;
+  }
+  const step = e.shiftKey ? 0.05 : 0.01;
+  const dir = {
+    ArrowLeft: [-step, 0],
+    ArrowRight: [step, 0],
+    ArrowUp: [0, step],
+    ArrowDown: [0, -step],
+  }[e.key];
+  if (!dir) return;
+  commit(600);
+  let [wx, wy] = [free[selected].x + dir[0], free[selected].y + dir[1]];
+  [wx, wy] = clampUnit(wx, wy);
+  free[selected] = { ...free[selected], x: wx, y: wy };
+  scheduleAll();
+  e.preventDefault();
 });
 
 // ------------------------------------------------------------ preview
@@ -496,17 +738,37 @@ function scheduleAll() {
   // The contours come from the backend and repaint on arrival (sub-ms
   // maths, coalesced during a drag); the animated preview reads the
   // current shape every frame on its own. The still re-renders shortly
-  // after the last change.
+  // after the last change, and the document autosaves so closing the
+  // window never loses work.
   refreshPlan();
   clearTimeout(stillTimer);
   stillTimer = setTimeout(refreshStill, 250);
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    try {
+      localStorage.setItem(DOC_KEY, docState());
+    } catch {
+      // Storage full or unavailable: autosave is best-effort.
+    }
+  }, 600);
 }
 
 // ------------------------------------------------------------ controls
 
+const SLIDERS = [
+  ["dz-n", () => P.n, (v) => (P.n = v), (v) => String(v)],
+  ["dz-round", () => P.round * 100, (v) => (P.round = v / 100), (v) => `${v}%`],
+  ["dz-thick", () => P.thick * 100, (v) => (P.thick = v / 100), (v) => `${v}%`],
+  ["dz-depth", () => P.depth * 100, (v) => (P.depth = v / 100), (v) => `${v}%`],
+  ["dz-waves", () => P.waves, (v) => (P.waves = v), (v) => String(v)],
+  ["dz-wavedepth", () => P.waveDepth * 100, (v) => (P.waveDepth = v / 100), (v) => `${v}%`],
+  ["dz-twist", () => P.twist, (v) => (P.twist = v), (v) => `${v}°`],
+];
+
 function bindSlider(id, get, set, fmt) {
   const el = $(id);
   el.addEventListener("input", () => {
+    commit(600);
     set(Number(el.value));
     $(`${id}-val`) && ($(`${id}-val`).textContent = fmt(Number(el.value)));
     scheduleAll();
@@ -514,30 +776,46 @@ function bindSlider(id, get, set, fmt) {
   $(`${id}-val`) && ($(`${id}-val`).textContent = fmt(get()));
 }
 
+/// Writes the document state back into every control, so undo, load and
+/// reset always leave the panel telling the truth.
+function syncControls() {
+  $("dz-shape").value = P.shape;
+  $("dz-n-row").hidden = P.shape !== "ngon";
+  $("dz-hollow").checked = P.hollow;
+  $("dz-thick-row").hidden = !P.hollow;
+  $("dz-waveform").value = P.waveform;
+  for (const [id, get, , fmt] of SLIDERS) {
+    $(id).value = get();
+    $(`${id}-val`) && ($(`${id}-val`).textContent = fmt(Math.round(get())));
+  }
+  $("dz-symmetry").value = String(symmetry);
+  $("dz-symmetry").disabled = !!free;
+  $("dz-back-params").hidden = !free;
+  $("dz-to-points").hidden = !!free;
+}
+
 function wireControls() {
   $("dz-shape").addEventListener("change", () => {
+    commit(0);
     P.shape = $("dz-shape").value;
     $("dz-n-row").hidden = P.shape !== "ngon";
     scheduleAll();
   });
-  bindSlider("dz-n", () => P.n, (v) => (P.n = v), (v) => String(v));
-  bindSlider("dz-round", () => P.round * 100, (v) => (P.round = v / 100), (v) => `${v}%`);
-  bindSlider("dz-thick", () => P.thick * 100, (v) => (P.thick = v / 100), (v) => `${v}%`);
-  bindSlider("dz-depth", () => P.depth * 100, (v) => (P.depth = v / 100), (v) => `${v}%`);
-  bindSlider("dz-waves", () => P.waves, (v) => (P.waves = v), (v) => String(v));
-  bindSlider("dz-wavedepth", () => P.waveDepth * 100, (v) => (P.waveDepth = v / 100), (v) => `${v}%`);
-  bindSlider("dz-twist", () => P.twist, (v) => (P.twist = v), (v) => `${v}°`);
+  for (const [id, get, set, fmt] of SLIDERS) bindSlider(id, get, set, fmt);
   $("dz-waveform").addEventListener("change", () => {
+    commit(0);
     P.waveform = $("dz-waveform").value;
     scheduleAll();
   });
   $("dz-hollow").addEventListener("change", () => {
+    commit(0);
     P.hollow = $("dz-hollow").checked;
     $("dz-thick-row").hidden = !P.hollow;
     scheduleAll();
   });
 
   $("dz-to-points").addEventListener("click", () => {
+    commit(0);
     // A five-wave shape frozen into four-fold symmetry is a different
     // shape: converting adopts the wave count as the symmetry when waves
     // are active, so the points reproduce what is on screen.
@@ -560,25 +838,64 @@ function wireControls() {
     scheduleAll();
   });
   $("dz-back-params").addEventListener("click", () => {
+    commit(0);
     free = null;
+    selected = -1;
     $("dz-back-params").hidden = true;
     $("dz-to-points").hidden = false;
     $("dz-symmetry").disabled = false;
     scheduleAll();
   });
   $("dz-symmetry").addEventListener("change", () => {
+    commit(0);
     symmetry = Number($("dz-symmetry").value);
     scheduleAll();
   });
 
   $("dz-color-add").addEventListener("click", () => {
     if (colors.length >= 12) return;
+    commit(0);
     colors.push("#ffffff");
     renderColors();
     scheduleAll();
   });
   $("dz-reset").addEventListener("click", () => {
-    location.reload();
+    commit(0);
+    localStorage.removeItem(DOC_KEY);
+    if (DEFAULT_DOC) {
+      applyDocRaw(DEFAULT_DOC);
+      resetView();
+    } else {
+      location.reload();
+    }
+  });
+  $("dz-view-reset").addEventListener("click", resetView);
+  $("dz-doc-save").addEventListener("click", async () => {
+    const path = await dialog.save({
+      defaultPath: "my-note.rhsd",
+      filters: [{ name: "rhythr note design", extensions: ["rhsd"] }],
+    });
+    if (!path) return;
+    try {
+      await invoke("designer_doc_save", { path, json: docState() });
+      addRecent(path);
+      setStatus(`Design saved: ${path}`);
+    } catch (e) {
+      setStatus(String(e), true);
+    }
+  });
+  $("dz-doc-load").addEventListener("click", async () => {
+    const path = await dialog.open({
+      multiple: false,
+      filters: [{ name: "rhythr note design", extensions: ["rhsd"] }],
+    });
+    if (!path || Array.isArray(path)) return;
+    loadDocFrom(path);
+  });
+  $("dz-recent").addEventListener("change", () => {
+    const path = $("dz-recent").value;
+    $("dz-recent").value = "";
+    if (path) loadDocFrom(path);
   });
   $("dz-save").addEventListener("click", async () => {
     const path = await dialog.save({
@@ -623,6 +940,7 @@ function renderColors() {
     row.addEventListener("drop", (e) => {
       e.preventDefault();
       if (dragColorIdx < 0 || dragColorIdx === i) return;
+      commit(0);
       const [moved] = colors.splice(dragColorIdx, 1);
       colors.splice(i, 0, moved);
       dragColorIdx = -1;
@@ -641,6 +959,7 @@ function renderColors() {
     del.textContent = "✕";
     del.title = "Remove this color";
     pick.addEventListener("input", () => {
+      commit(600);
       colors[i] = pick.value;
       hex.value = pick.value;
       scheduleAll();
@@ -648,6 +967,7 @@ function renderColors() {
     hex.addEventListener("change", () => {
       const v = hex.value.trim();
       if (/^#[0-9a-fA-F]{6}$/.test(v)) {
+        commit(0);
         colors[i] = v;
         pick.value = v;
         scheduleAll();
@@ -657,6 +977,7 @@ function renderColors() {
     });
     del.addEventListener("click", () => {
       if (colors.length <= 1) return;
+      commit(0);
       colors.splice(i, 1);
       renderColors();
       scheduleAll();
@@ -667,8 +988,16 @@ function renderColors() {
 }
 
 wireControls();
+DEFAULT_DOC = docState();
+try {
+  const saved = localStorage.getItem(DOC_KEY);
+  if (saved) applyDocRaw(saved);
+} catch {
+  // A corrupt autosave must never brick the window; defaults stand.
+}
 renderColors();
-$("dz-n-row").hidden = true;
+renderRecent();
+syncControls();
 fitCanvas();
 refreshPlan();
 refreshStill();

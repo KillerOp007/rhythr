@@ -12,6 +12,12 @@
   display: flex; flex-direction: column; gap: 0.5rem;
 }
 #dz-canvas-box { flex: 1 1 60%; min-height: 0; position: relative; }
+#dz-view-reset {
+  position: absolute; top: 8px; right: 8px; z-index: 2;
+  opacity: 0.75;
+}
+#dz-doc-actions { display: flex; gap: 0.4rem; }
+#dz-recent { width: 100%; margin-top: 0.35rem; }
 #dz-canvas {
   position: absolute; inset: 0; width: 100%; height: 100%;
   background: var(--panel); border: 1px solid var(--border);

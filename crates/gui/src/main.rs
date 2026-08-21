@@ -4611,6 +4611,33 @@ async fn designer_preview(
     .map_err(err_str)?
 }
 
+/// Saves the EDITABLE design document (the designer's own state, not the
+/// baked mesh) so a note can be reopened and reworked any time. Plain
+/// JSON on disk, picked through the save dialog.
+#[tauri::command]
+async fn designer_doc_save(path: String, json: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        std::fs::write(&path, json.as_bytes()).map_err(|e| e.to_string())?;
+        Ok(path)
+    })
+    .await
+    .map_err(err_str)?
+}
+
+/// Loads a design document saved by [`designer_doc_save`].
+#[tauri::command]
+async fn designer_doc_load(path: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let data = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        // A quick shape check so a wrong file errors here instead of
+        // half-applying in the editor.
+        serde_json::from_str::<serde_json::Value>(&data).map_err(|e| e.to_string())?;
+        Ok(data)
+    })
+    .await
+    .map_err(err_str)?
+}
+
 /// Writes the designed note as a complete .rhs pack at `path` (picked by
 /// the user through the save dialog). Loadable by rhythr and importable
 /// by the game, mtl always bundled.
@@ -6120,6 +6147,8 @@ fn main() {
             open_designer_window,
             hitsound_preview,
             designer_outline,
+            designer_doc_save,
+            designer_doc_load,
             designer_preview,
             designer_export,
             set_clip,
