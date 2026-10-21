@@ -682,7 +682,9 @@ impl HudState {
 /// through a 100%-accuracy run on another). We model that shape with a
 /// cubic above 90% and normalise it to the replay's stored final RP, so a
 /// constant-accuracy run shows a constant value and every run ends exactly
-/// on its real RP.
+/// on its real RP. The estimate is capped at that stored RP: early in a run
+/// the accuracy is above its final value, and the normalised curve would
+/// otherwise overshoot what the map can award (312 RP showed as 680).
 fn live_rp(final_rp: f32, acc_now_pct: f32, acc_final_pct: f32) -> f32 {
     fn curve(acc: f32) -> f32 {
         ((acc - 90.0) / 10.0).max(0.0).powi(3)
@@ -691,7 +693,7 @@ fn live_rp(final_rp: f32, acc_now_pct: f32, acc_final_pct: f32) -> f32 {
     if denom <= 1e-6 || final_rp <= 0.0 {
         return final_rp.max(0.0);
     }
-    final_rp * curve(acc_now_pct) / denom
+    (final_rp * curve(acc_now_pct) / denom).min(final_rp)
 }
 
 /// Linear-interpolated health (0..1) at `song_time_ms` from the frame stream.
@@ -1496,9 +1498,10 @@ mod tests {
         assert!((live_rp(78.0, 100.0, 100.0) - 78.0).abs() < 1e-3);
         // At the end the value is exactly the stored RP.
         assert!((live_rp(20.0, 98.1775, 98.1775) - 20.0).abs() < 1e-3);
-        // Higher current accuracy than final → higher live value; below 90%
+        // Higher current accuracy than final is capped at the stored RP; below 90%
         // it bottoms out at zero (footage: 0 RP at 92.31% early in a run).
-        assert!(live_rp(20.0, 100.0, 98.0) > 20.0);
+        assert_eq!(live_rp(20.0, 100.0, 98.0), 20.0);
+        assert!((live_rp(312.0, 100.0, 97.7127) - 312.0).abs() < 1e-3);
         assert_eq!(live_rp(20.0, 88.0, 98.0), 0.0);
         // Degenerate final accuracy doesn't divide by zero.
         assert_eq!(live_rp(5.0, 95.0, 85.0), 5.0);
