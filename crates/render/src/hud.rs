@@ -683,8 +683,10 @@ impl HudState {
 /// cubic above 90% and normalise it to the replay's stored final RP, so a
 /// constant-accuracy run shows a constant value and every run ends exactly
 /// on its real RP. The estimate is capped at that stored RP: early in a run
-/// the accuracy is above its final value, and the normalised curve would
-/// otherwise overshoot what the map can award (312 RP showed as 680).
+/// the accuracy is above its final value, where the curve has no
+/// calibration point, and extrapolating it overshot wildly (312 RP showed
+/// as 680). The stored RP is what THIS run earned at its final accuracy,
+/// not a map ceiling; it is simply the only trustworthy bound we have.
 fn live_rp(final_rp: f32, acc_now_pct: f32, acc_final_pct: f32) -> f32 {
     fn curve(acc: f32) -> f32 {
         ((acc - 90.0) / 10.0).max(0.0).powi(3)
@@ -1500,7 +1502,7 @@ mod tests {
         assert!((live_rp(20.0, 98.1775, 98.1775) - 20.0).abs() < 1e-3);
         // Higher current accuracy than final is capped at the stored RP; below 90%
         // it bottoms out at zero (footage: 0 RP at 92.31% early in a run).
-        assert_eq!(live_rp(20.0, 100.0, 98.0), 20.0);
+        assert!((live_rp(20.0, 100.0, 98.0) - 20.0).abs() < 1e-3);
         assert!((live_rp(312.0, 100.0, 97.7127) - 312.0).abs() < 1e-3);
         assert_eq!(live_rp(20.0, 88.0, 98.0), 0.0);
         // Degenerate final accuracy doesn't divide by zero.
