@@ -3,6 +3,17 @@
 rhythr is an unofficial community tool and is not affiliated with or
 endorsed by Rhythia or Capo Games.
 
+## v0.6.2 (2026-10-21)
+
+### Fixed
+
+- **The live RP readout no longer overshoots early in a run.** The
+  normalised accuracy curve has no calibration data above the run's
+  final accuracy, and extrapolating it there showed fantasy values
+  (a 312 RP run opened at 680). The estimate is now capped at the
+  RP stored in the replay. Thanks to @gerhaarrd for the first
+  outside contribution!
+
 ## v0.6.1 (2026-08-13)
 
 ### Rhythia Release 41
