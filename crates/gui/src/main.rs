@@ -4353,16 +4353,17 @@ async fn open_designer_window(app_handle: tauri::AppHandle) -> Result<(), String
                     // device that the next, new renderer would then reuse.
                     // The kit skin is prepared on this same renderer, so it
                     // must not outlive it either.
+                    // A poisoned lock is recovered as the previews do, so a
+                    // poisoned skin can never outlive its renderer.
                     let mut slot = app
                         .designer_renderer
                         .lock()
                         .unwrap_or_else(|p| p.into_inner());
-                    if let Ok(mut skin) = app.designer_skin.lock() {
-                        *skin = None;
-                    }
-                    if let Ok(mut skin) = app.kit_skin.lock() {
-                        *skin = None;
-                    }
+                    let mut designer_skin =
+                        app.designer_skin.lock().unwrap_or_else(|p| p.into_inner());
+                    *designer_skin = None;
+                    let mut kit_skin = app.kit_skin.lock().unwrap_or_else(|p| p.into_inner());
+                    *kit_skin = None;
                     *slot = None;
                 }
             }
@@ -4783,6 +4784,10 @@ async fn open_kit_window(app_handle: tauri::AppHandle) -> Result<(), String> {
         .min_inner_size(1000.0, 660.0)
         // The kit window takes no file drops, and HTML5 drag reorder needs the native handler off on Windows.
         .disable_drag_drop_handler()
+        // Tauri 2 installs no title handler, so the native title bar shows document.title (dirty mark, file name) only through this.
+        .on_document_title_changed(|w, title| {
+            let _ = w.set_title(&title);
+        })
         .build();
     if let Ok(w) = &built {
         // The prepared kit skin holds GPU textures; the window going away
@@ -4794,15 +4799,21 @@ async fn open_kit_window(app_handle: tauri::AppHandle) -> Result<(), String> {
                 if let Some(app) = handle.try_state::<App>() {
                     // Renderer first, then the skin: the preview's own lock
                     // order, so a frame in flight finishes before the skin
-                    // it is using goes.
+                    // it is using goes. A poisoned lock is recovered as the
+                    // previews do.
                     let mut slot = app
                         .designer_renderer
                         .lock()
                         .unwrap_or_else(|p| p.into_inner());
-                    if let Ok(mut skin) = app.kit_skin.lock() {
-                        *skin = None;
-                    }
+                    let mut kit_skin = app.kit_skin.lock().unwrap_or_else(|p| p.into_inner());
+                    *kit_skin = None;
                     if handle.get_webview_window("designer").is_none() {
+                        // A designer frame queued after its window's
+                        // Destroyed may have prepared a skin on this
+                        // renderer; it must not meet the next device.
+                        let mut designer_skin =
+                            app.designer_skin.lock().unwrap_or_else(|p| p.into_inner());
+                        *designer_skin = None;
                         *slot = None;
                     }
                 }

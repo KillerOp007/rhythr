@@ -137,23 +137,39 @@ pub fn build_design(design: &Design) -> Result<Built, String> {
     })
 }
 
+/// A loaded document: the design's JSON, and whether it came from the old
+/// designer's format (the editor then keeps no path, so a Save never
+/// overwrites the old file with the new format).
+#[derive(Serialize, Debug)]
+pub struct Loaded {
+    pub json: String,
+    pub migrated: bool,
+}
+
 /// A saved document: version 2 as is (re-serialised so the editor only
 /// ever sees serde's spelling), the old designer's format (it has a `P`
-/// key) migrates, anything else is not a design file. Returns the
-/// design's JSON.
-pub fn load_document(text: &str) -> Result<String, String> {
+/// key) migrates, anything else is not a design file.
+pub fn load_document(text: &str) -> Result<Loaded, String> {
     let value: serde_json::Value =
         serde_json::from_str(text).map_err(|e| format!("not a design file: {e}"))?;
     if value.get("version").and_then(|v| v.as_u64()) == Some(2) {
         let d: Design =
             serde_json::from_value(value).map_err(|e| format!("design file damaged: {e}"))?;
-        return serde_json::to_string(&d).map_err(|e| e.to_string());
+        let json = serde_json::to_string(&d).map_err(|e| e.to_string())?;
+        return Ok(Loaded {
+            json,
+            migrated: false,
+        });
     }
     if value.get("P").is_none() {
         return Err("not a design file: neither a kit design nor an old designer document".into());
     }
     let d = migrate::from_v1(text).map_err(|e| user_message(&e))?;
-    serde_json::to_string(&d).map_err(|e| e.to_string())
+    let json = serde_json::to_string(&d).map_err(|e| e.to_string())?;
+    Ok(Loaded {
+        json,
+        migrated: true,
+    })
 }
 
 /// The skin name the export accepts (letters, digits, spaces, `_`, `-`,
@@ -204,11 +220,11 @@ pub fn kit_default_doc() -> Result<String, String> {
 
 #[tauri::command]
 pub fn kit_migrate_v1(json: String) -> Result<String, String> {
-    load_document(&json)
+    load_document(&json).map(|l| l.json)
 }
 
 #[tauri::command]
-pub async fn kit_doc_load(path: String) -> Result<String, String> {
+pub async fn kit_doc_load(path: String) -> Result<Loaded, String> {
     join(
         tauri::async_runtime::spawn_blocking(move || {
             let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
@@ -319,13 +335,21 @@ mod tests {
     #[test]
     fn a_kit_file_loads_as_is_and_an_old_designer_file_migrates() {
         let kit = serde_json::to_string(&Design::default_note()).unwrap();
-        let back: Design = serde_json::from_str(&load_document(&kit).unwrap()).unwrap();
+        let back: Design = serde_json::from_str(&load_document(&kit).unwrap().json).unwrap();
         assert_eq!(back.parts[0].id, "p1");
+        assert!(
+            !load_document(&kit).unwrap().migrated,
+            "a v2 document is not a migration"
+        );
         // The old designer's document (the six-sided slider fixture).
         let v1 = OLD_DESIGNER_FIXTURE;
-        let d: Design = serde_json::from_str(&load_document(v1).unwrap()).unwrap();
+        let d: Design = serde_json::from_str(&load_document(v1).unwrap().json).unwrap();
         assert_eq!(d.version, 2);
         assert_eq!(d.parts.len(), 1);
+        assert!(
+            load_document(v1).unwrap().migrated,
+            "the v1 fixture is a migration"
+        );
         assert!(load_document("not json")
             .unwrap_err()
             .starts_with("not a design file"));
@@ -338,6 +362,30 @@ mod tests {
         assert!(load_document("{\"version\":3}")
             .unwrap_err()
             .starts_with("not a design file"));
+    }
+
+    /// Every shape the editor's Add buttons write, inside a part exactly as
+    /// store.js's newPart builds it, must parse and evaluate: the kernel and
+    /// the editor share one document format.
+    #[test]
+    fn a_part_built_by_the_editor_parses() {
+        let shapes = [
+            r#"{"kind":"circle"}"#,
+            r#"{"kind":"square","rounding":0}"#,
+            r#"{"kind":"polygon","sides":6,"rounding":0}"#,
+            r#"{"kind":"star","points":5,"inner":0.5}"#,
+            r#"{"kind":"ring","thickness":0.28}"#,
+            r#"{"kind":"pill","aspect":0.5}"#,
+        ];
+        for shape in shapes {
+            let json = format!(
+                r##"{{"version":2,"name":"t","colors":["#ffffff"],"parts":[{{"id":"p1","name":"Part","visible":true,"locked":false,"shape":{shape},"transform":{{"x":0,"y":0,"w":1,"h":1,"rotation":0}},"mode":"add","depth":{{"front":0.1,"back":-0.1}},"material":"solid","effects":{{"waves":null,"round":null,"rim":null,"mirror":"none","repeat":null}}}}],"groups":[]}}"##
+            );
+            let d: Design = serde_json::from_str(&json).unwrap_or_else(|e| panic!("{shape}: {e}"));
+            let e = evaluate_design(&d).unwrap_or_else(|e| panic!("{shape}: {e}"));
+            assert_eq!(e.parts.len(), 1, "{shape}");
+            assert!(e.mesh_error.is_none(), "{shape}: {:?}", e.mesh_error);
+        }
     }
 
     #[test]
