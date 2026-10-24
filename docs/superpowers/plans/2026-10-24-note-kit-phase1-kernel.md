@@ -1049,11 +1049,26 @@ fn ngon_radius(sides: u32, rounding: f32, th: f32, offset: f32) -> f32 {
     ngon + (1.0 - ngon) * rounding.clamp(0.0, 1.0)
 }
 
+/// Scale a contour about the origin to half-extent 1. The turned 4-gon
+/// has its corners on the unit circle, which leaves its flat sides at
+/// 0.707; every other source reaches 1 on its own. A uniform scale keeps
+/// the rounding blend and the later wave phase untouched.
+fn fit_half_extent(mut c: Contour) -> Contour {
+    let m = c.iter().flatten().fold(0.0f32, |m, v| m.max(v.abs()));
+    for p in &mut c {
+        p[0] /= m;
+        p[1] /= m;
+    }
+    c
+}
+
 pub fn base_contours(shape: &Shape) -> Vec<Contour> {
     match shape {
         Shape::Circle => vec![polar(SAMPLES, |_| 1.0)],
         Shape::Square { rounding } => {
-            vec![polar(SAMPLES, |th| ngon_radius(4, *rounding, th, PI / 4.0))]
+            vec![fit_half_extent(polar(SAMPLES, |th| {
+                ngon_radius(4, *rounding, th, PI / 4.0)
+            }))]
         }
         Shape::Polygon { sides, rounding } => {
             // Vertex at angle zero, as the v1 editor drew its polygons;
