@@ -585,6 +585,15 @@ struct Shared {
             rhythia_render::renderer::SkinTextures,
         )>,
     >,
+    /// The kit window's prepared skin keyed by the design's JSON hash; it
+    /// shares `designer_renderer` so one wgpu device serves both windows.
+    kit_skin: Mutex<
+        Option<(
+            u64,
+            rhythia_render::config::SkinConfig,
+            rhythia_render::renderer::SkinTextures,
+        )>,
+    >,
     /// How many renders this process has run. The first one pays for GPU
     /// pipeline setup and cold file caches, which is a candidate for
     /// "slower right after a restart".
@@ -4333,6 +4342,11 @@ async fn open_designer_window(app_handle: tauri::AppHandle) -> Result<(), String
                     if let Ok(mut skin) = app.designer_skin.lock() {
                         *skin = None;
                     }
+                    // The renderer goes below; a kit skin prepared on it
+                    // must not outlive it.
+                    if let Ok(mut skin) = app.kit_skin.lock() {
+                        *skin = None;
+                    }
                     if let Ok(mut slot) = app.designer_renderer.lock() {
                         *slot = None;
                     }
@@ -4594,43 +4608,223 @@ async fn designer_preview(
             *cache = Some((hash, cfg, skin));
         }
         let (_, cfg, skin) = cache.as_ref().expect("just filled");
-        let params = rhythia_render::scene::SceneParams::from(cfg);
-        // The still is its own scene: three notes SIDE BY SIDE at staggered
-        // approach depths, so the first three colours all stay visible
-        // instead of queueing behind one grid cell the way the loop's
-        // snake does. The loop keeps the snake.
-        let (map, replay) = if still.unwrap_or(false) {
-            let mut map = rhythia_formats::map::Map::default();
-            for (i, t) in [360i64, 480, 620].into_iter().enumerate() {
-                map.notes.push(rhythia_formats::map::Note {
-                    time_ms: t,
-                    x: i as f32,
-                    y: 1.0,
-                });
-            }
-            (map, designer_scene().1)
-        } else {
-            designer_scene()
-        };
-        // The clock wraps over the loop; the map carries two laps so the
-        // seam always has notes in the approach window.
-        let t = if still.unwrap_or(false) {
-            300.0
-        } else {
-            500.0 + time_ms.rem_euclid(DESIGNER_LOOP_MS)
-        };
-        let px = renderer
-            .render_still(&params, cfg, skin, &replay, &map, t, None)
-            .map_err(|e| e.to_string())?;
-        let bytes = png_bytes(&px, DESIGNER_PREVIEW_W, DESIGNER_PREVIEW_H)?;
-        use base64::Engine as _;
-        Ok(format!(
-            "data:image/png;base64,{}",
-            base64::engine::general_purpose::STANDARD.encode(bytes)
-        ))
+        preview_frame(renderer, cfg, skin, time_ms, still.unwrap_or(false))
     })
     .await
     .map_err(err_str)?
+}
+
+/// One preview frame: the gameplay loop at `time_ms`, or the still scene
+/// (three notes side by side at staggered depths) when `still`. Shared by
+/// the old designer and the kit window so the two can never drift.
+fn preview_frame(
+    renderer: &rhythia_render::Renderer,
+    cfg: &rhythia_render::config::SkinConfig,
+    skin: &rhythia_render::renderer::SkinTextures,
+    time_ms: f64,
+    still: bool,
+) -> Result<String, String> {
+    let params = rhythia_render::scene::SceneParams::from(cfg);
+    // The still is its own scene: three notes SIDE BY SIDE at staggered
+    // approach depths, so the first three colours all stay visible
+    // instead of queueing behind one grid cell the way the loop's
+    // snake does. The loop keeps the snake.
+    let (map, replay) = if still {
+        let mut map = rhythia_formats::map::Map::default();
+        for (i, t) in [360i64, 480, 620].into_iter().enumerate() {
+            map.notes.push(rhythia_formats::map::Note {
+                time_ms: t,
+                x: i as f32,
+                y: 1.0,
+            });
+        }
+        (map, designer_scene().1)
+    } else {
+        designer_scene()
+    };
+    // The clock wraps over the loop; the map carries two laps so the
+    // seam always has notes in the approach window.
+    let t = if still {
+        300.0
+    } else {
+        500.0 + time_ms.rem_euclid(DESIGNER_LOOP_MS)
+    };
+    let px = renderer
+        .render_still(&params, cfg, skin, &replay, &map, t, None)
+        .map_err(|e| e.to_string())?;
+    let bytes = png_bytes(&px, DESIGNER_PREVIEW_W, DESIGNER_PREVIEW_H)?;
+    use base64::Engine as _;
+    Ok(format!(
+        "data:image/png;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    ))
+}
+
+/// The kit note as a prepared skin: the baked mesh as an obj, the
+/// design's colours, the preview camera (tele FOV, no cursor).
+fn kit_skin_for(
+    renderer: &rhythia_render::Renderer,
+    design: &rhythia_render::kit::doc::Design,
+) -> Result<
+    (
+        rhythia_render::config::SkinConfig,
+        rhythia_render::renderer::SkinTextures,
+    ),
+    String,
+> {
+    let ev = rhythia_render::kit::levels::evaluate(design)
+        .map_err(|e| kit_commands::user_message(&e))?;
+    let mesh =
+        rhythia_render::kit::mesh::build_mesh(&ev).map_err(|e| kit_commands::user_message(&e))?;
+    let obj = rhythia_render::kit::export::to_obj(&mesh, "preview");
+    let mut cfg = rhythia_render::config::SkinConfig {
+        note_mesh: Some(obj.into_bytes()),
+        ..Default::default()
+    };
+    let cs = rhythia_render::config::parse_colorset(&design.colors.join("\n"));
+    if !cs.is_empty() {
+        cfg.colorset = cs;
+    }
+    cfg.camera_fov = 34.0;
+    cfg.cursor_opacity = 0.0;
+    cfg.cursor_trail_enabled = false;
+    let skin = renderer.prepare_skin(&cfg);
+    Ok((cfg, skin))
+}
+
+/// Renders the kit's note through the same cached renderer and frame
+/// function as the old designer, and returns the picture as a data URL.
+#[tauri::command]
+async fn kit_preview(
+    state: tauri::State<'_, App>,
+    design: rhythia_render::kit::doc::Design,
+    time_ms: f64,
+    still: Option<bool>,
+) -> Result<String, String> {
+    let app = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let hash = {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            serde_json::to_string(&design)
+                .map_err(|e| e.to_string())?
+                .hash(&mut h);
+            h.finish()
+        };
+        let mut slot = app
+            .designer_renderer
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        if slot.is_none() {
+            let cfg = rhythia_render::config::SkinConfig::default();
+            *slot = Some(
+                rhythia_render::Renderer::new(
+                    DESIGNER_PREVIEW_W,
+                    DESIGNER_PREVIEW_H,
+                    cfg.hud_fonts().as_slice(),
+                )
+                .map_err(|e| e.to_string())?,
+            );
+        }
+        let renderer = slot.as_ref().expect("just created");
+        let mut cache = app.kit_skin.lock().unwrap_or_else(|p| p.into_inner());
+        let stale = cache.as_ref().map(|(h, _, _)| *h != hash).unwrap_or(true);
+        if stale {
+            let (cfg, skin) = kit_skin_for(renderer, &design)?;
+            *cache = Some((hash, cfg, skin));
+        }
+        let (_, cfg, skin) = cache.as_ref().expect("just filled");
+        preview_frame(renderer, cfg, skin, time_ms, still.unwrap_or(false))
+    })
+    .await
+    .map_err(err_str)?
+}
+
+/// Opens (or focuses) the note kit window: the part-based note editor,
+/// previewed through the shared renderer.
+#[tauri::command]
+async fn open_kit_window(app_handle: tauri::AppHandle) -> Result<(), String> {
+    use tauri::{WebviewUrl, WebviewWindowBuilder};
+    if let Some(w) = app_handle.get_webview_window("kit") {
+        let _ = w.unminimize();
+        let _ = w.show();
+        let _ = w.set_focus();
+        return Ok(());
+    }
+    // The main window owns the app: when it goes, this window goes too,
+    // instead of keeping the process alive headless.
+    if let Some(main) = app_handle.get_webview_window("main") {
+        let handle = app_handle.clone();
+        main.on_window_event(move |e| {
+            if matches!(e, tauri::WindowEvent::Destroyed) {
+                if let Some(w) = handle.get_webview_window("kit") {
+                    let _ = w.close();
+                }
+            }
+        });
+    }
+    let built = WebviewWindowBuilder::new(&app_handle, "kit", WebviewUrl::App("kit.html".into()))
+        .title("rhythr · Note Kit")
+        .inner_size(1380.0, 860.0)
+        .min_inner_size(1000.0, 660.0)
+        .build();
+    if let Ok(w) = &built {
+        // The prepared kit skin holds GPU textures; the window going away
+        // is the moment to let it go. The renderer is shared with the old
+        // designer, so it is released only when that window is gone too.
+        let handle = app_handle.clone();
+        w.on_window_event(move |e| {
+            if matches!(e, tauri::WindowEvent::Destroyed) {
+                if let Some(app) = handle.try_state::<App>() {
+                    // Renderer first, then the skin: the preview's own lock
+                    // order, so a frame in flight finishes before the skin
+                    // it is using goes.
+                    let mut slot = app
+                        .designer_renderer
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner());
+                    if let Ok(mut skin) = app.kit_skin.lock() {
+                        *skin = None;
+                    }
+                    if handle.get_webview_window("designer").is_none() {
+                        *slot = None;
+                    }
+                }
+            }
+        });
+    }
+    if let Err(e) = built {
+        // A double-click races the existence check against the build; the
+        // second build fails on the duplicate label. That is the focus
+        // case, not an error.
+        if let Some(w) = app_handle.get_webview_window("kit") {
+            let _ = w.set_focus();
+            return Ok(());
+        }
+        return Err(err_str(e));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod kit_preview_tests {
+    use super::*;
+
+    #[test]
+    fn a_kit_frame_renders_through_the_shared_path() {
+        let design = rhythia_render::kit::doc::Design::default_note();
+        let cfg = rhythia_render::config::SkinConfig::default();
+        let renderer = rhythia_render::Renderer::new(
+            DESIGNER_PREVIEW_W,
+            DESIGNER_PREVIEW_H,
+            cfg.hud_fonts().as_slice(),
+        )
+        .unwrap();
+        let (cfg, skin) = kit_skin_for(&renderer, &design).unwrap();
+        let url = preview_frame(&renderer, &cfg, &skin, 300.0, true).unwrap();
+        assert!(url.starts_with("data:image/png;base64,"));
+        assert!(url.len() > 1000);
+    }
 }
 
 /// Splits a kurbo path into flat contours at an adaptive tolerance, in
@@ -6073,6 +6267,7 @@ fn main() {
         render_thread: Mutex::new(None),
         designer_renderer: Mutex::new(None),
         designer_skin: Mutex::new(None),
+        kit_skin: Mutex::new(None),
         renders_done: std::sync::atomic::AtomicU64::new(0),
         last_render: Mutex::new(None),
     });
@@ -6425,6 +6620,8 @@ fn main() {
             kit_commands::kit_doc_load,
             kit_commands::kit_doc_save,
             kit_commands::kit_export,
+            kit_preview,
+            open_kit_window,
             designer_export,
             set_clip,
             clear_clip,
