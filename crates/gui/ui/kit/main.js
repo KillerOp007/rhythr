@@ -8,16 +8,33 @@ const $ = (id) => document.getElementById(id);
 async function boot() {
   const design = JSON.parse(await invoke("kit_default_doc"));
   const store = createStore(design);
+  // The startup evaluate below is explicit, so the subscriber must see the
+  // starting design as already sent.
+  let lastSerial = store.serialize();
+  // The status line is shared with the file actions. An evaluate clears only
+  // what an evaluate wrote, so a good result never wipes a "Saved" message.
+  let statusFromEval = false;
+  let evalText = "";
+  const evalStatus = (text) => {
+    statusFromEval = true;
+    evalText = text;
+    store.setStatus(text, true);
+  };
   const evaluate = coalesced(
     "kit_evaluate",
     (ev) => {
       store.setEvaluated(ev);
       $("kt-triangles").textContent = ev.triangles == null ? "" : `${ev.triangles} triangles`;
-      store.setStatus(ev.mesh_error || "", !!ev.mesh_error);
+      if (ev.mesh_error) {
+        evalStatus(ev.mesh_error);
+      } else if (statusFromEval) {
+        statusFromEval = false;
+        store.setStatus("", false);
+      }
     },
     (msg) => {
       store.setEvalError(msg);
-      store.setStatus(msg, true);
+      evalStatus(msg);
     },
   );
   const view = createView($("kt-canvas"), store, {
@@ -25,7 +42,6 @@ async function boot() {
     onZoom: (pct) => ($("kt-view-reset").textContent = `${pct}%`),
   });
   $("kt-view-reset").addEventListener("click", view.resetView);
-  let lastSerial = "";
   store.subscribe((s) => {
     view.draw();
     const serial = store.serialize();
@@ -33,6 +49,8 @@ async function boot() {
       lastSerial = serial;
       evaluate({ design: s.design });
     }
+    // Someone else wrote the status line: it is no longer ours to clear.
+    if (statusFromEval && s.status.text !== evalText) statusFromEval = false;
     const st = $("kt-status");
     st.textContent = s.status.text;
     st.classList.toggle("err", s.status.error);

@@ -194,12 +194,12 @@ export function createView(canvas, store, hooks) {
     if (sel && !sel.locked && s.evaluated) {
       const r = partRect(sel.transform, scale);
       if (rotateHandleHit(sel, scale, mx, my)) {
-        gesture = { kind: "rotate", id: sel.id };
+        gesture = { kind: "rotate", id: sel.id, scale };
         return;
       }
       const h = handleAt(r, wp, HANDLE_PX / unit(view, size));
       if (h) {
-        gesture = { kind: "scale", id: sel.id, handle: h, r };
+        gesture = { kind: "scale", id: sel.id, handle: h, r, scale };
         return;
       }
     }
@@ -227,7 +227,8 @@ export function createView(canvas, store, hooks) {
       return;
     }
     const wp = toWorld(view, size, mx, my);
-    const scale = store.state.evaluated ? store.state.evaluated.scale : 1;
+    // The normalisation factor is read once at pointerdown: it can change
+    // while a drag re-evaluates, and the handle must stay under the cursor.
     // Labels carry the part id: undo coalescing merges by label, and a
     // gesture on one part must never merge into a gesture on another.
     if (gesture.kind === "move") {
@@ -242,12 +243,12 @@ export function createView(canvas, store, hooks) {
       const keep = e.shiftKey && gesture.handle.length === 2;
       const { hw, hh } = scaleFrom(gesture.r, gesture.handle, wp, keep);
       store.updatePart(gesture.id, `scale:${gesture.id}`, (p) => {
-        p.transform.w = clamp(hw / scale, 0.02, 1.5);
-        p.transform.h = clamp(hh / scale, 0.02, 1.5);
+        p.transform.w = clamp(hw / gesture.scale, 0.02, 1.5);
+        p.transform.h = clamp(hh / gesture.scale, 0.02, 1.5);
       });
     } else if (gesture.kind === "rotate") {
       const part = store.part(gesture.id);
-      const r = partRect(part.transform, scale);
+      const r = partRect(part.transform, gesture.scale);
       let a = angleFrom(r, wp);
       if (e.shiftKey) a = Math.round(a / 15) * 15;
       a = ((((a + 180) % 360) + 360) % 360) - 180;
@@ -286,6 +287,10 @@ export function createView(canvas, store, hooks) {
   });
   window.addEventListener("keyup", (e) => {
     if (e.code === "Space") spaceDown = false;
+  });
+  // A Space release that lands in another window never reaches keyup here.
+  window.addEventListener("blur", () => {
+    spaceDown = false;
   });
 
   function resetView() {
