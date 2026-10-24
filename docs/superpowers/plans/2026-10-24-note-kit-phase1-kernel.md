@@ -2707,10 +2707,114 @@ If `triangulation_keeps_the_input_points` fails because the unchecked triangulat
 3. Cap winding is pinned by `caps_face_outward`. If the triangulation turns out to emit clockwise triangles for a counterclockwise contour, swap the two `extend_from_slice` lines in the cap loop (front caps reversed, back caps as is) and say so in the report; the test holds either way.
 4. Two outcomes must be reported as NEEDS_CONTEXT with the offending positions, never patched around: the validator rejecting cap triangles as degenerate (straight runs carry collinear points, which a triangulator may fan into zero-area triangles), and a watertight test failing with an open edge (a T-junction between faces split on only one side). The controller holds the fixes for both.
 
+**Amendment 2 (controller ruling after the review of 9e6b1f8; binding):**
+
+1. i_triangle 0.47 returns indices into its own sweep-sorted point order, not the input order. `triangulate_face` maps every sweep point back to the face's contour index by integer coordinate through the triangulator's own adapter (`raw.adapter.float_to_int`; the same function on the same floats, so the key is exact). Coincident contour points (a hole touching the outer loop at a vertex) are one node for the triangulator, so the point check is `sweep.len() == number of distinct keys`, indices are bounded by `sweep.len()`, and the first contour index wins, which is correct because the pool interns bit-identical positions to one index. Any other mismatch is `KitError::Invalid("triangulation changed the point set")`. `triangulation_keeps_the_input_points` also asserts that every triangle is counterclockwise against the face's own points and that the triangle areas sum to the face area.
+2. `geom::boolean` drops exactly collinear output vertices (i_overlay's default options), so a corner of one face can vanish as a collinear point on its neighbour and the two faces stop sharing edges one to one: both wall the seam, the mesh still validates, and T-junctions remain (two boxes flush at x = 0 with different depth bands). `subdivide` therefore runs its union, intersect and difference through a new `geom::boolean_keep_collinear(a: &Shapes, b: &Shapes, rule: OverlayRule) -> Result<Shapes, KitError>`, which is `boolean` with i_overlay's overlay options set to `preserve_input_collinear: true` and `preserve_output_collinear: true` (same adapter, same fill rule, same `tidy`); `boolean` itself is unchanged. The module doc claims only what holds: faces come from one lattice and keep every shared vertex.
+3. `emit_material` first checks `levels.len() == regions.len() + 1` and returns `KitError::Invalid("levels and intervals disagree".into())` otherwise.
+4. `subdivide` skips both overlays for a face whose bounding box does not meet the region's bounding box: the face goes to `next` unchanged with its membership bit clear.
+5. The validator's edge rule becomes balanced counts: for every directed edge used n times the reverse must be used n times; a reverse count of 0 is "open edge", a different nonzero count is "inconsistent orientation". Two faces of one material touching at a single vertex at the same depth share the vertical edge at the contact between four walls, which is closed and consistent (non-manifold) and draws fine in the game; the strict "exactly once" rule rejected that legitimate design with a generic error. `validate.rs` says why in a comment; its five tests stay as they are.
+6. A test-only helper and three tests in `mesh.rs`:
+
+```rust
+    /// True when, within one material, no vertex lies strictly inside
+    /// another triangle's edge at the same z: a seam between two faces must
+    /// be split identically on both sides. Exact on the lattice, quadratic,
+    /// for small test meshes only.
+    fn no_t_junctions(m: &KitMesh) -> bool {
+        let li = |v: f32| (v * crate::kit::KIT_SCALE).round() as i64;
+        let pts: Vec<([i64; 2], u32)> = m
+            .positions
+            .iter()
+            .map(|p| ([li(p[0]), li(p[1])], p[2].to_bits()))
+            .collect();
+        for range in [m.solid.clone(), m.glass.clone()] {
+            let idx = &m.indices[range];
+            let used: std::collections::BTreeSet<u32> = idx.iter().copied().collect();
+            for t in idx.chunks_exact(3) {
+                for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+                    let (pa, pb) = (pts[a as usize], pts[b as usize]);
+                    if pa.1 != pb.1 {
+                        continue;
+                    }
+                    for &v in &used {
+                        let pv = pts[v as usize];
+                        if v == a || v == b || pv.1 != pa.1 {
+                            continue;
+                        }
+                        let d = [pb.0[0] - pa.0[0], pb.0[1] - pa.0[1]];
+                        let e = [pv.0[0] - pa.0[0], pv.0[1] - pa.0[1]];
+                        let inside_x = pv.0[0] > pa.0[0].min(pb.0[0]) && pv.0[0] < pa.0[0].max(pb.0[0]);
+                        let inside_y = pv.0[1] > pa.0[1].min(pb.0[1]) && pv.0[1] < pa.0[1].max(pb.0[1]);
+                        if d[0] * e[1] - d[1] * e[0] == 0 && (inside_x || inside_y) {
+                            return false;
+                        }
+                    }
+                }
+            }
+        }
+        true
+    }
+
+    #[test]
+    fn flush_parts_at_different_depths_share_their_seam() {
+        // Two boxes flush at x = 0 with different depth bands. Without
+        // collinear preservation the seam's corners survive on one side
+        // only, both faces wall the whole seam and the mesh still
+        // validates: the wall area at x = 0 is the oracle (0.4, not 0.8).
+        let mut a = part("a", Shape::Square { rounding: 0.0 }, Mode::Add, 0.2, -0.2);
+        a.transform = Transform { x: -0.4, w: 0.4, h: 0.4, ..Transform::default() };
+        let mut c = part("c", Shape::Square { rounding: 0.0 }, Mode::Add, 0.0, -0.2);
+        c.transform = Transform { x: 0.3, w: 0.3, h: 0.8, ..Transform::default() };
+        let m = mesh_of(vec![a, c]);
+        let seam_area: f32 = m
+            .indices
+            .chunks_exact(3)
+            .map(|t| [m.positions[t[0] as usize], m.positions[t[1] as usize], m.positions[t[2] as usize]])
+            .filter(|p| p.iter().all(|v| v[0].abs() < 1e-6))
+            .map(|p| {
+                let u = [p[1][1] - p[0][1], p[1][2] - p[0][2]];
+                let v = [p[2][1] - p[0][1], p[2][2] - p[0][2]];
+                (u[0] * v[1] - u[1] * v[0]).abs() * 0.5
+            })
+            .sum();
+        assert!((seam_area - 0.4).abs() < 1e-3, "wall area at x = 0 is {seam_area}, expected 0.4");
+        assert!(no_t_junctions(&m), "a vertex sits inside another triangle's edge");
+    }
+
+    #[test]
+    fn flush_edges_collinear_with_a_neighbour_still_validate() {
+        // As above with the boxes' top edges collinear: the strict
+        // construction emitted one directed edge twice and failed a
+        // legitimate stepped design.
+        let mut a = part("a", Shape::Square { rounding: 0.0 }, Mode::Add, 0.2, -0.2);
+        a.transform = Transform { x: -0.4, y: 0.4, w: 0.4, h: 0.4, ..Transform::default() };
+        let mut c = part("c", Shape::Square { rounding: 0.0 }, Mode::Add, 0.0, -0.2);
+        c.transform = Transform { x: 0.3, w: 0.3, h: 0.8, ..Transform::default() };
+        let m = mesh_of(vec![a, c]);
+        validate(&m).unwrap();
+        assert!(no_t_junctions(&m));
+    }
+
+    #[test]
+    fn faces_touching_at_a_corner_are_a_closed_surface() {
+        // Two squares meeting at one vertex at the same depth: the vertical
+        // edge at the contact is shared by four walls, closed and
+        // consistent though non-manifold, and the game draws it fine.
+        let mut a = part("a", Shape::Square { rounding: 0.0 }, Mode::Add, 0.1, -0.1);
+        a.transform = Transform { x: -0.5, y: -0.5, w: 0.5, h: 0.5, ..Transform::default() };
+        let mut b = part("b", Shape::Square { rounding: 0.0 }, Mode::Add, 0.1, -0.1);
+        b.transform = Transform { x: 0.5, y: 0.5, w: 0.5, h: 0.5, ..Transform::default() };
+        let m = mesh_of(vec![a, b]);
+        validate(&m).unwrap();
+        assert!(no_t_junctions(&m));
+    }
+```
+
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `cargo test -p rhythia-render kit::mesh`
-Expected: 9 passed.
+Expected: 12 passed (and `kit::validate` still 5, `kit::geom` 9 or 10).
 
 - [ ] **Step 5: Commit**
 
