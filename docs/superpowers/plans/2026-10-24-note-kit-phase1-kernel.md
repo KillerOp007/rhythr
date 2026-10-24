@@ -2172,6 +2172,7 @@ mod tests {
         let mut m = cube();
         m.indices.truncate(m.indices.len() - 3);
         m.solid = 0..m.indices.len();
+        m.glass = m.indices.len()..m.indices.len();
         let e = validate(&m).unwrap_err();
         assert!(matches!(e, KitError::Invalid(ref s) if s.contains("open")), "{e}");
     }
@@ -2400,7 +2401,7 @@ mod tests {
             vec![[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [0.0, 0.5], [-1.0, 1.0]],
             vec![[-0.5, -0.5], [-0.5, 0.0], [0.0, 0.0], [0.0, -0.5]],
         ];
-        let (count, tris) = triangulate_face(&face);
+        let (count, tris) = triangulate_face(&face).unwrap();
         assert_eq!(count, 9);
         assert!(tris.iter().flatten().all(|&i| (i as usize) < 9));
         assert_eq!(tris.len(), 9 + 2 * 1 - 2, "n + 2h - 2 triangles for one hole");
@@ -2446,16 +2447,18 @@ mod tests {
         let fused = mesh_of(vec![a.clone(), b]);
         validate(&fused).unwrap();
         let single = mesh_of(vec![part("c", Shape::Circle, Mode::Add, 0.1, -0.3)]);
-        // Same geometry up to the extra level: a cap would double the count.
-        assert!((fused.indices.len() as i64 - single.indices.len() as i64).abs() < single.indices.len() as i64 / 2);
-        // No cap at the shared level: a cap triangle has all three
-        // vertices at that z, a wall triangle never does.
-        let caps_at_shared_level = fused
-            .indices
-            .chunks_exact(3)
-            .filter(|t| t.iter().all(|&i| (fused.positions[i as usize][2] + 0.1).abs() < 1e-6))
-            .count();
-        assert_eq!(caps_at_shared_level, 0);
+        // A cap triangle has all three vertices at one z, a wall triangle
+        // never does. The outer caps match the single slab's, and the
+        // shared level has none.
+        let caps_at = |m: &KitMesh, z: f32| {
+            m.indices
+                .chunks_exact(3)
+                .filter(|t| t.iter().all(|&i| (m.positions[i as usize][2] - z).abs() < 1e-6))
+                .count()
+        };
+        assert_eq!(caps_at(&fused, 0.1), caps_at(&single, 0.1));
+        assert_eq!(caps_at(&fused, -0.3), caps_at(&single, -0.3));
+        assert_eq!(caps_at(&fused, -0.1), 0);
     }
 
     #[test]
@@ -2479,6 +2482,41 @@ mod tests {
         let m1 = build_mesh(&evaluate(&d).unwrap()).unwrap();
         let m2 = build_mesh(&evaluate(&d).unwrap()).unwrap();
         assert_eq!(m1, m2);
+    }
+
+    #[test]
+    fn caps_face_outward() {
+        // Front caps at +z wind counterclockwise seen from +z, back caps
+        // clockwise; the walls then follow from the validator's edge pairing.
+        let m = mesh_of(vec![part("a", Shape::Circle, Mode::Add, 0.1, -0.1)]);
+        let area = |t: &[u32]| {
+            let p = |i: u32| m.positions[i as usize];
+            let (a, b, c) = (p(t[0]), p(t[1]), p(t[2]));
+            (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+        };
+        let mut front = 0;
+        let mut back = 0;
+        for t in m.indices.chunks_exact(3) {
+            let zs: Vec<f32> = t.iter().map(|&i| m.positions[i as usize][2]).collect();
+            if zs.iter().all(|z| (*z - 0.1).abs() < 1e-6) {
+                assert!(area(t) > 0.0, "front cap triangle {t:?} winds clockwise");
+                front += 1;
+            } else if zs.iter().all(|z| (*z + 0.1).abs() < 1e-6) {
+                assert!(area(t) < 0.0, "back cap triangle {t:?} winds counterclockwise");
+                back += 1;
+            }
+        }
+        assert!(front > 200 && back > 200);
+    }
+
+    #[test]
+    fn more_than_64_intervals_is_a_clear_error() {
+        let regions: Vec<Shapes> = vec![Vec::new(); 65];
+        let levels = vec![0.0f32; 66];
+        let mut pool = Pool { positions: Vec::new(), index: HashMap::new() };
+        let mut out = Vec::new();
+        let e = emit_material(&regions, &levels, &mut pool, &mut out).unwrap_err();
+        assert!(matches!(e, KitError::Invalid(ref s) if s.contains("64")), "{e}");
     }
 }
 ```
@@ -2662,10 +2700,17 @@ Add `pub mod mesh;` to `kit/mod.rs`.
 
 If `triangulation_keeps_the_input_points` fails because the unchecked triangulation reorders or drops points, switch `triangulate_face` to `i_triangle::float::triangulator::Triangulator` with validation disabled per its docs (the `unchecked` path is documented as "without validation or simplification"; the test exists precisely to catch a change in that contract). If `crossing_bands_stay_watertight` fails with an open edge, print the offending edge's two positions: the cause will be two faces disagreeing on a shared vertex, which means an overlay did not get identical inputs; fix by feeding the SAME `Shapes` value to both the intersect and the difference call (the code above already does).
 
+**Amendment (controller ruling before dispatch; binding where it differs from the Step 3 code above):**
+
+1. `triangulate_face` returns `Result<(usize, Vec<[u32; 3]>), KitError>`. A point count that differs from the input, or an index at or beyond it, is `Err(KitError::Invalid("triangulation changed the point set".into()))`, not a debug assertion: a release build must never emit indices into a different point set. `subdivide` propagates the error with `?` (a loop instead of the `map` closure).
+2. The membership mask is a `u64`, so `emit_material` starts with `if regions.len() > 64 { return Err(KitError::Invalid(format!("{} depth intervals, at most 64", regions.len()))); }`. A design with that many bands is a corrupt file, and a shift by 64 or more would panic.
+3. Cap winding is pinned by `caps_face_outward`. If the triangulation turns out to emit clockwise triangles for a counterclockwise contour, swap the two `extend_from_slice` lines in the cap loop (front caps reversed, back caps as is) and say so in the report; the test holds either way.
+4. Two outcomes must be reported as NEEDS_CONTEXT with the offending positions, never patched around: the validator rejecting cap triangles as degenerate (straight runs carry collinear points, which a triangulator may fan into zero-area triangles), and a watertight test failing with an open edge (a T-junction between faces split on only one side). The controller holds the fixes for both.
+
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `cargo test -p rhythia-render kit::mesh`
-Expected: 7 passed.
+Expected: 9 passed.
 
 - [ ] **Step 5: Commit**
 
