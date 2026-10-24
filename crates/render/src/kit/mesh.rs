@@ -2,10 +2,13 @@
 //! subdivided into faces of constant membership across all intervals,
 //! so every cap is a face triangulated once and lifted to a level, and
 //! every wall sits on a face edge whose two sides disagree about an
-//! interval. All faces come from the same fixed-scale kernel, so they
-//! share boundary vertices bit for bit and no T-junction can exist.
+//! interval. All faces come from one lattice and from overlays that keep
+//! every collinear vertex, so a vertex one face has on a seam is kept by
+//! its neighbour and both sides split the seam identically. That is what
+//! lets walls pair edge for edge; the validator checks the result and the
+//! tests check for T-junctions directly.
 
-use crate::kit::geom::{boolean, is_empty, Contour, OverlayRule, Shapes};
+use crate::kit::geom::{boolean_keep_collinear, is_empty, Contour, OverlayRule, Shapes};
 use crate::kit::levels::Evaluation;
 use crate::kit::validate::{validate, KitMesh};
 use crate::kit::KitError;
@@ -24,16 +27,20 @@ struct FaceInfo {
 }
 
 /// Triangulates one face. Returns the point count and triangles whose
-/// indices address the face's points in contour order; no points are
-/// added or dropped (unchecked triangulation does not simplify). A
-/// triangulation that changed the point set is an error in every build,
-/// because its indices would address the wrong points.
+/// indices address the face's points in contour order. Unchecked
+/// triangulation does not simplify: it adds no point and drops none,
+/// except that coincident contour points (a hole touching the outer loop
+/// at a vertex) are one node for it. A triangulation that changed the
+/// point set is an error in every build, because its indices would
+/// address the wrong points.
 ///
 /// The triangulator sorts its vertices into sweep order, so the indices
 /// it returns address that order, not the contour order. Each of its
 /// integer points is therefore matched back to the face's own point with
 /// the same integer coordinates (the adapter is the one the triangulator
-/// converted with), which keeps every position bit for bit.
+/// converted with), which keeps every position bit for bit. Of several
+/// coincident contour points the first wins; the pool interns equal
+/// positions to one vertex, so which one is used cannot show.
 pub(crate) fn triangulate_face(face: &Face) -> Result<(usize, Vec<[u32; 3]>), KitError> {
     let changed = || KitError::Invalid("triangulation changed the point set".into());
     let count: usize = face.iter().map(|c| c.len()).sum();
@@ -43,7 +50,7 @@ pub(crate) fn triangulate_face(face: &Face) -> Result<(usize, Vec<[u32; 3]>), Ki
         slot.entry(raw.adapter.float_to_int(p)).or_insert(i as u32);
     }
     let sweep = raw.raw.points();
-    if sweep.len() != count {
+    if sweep.len() != slot.len() {
         return Err(changed());
     }
     let own: Vec<u32> = sweep
@@ -51,7 +58,7 @@ pub(crate) fn triangulate_face(face: &Face) -> Result<(usize, Vec<[u32; 3]>), Ki
         .map(|q| slot.get(q).copied().ok_or_else(changed))
         .collect::<Result<_, _>>()?;
     let indices = raw.triangle_indices::<u32>();
-    if indices.iter().any(|&i| i as usize >= count) {
+    if indices.iter().any(|&i| i as usize >= sweep.len()) {
         return Err(changed());
     }
     let tris = indices
@@ -59,6 +66,20 @@ pub(crate) fn triangulate_face(face: &Face) -> Result<(usize, Vec<[u32; 3]>), Ki
         .map(|t| [own[t[0] as usize], own[t[1] as usize], own[t[2] as usize]])
         .collect();
     Ok((count, tris))
+}
+
+/// [min x, min y, max x, max y] over the points, None when there are none.
+fn bounds<'a>(pts: impl Iterator<Item = &'a [f32; 2]>) -> Option<[f32; 4]> {
+    pts.fold(None, |b, p| {
+        let [x0, y0, x1, y1] = b.unwrap_or([p[0], p[1], p[0], p[1]]);
+        Some([x0.min(p[0]), y0.min(p[1]), x1.max(p[0]), y1.max(p[1])])
+    })
+}
+
+/// True when two boxes share no point at all; boxes that only touch are
+/// not apart, because a contact can still put a vertex on a seam.
+fn apart(a: [f32; 4], b: [f32; 4]) -> bool {
+    a[2] < b[0] || b[2] < a[0] || a[3] < b[1] || b[3] < a[1]
 }
 
 fn subdivide(regions: &[Shapes]) -> Result<Vec<FaceInfo>, KitError> {
@@ -70,7 +91,7 @@ fn subdivide(regions: &[Shapes]) -> Result<Vec<FaceInfo>, KitError> {
         all = if all.is_empty() {
             r.clone()
         } else {
-            boolean(&all, r, OverlayRule::Union)?
+            boolean_keep_collinear(&all, r, OverlayRule::Union)?
         };
     }
     let mut faces: Vec<(Face, u64)> = all.into_iter().map(|f| (f, 0u64)).collect();
@@ -78,13 +99,20 @@ fn subdivide(regions: &[Shapes]) -> Result<Vec<FaceInfo>, KitError> {
         if is_empty(r) {
             continue;
         }
+        let Some(region_box) = bounds(r.iter().flatten().flatten()) else {
+            continue;
+        };
         let mut next: Vec<(Face, u64)> = Vec::new();
         for (face, members) in faces {
+            if bounds(face.iter().flatten()).is_some_and(|fb| apart(fb, region_box)) {
+                next.push((face, members));
+                continue;
+            }
             let one: Shapes = vec![face];
-            for f in boolean(&one, r, OverlayRule::Intersect)? {
+            for f in boolean_keep_collinear(&one, r, OverlayRule::Intersect)? {
                 next.push((f, members | (1u64 << k)));
             }
-            for f in boolean(&one, r, OverlayRule::Difference)? {
+            for f in boolean_keep_collinear(&one, r, OverlayRule::Difference)? {
                 next.push((f, members));
             }
         }
@@ -129,6 +157,9 @@ fn emit_material(
     pool: &mut Pool,
     out: &mut Vec<u32>,
 ) -> Result<(), KitError> {
+    if levels.len() != regions.len() + 1 {
+        return Err(KitError::Invalid("levels and intervals disagree".into()));
+    }
     if regions.len() > 64 {
         return Err(KitError::Invalid(format!(
             "{} depth intervals, at most 64",
@@ -447,6 +478,146 @@ mod tests {
             }
         }
         assert!(front > 200 && back > 200);
+    }
+
+    /// True when, within one material, no vertex lies strictly inside
+    /// another triangle's edge at the same z: a seam between two faces must
+    /// be split identically on both sides. Exact on the lattice, quadratic,
+    /// for small test meshes only.
+    fn no_t_junctions(m: &KitMesh) -> bool {
+        let li = |v: f32| (v * crate::kit::KIT_SCALE).round() as i64;
+        let pts: Vec<([i64; 2], u32)> = m
+            .positions
+            .iter()
+            .map(|p| ([li(p[0]), li(p[1])], p[2].to_bits()))
+            .collect();
+        for range in [m.solid.clone(), m.glass.clone()] {
+            let idx = &m.indices[range];
+            let used: std::collections::BTreeSet<u32> = idx.iter().copied().collect();
+            for t in idx.chunks_exact(3) {
+                for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+                    let (pa, pb) = (pts[a as usize], pts[b as usize]);
+                    if pa.1 != pb.1 {
+                        continue;
+                    }
+                    for &v in &used {
+                        let pv = pts[v as usize];
+                        if v == a || v == b || pv.1 != pa.1 {
+                            continue;
+                        }
+                        let d = [pb.0[0] - pa.0[0], pb.0[1] - pa.0[1]];
+                        let e = [pv.0[0] - pa.0[0], pv.0[1] - pa.0[1]];
+                        let inside_x =
+                            pv.0[0] > pa.0[0].min(pb.0[0]) && pv.0[0] < pa.0[0].max(pb.0[0]);
+                        let inside_y =
+                            pv.0[1] > pa.0[1].min(pb.0[1]) && pv.0[1] < pa.0[1].max(pb.0[1]);
+                        if d[0] * e[1] - d[1] * e[0] == 0 && (inside_x || inside_y) {
+                            return false;
+                        }
+                    }
+                }
+            }
+        }
+        true
+    }
+
+    #[test]
+    fn flush_parts_at_different_depths_share_their_seam() {
+        // Two boxes flush at x = 0 with different depth bands. Without
+        // collinear preservation the seam's corners survive on one side
+        // only, both faces wall the whole seam and the mesh still
+        // validates: the wall area at x = 0 is the oracle (0.4, not 0.8).
+        let mut a = part("a", Shape::Square { rounding: 0.0 }, Mode::Add, 0.2, -0.2);
+        a.transform = Transform {
+            x: -0.4,
+            w: 0.4,
+            h: 0.4,
+            ..Transform::default()
+        };
+        let mut c = part("c", Shape::Square { rounding: 0.0 }, Mode::Add, 0.0, -0.2);
+        c.transform = Transform {
+            x: 0.3,
+            w: 0.3,
+            h: 0.8,
+            ..Transform::default()
+        };
+        let m = mesh_of(vec![a, c]);
+        let seam_area: f32 = m
+            .indices
+            .chunks_exact(3)
+            .map(|t| {
+                [
+                    m.positions[t[0] as usize],
+                    m.positions[t[1] as usize],
+                    m.positions[t[2] as usize],
+                ]
+            })
+            .filter(|p| p.iter().all(|v| v[0].abs() < 1e-6))
+            .map(|p| {
+                let u = [p[1][1] - p[0][1], p[1][2] - p[0][2]];
+                let v = [p[2][1] - p[0][1], p[2][2] - p[0][2]];
+                (u[0] * v[1] - u[1] * v[0]).abs() * 0.5
+            })
+            .sum();
+        assert!(
+            (seam_area - 0.4).abs() < 1e-3,
+            "wall area at x = 0 is {seam_area}, expected 0.4"
+        );
+        assert!(
+            no_t_junctions(&m),
+            "a vertex sits inside another triangle's edge"
+        );
+    }
+
+    #[test]
+    fn flush_edges_collinear_with_a_neighbour_still_validate() {
+        // As above with the boxes' top edges collinear: the strict
+        // construction emitted one directed edge twice and failed a
+        // legitimate stepped design.
+        let mut a = part("a", Shape::Square { rounding: 0.0 }, Mode::Add, 0.2, -0.2);
+        a.transform = Transform {
+            x: -0.4,
+            y: 0.4,
+            w: 0.4,
+            h: 0.4,
+            ..Transform::default()
+        };
+        let mut c = part("c", Shape::Square { rounding: 0.0 }, Mode::Add, 0.0, -0.2);
+        c.transform = Transform {
+            x: 0.3,
+            w: 0.3,
+            h: 0.8,
+            ..Transform::default()
+        };
+        let m = mesh_of(vec![a, c]);
+        validate(&m).unwrap();
+        assert!(no_t_junctions(&m));
+    }
+
+    #[test]
+    fn faces_touching_at_a_corner_are_a_closed_surface() {
+        // Two squares meeting at one vertex at the same depth: the vertical
+        // edge at the contact is shared by four walls, closed and
+        // consistent though non-manifold, and the game draws it fine.
+        let mut a = part("a", Shape::Square { rounding: 0.0 }, Mode::Add, 0.1, -0.1);
+        a.transform = Transform {
+            x: -0.5,
+            y: -0.5,
+            w: 0.5,
+            h: 0.5,
+            ..Transform::default()
+        };
+        let mut b = part("b", Shape::Square { rounding: 0.0 }, Mode::Add, 0.1, -0.1);
+        b.transform = Transform {
+            x: 0.5,
+            y: 0.5,
+            w: 0.5,
+            h: 0.5,
+            ..Transform::default()
+        };
+        let m = mesh_of(vec![a, b]);
+        validate(&m).unwrap();
+        assert!(no_t_junctions(&m));
     }
 
     #[test]

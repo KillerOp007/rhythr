@@ -74,15 +74,22 @@ fn check_range(mesh: &KitMesh, range: &Range<usize>, label: &str) -> Result<(), 
             *directed.entry((x, y)).or_insert(0) += 1;
         }
     }
+    // Balanced counts rather than "exactly once": two faces of one
+    // material that touch at a single vertex at the same depth share the
+    // vertical edge at the contact between four walls. That surface is
+    // closed and consistently oriented, merely non-manifold, and the game
+    // draws it fine, so every directed edge only has to be matched by as
+    // many opposite uses.
     for (&(x, y), &n) in &directed {
-        if n != 1 {
-            return Err(invalid(format!(
-                "{label}: edge {x}-{y} used {n} times in one direction (inconsistent orientation)"
-            )));
-        }
-        if directed.get(&(y, x)).copied().unwrap_or(0) != 1 {
+        let r = directed.get(&(y, x)).copied().unwrap_or(0);
+        if r == 0 {
             return Err(invalid(format!(
                 "{label}: open edge {x}-{y} (surface not closed)"
+            )));
+        }
+        if r != n {
+            return Err(invalid(format!(
+                "{label}: edge {x}-{y} used {n} times but {y}-{x} {r} times (inconsistent orientation)"
             )));
         }
     }

@@ -10,7 +10,8 @@ use crate::kit::{KitError, KIT_SCALE};
 pub use i_overlay::core::fill_rule::FillRule;
 use i_overlay::core::overlay::ShapeType;
 pub use i_overlay::core::overlay_rule::OverlayRule;
-use i_overlay::float::overlay::FloatOverlay;
+use i_overlay::core::solver::Solver;
+use i_overlay::float::overlay::{FloatOverlay, OverlayOptions};
 use i_overlay::i_float::adapter::FloatPointAdapter;
 use i_overlay::i_float::float::rect::FloatRect;
 use i_overlay::mesh::outline::offset::OutlineOffset;
@@ -97,14 +98,30 @@ fn overlay(
     rule: OverlayRule,
     fill: FillRule,
 ) -> Result<Shapes, KitError> {
+    overlay_with(subject, clip, rule, fill, false)
+}
+
+/// `keep_collinear` sets both of i_overlay's collinear options (input and
+/// output); false is exactly the library default every other caller uses.
+fn overlay_with(
+    subject: &Shapes,
+    clip: &Shapes,
+    rule: OverlayRule,
+    fill: FillRule,
+    keep_collinear: bool,
+) -> Result<Shapes, KitError> {
     check_range(subject.iter().flatten().flatten())?;
     check_range(clip.iter().flatten().flatten())?;
     let points = subject.iter().flatten().map(|c| c.len()).sum::<usize>()
         + clip.iter().flatten().map(|c| c.len()).sum::<usize>();
-    let out: Shapes = FloatOverlay::with_adapter(adapter(), points.max(16))
-        .unsafe_add_source(subject, ShapeType::Subject)
-        .unsafe_add_source(clip, ShapeType::Clip)
-        .overlay(rule, fill);
+    let mut options = OverlayOptions::default();
+    options.preserve_input_collinear = keep_collinear;
+    options.preserve_output_collinear = keep_collinear;
+    let out: Shapes =
+        FloatOverlay::new_custom(adapter(), options, Solver::default(), points.max(16))
+            .unsafe_add_source(subject, ShapeType::Subject)
+            .unsafe_add_source(clip, ShapeType::Clip)
+            .overlay(rule, fill);
     Ok(tidy(out))
 }
 
@@ -133,6 +150,21 @@ pub fn boolean(a: &Shapes, b: &Shapes, rule: OverlayRule) -> Result<Shapes, KitE
         return Ok(Vec::new());
     }
     overlay(a, b, rule, FillRule::NonZero)
+}
+
+/// `boolean` with i_overlay's collinear options on. The default drops an
+/// exactly collinear vertex from the output, so a corner that one face
+/// keeps can vanish from its neighbour and the two stop sharing edges one
+/// to one. Faces that must keep every shared vertex come from here.
+pub fn boolean_keep_collinear(
+    a: &Shapes,
+    b: &Shapes,
+    rule: OverlayRule,
+) -> Result<Shapes, KitError> {
+    if a.is_empty() && b.is_empty() {
+        return Ok(Vec::new());
+    }
+    overlay_with(a, b, rule, FillRule::NonZero, true)
 }
 
 /// Grows (delta > 0) or shrinks (delta < 0) a region, round joins. A
@@ -206,6 +238,25 @@ mod tests {
         assert_eq!(d[0].len(), 2, "outer plus one hole");
         let u = boolean(&a, &b, OverlayRule::Union).unwrap();
         assert_eq!(u[0].len(), 1);
+    }
+
+    #[test]
+    fn keep_collinear_variant_keeps_a_vertex_the_default_drops() {
+        // A square with an extra vertex in the middle of its bottom side.
+        let side: Shapes = vec![vec![vec![
+            [-1.0, -1.0],
+            [0.0, -1.0],
+            [1.0, -1.0],
+            [1.0, 1.0],
+            [-1.0, 1.0],
+        ]]];
+        let none = Shapes::new();
+        let kept = boolean_keep_collinear(&side, &none, OverlayRule::Union).unwrap();
+        assert_eq!(kept.len(), 1);
+        assert!(kept[0][0].contains(&[0.0, -1.0]), "{:?}", kept[0][0]);
+        let dropped = boolean(&side, &none, OverlayRule::Union).unwrap();
+        assert!(!dropped[0][0].contains(&[0.0, -1.0]), "{:?}", dropped[0][0]);
+        assert_eq!(dropped[0][0].len(), 4);
     }
 
     #[test]
