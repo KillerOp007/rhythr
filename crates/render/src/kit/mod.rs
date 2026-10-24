@@ -38,4 +38,6 @@ pub enum KitError {
     Invalid(String),
     #[error("too many triangles: {0} (limit {MAX_TRIANGLES})")]
     Budget(usize),
+    #[error("part too complex: {0} points in {1} contours")]
+    Complexity(usize, usize),
 }
