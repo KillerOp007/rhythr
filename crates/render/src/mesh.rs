@@ -1,9 +1,18 @@
 //! Minimal Wavefront `.obj` loader for the note meshes.
 //!
-//! Only positions and triangulated faces are needed: the note look comes
-//! from the fragment shader (glow/edge), not from normals or UVs. Faces
-//! with more than three vertices are fan-triangulated. Negative (relative)
-//! indices are supported, as Blender emits them.
+//! Only positions, triangulated faces and the material boundaries are
+//! needed: the note look comes from the fragment shader (glow/edge), not
+//! from normals or UVs. Faces with more than three vertices are
+//! fan-triangulated. Negative (relative) indices are supported, as Blender
+//! emits them.
+//!
+//! Materials matter in one way only, as in the game: the first `usemtl` of
+//! the file is the opaque surface, every material after it is translucent
+//! at one fixed alpha ([`crate::kit::GLASS_ALPHA`]). The alpha therefore
+//! lives on the vertex, and a position used under two materials becomes two
+//! vertices.
+
+use std::collections::HashMap;
 
 use crate::Error;
 
@@ -11,6 +20,9 @@ use crate::Error;
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Vertex {
     pub pos: [f32; 3],
+    /// Per-vertex opacity factor: 1.0 for the first material, the game's
+    /// fixed glass alpha for every material after it.
+    pub alpha: f32,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -22,7 +34,13 @@ pub struct Mesh {
 impl Mesh {
     pub fn from_obj_str(src: &str) -> Result<Mesh, Error> {
         let mut positions: Vec<[f32; 3]> = Vec::new();
+        let mut vertices: Vec<Vertex> = Vec::new();
         let mut indices: Vec<u32> = Vec::new();
+        // The material in force (index into `seen`, in order of first
+        // appearance) and the vertex for each (position, material) pair.
+        let mut material: usize = 0;
+        let mut seen: Vec<String> = Vec::new();
+        let mut lookup: HashMap<(u32, usize), u32> = HashMap::new();
 
         // Resolves an .obj vertex reference ("v/vt/vn"), 1-based or negative.
         let resolve = |token: &str, count: usize| -> Result<u32, Error> {
@@ -46,10 +64,33 @@ impl Mesh {
                     }
                     positions.push([coords[0], coords[1], coords[2]]);
                 }
+                Some("usemtl") => {
+                    let name = it.collect::<Vec<_>>().join(" ");
+                    material = match seen.iter().position(|n| *n == name) {
+                        Some(i) => i,
+                        None => {
+                            seen.push(name);
+                            seen.len() - 1
+                        }
+                    };
+                }
                 Some("f") => {
-                    let verts: Vec<u32> = it
-                        .map(|t| resolve(t, positions.len()))
-                        .collect::<Result<_, _>>()?;
+                    let mut verts: Vec<u32> = Vec::new();
+                    for token in it {
+                        let p = resolve(token, positions.len())?;
+                        let v = *lookup.entry((p, material)).or_insert_with(|| {
+                            vertices.push(Vertex {
+                                pos: positions[p as usize],
+                                alpha: if material == 0 {
+                                    1.0
+                                } else {
+                                    crate::kit::GLASS_ALPHA
+                                },
+                            });
+                            (vertices.len() - 1) as u32
+                        });
+                        verts.push(v);
+                    }
                     if verts.len() < 3 {
                         return Err(Error::BadObj);
                     }
@@ -67,7 +108,6 @@ impl Mesh {
         if positions.is_empty() || indices.is_empty() {
             return Err(Error::BadObj);
         }
-        let vertices = positions.into_iter().map(|pos| Vertex { pos }).collect();
         Ok(Mesh { vertices, indices })
     }
 
@@ -139,15 +179,19 @@ impl Mesh {
             vertices: vec![
                 Vertex {
                     pos: [-1.0, -1.0, 0.0],
+                    alpha: 1.0,
                 },
                 Vertex {
                     pos: [1.0, -1.0, 0.0],
+                    alpha: 1.0,
                 },
                 Vertex {
                     pos: [1.0, 1.0, 0.0],
+                    alpha: 1.0,
                 },
                 Vertex {
                     pos: [-1.0, 1.0, 0.0],
+                    alpha: 1.0,
                 },
             ],
             indices: vec![0, 1, 2, 0, 2, 3],
@@ -203,6 +247,31 @@ mod tests {
         let obj = "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1/1/1 2/2/2 3/3/3\n";
         let m = Mesh::from_obj_str(obj).unwrap();
         assert_eq!(m.indices, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn vertices_under_a_second_material_carry_the_glass_alpha() {
+        let obj = "o x\nv 0 0 0\nv 1 0 0\nv 0 1 0\nv 1 1 0\nusemtl Material.001\nf 1 2 3\nusemtl Transparent\nf 2 4 3\n";
+        let m = Mesh::from_obj_str(obj).unwrap();
+        // Vertices 2 and 3 are shared: they appear once opaque, once glass.
+        assert_eq!(m.indices.len(), 6);
+        let alphas: Vec<f32> = m
+            .indices
+            .iter()
+            .map(|&i| m.vertices[i as usize].alpha)
+            .collect();
+        assert_eq!(&alphas[0..3], &[1.0, 1.0, 1.0]);
+        assert!(alphas[3..6]
+            .iter()
+            .all(|a| (*a - crate::kit::GLASS_ALPHA).abs() < 1e-6));
+        assert_eq!(m.vertices.len(), 6);
+    }
+
+    #[test]
+    fn files_without_materials_are_fully_opaque() {
+        let obj = "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n";
+        let m = Mesh::from_obj_str(obj).unwrap();
+        assert!(m.vertices.iter().all(|v| v.alpha == 1.0));
     }
 
     #[test]

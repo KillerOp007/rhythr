@@ -72,38 +72,8 @@ fn main() {
         }
     }
     map.notes.sort_by_key(|n| n.time_ms);
-    let data = {
-        // Minimal synthetic replay via the parser (single idle frame).
-        let mut b: Vec<u8> = Vec::new();
-        b.extend((20260803i32).to_le_bytes());
-        b.extend(0i64.to_le_bytes());
-        b.push(0); // player ""
-        b.push(0); // legacy ""
-        b.extend(0i32.to_le_bytes());
-        b.extend(0i32.to_le_bytes());
-        b.push(0); // mode ""
-        b.push(1); // passed
-        b.push(2);
-        b.extend(b"[]");
-        b.push(0); // spin
-        b.extend(1.0f32.to_le_bytes());
-        b.extend(0i64.to_le_bytes());
-        b.extend(100.0f32.to_le_bytes());
-        b.extend(0i32.to_le_bytes());
-        b.extend(0i32.to_le_bytes());
-        b.extend(0.0f32.to_le_bytes());
-        b.extend((-1i32).to_le_bytes());
-        b.push(0); // hash ""
-        b.push(0); // pitch lock
-        b.extend(1i32.to_le_bytes()); // frames
-        b.extend(0i32.to_le_bytes());
-        b.extend(0.0f32.to_le_bytes());
-        b.extend(0.0f32.to_le_bytes());
-        b.extend(1.0f32.to_le_bytes());
-        b.push(0);
-        b
-    };
-    let replay = rhythia_formats::rhr::Replay::parse(&data).unwrap();
+    // Minimal synthetic replay (single idle frame).
+    let replay = rhythia_render::testing::idle_replay();
 
     let renderer = rhythia_render::Renderer::new(960, 560, cfg.hud_fonts().as_slice()).unwrap();
     let skin = renderer.prepare_skin(&cfg);

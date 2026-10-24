@@ -176,37 +176,7 @@ fn render_png(dir: &Path, name: &str, obj: &str) {
             y: 1.0,
         });
     }
-    let data = {
-        let mut b: Vec<u8> = Vec::new();
-        b.extend((20260803i32).to_le_bytes());
-        b.extend(0i64.to_le_bytes());
-        b.push(0);
-        b.push(0);
-        b.extend(0i32.to_le_bytes());
-        b.extend(0i32.to_le_bytes());
-        b.push(0);
-        b.push(1);
-        b.push(2);
-        b.extend(b"[]");
-        b.push(0);
-        b.extend(1.0f32.to_le_bytes());
-        b.extend(0i64.to_le_bytes());
-        b.extend(100.0f32.to_le_bytes());
-        b.extend(0i32.to_le_bytes());
-        b.extend(0i32.to_le_bytes());
-        b.extend(0.0f32.to_le_bytes());
-        b.extend((-1i32).to_le_bytes());
-        b.push(0);
-        b.push(0);
-        b.extend(1i32.to_le_bytes());
-        b.extend(0i32.to_le_bytes());
-        b.extend(0.0f32.to_le_bytes());
-        b.extend(0.0f32.to_le_bytes());
-        b.extend(1.0f32.to_le_bytes());
-        b.push(0);
-        b
-    };
-    let replay = rhythia_formats::rhr::Replay::parse(&data).unwrap();
+    let replay = rhythia_render::testing::idle_replay();
     let renderer = rhythia_render::Renderer::new(960, 560, cfg.hud_fonts().as_slice()).unwrap();
     let skin = renderer.prepare_skin(&cfg);
     let params = rhythia_render::scene::SceneParams::from(&cfg);

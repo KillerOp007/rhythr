@@ -50,6 +50,42 @@ pub enum Error {
     Io(#[from] std::io::Error),
 }
 
+/// Helpers for tests and debug examples.
+pub mod testing {
+    /// A one-frame idle replay in the current file format, for rendering
+    /// synthetic scenes.
+    pub fn idle_replay() -> rhythia_formats::rhr::Replay {
+        let mut b: Vec<u8> = Vec::new();
+        b.extend((20260803i32).to_le_bytes());
+        b.extend(0i64.to_le_bytes());
+        b.push(0); // player ""
+        b.push(0); // legacy ""
+        b.extend(0i32.to_le_bytes());
+        b.extend(0i32.to_le_bytes());
+        b.push(0); // mode ""
+        b.push(1); // passed
+        b.push(2);
+        b.extend(b"[]");
+        b.push(0); // spin
+        b.extend(1.0f32.to_le_bytes());
+        b.extend(0i64.to_le_bytes());
+        b.extend(100.0f32.to_le_bytes());
+        b.extend(0i32.to_le_bytes());
+        b.extend(0i32.to_le_bytes());
+        b.extend(0.0f32.to_le_bytes());
+        b.extend((-1i32).to_le_bytes());
+        b.push(0); // hash ""
+        b.push(0); // pitch lock
+        b.extend(1i32.to_le_bytes()); // frames
+        b.extend(0i32.to_le_bytes());
+        b.extend(0.0f32.to_le_bytes());
+        b.extend(0.0f32.to_le_bytes());
+        b.extend(1.0f32.to_le_bytes());
+        b.push(0);
+        rhythia_formats::rhr::Replay::parse(&b).expect("synthetic replay parses")
+    }
+}
+
 /// Encodes RGBA8 pixels (row-major, `width`×`height`×4 bytes) as a PNG file.
 pub fn write_png(
     path: &std::path::Path,

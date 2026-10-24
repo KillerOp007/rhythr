@@ -35,6 +35,7 @@ struct VsIn {
     @location(4) m3: vec4<f32>,
     @location(5) color: vec4<f32>,   // rgb + opacity
     @location(6) kind: f32,          // 0 note, 1 cursor dot, 2 border
+    @location(7) alpha: f32,         // mesh vertex opacity (glass), 1 for solid
 };
 
 struct VsOut {
@@ -42,6 +43,7 @@ struct VsOut {
     @location(0) color: vec4<f32>,
     @location(1) local: vec2<f32>,
     @location(2) @interpolate(flat) kind: f32,
+    @location(3) @interpolate(flat) valpha: f32,
 };
 
 @vertex
@@ -54,12 +56,14 @@ fn vs_main(in: VsIn) -> VsOut {
         out.color = in.color;
         out.local = in.pos.xy;
         out.kind = in.kind;
+        out.valpha = in.alpha;
         return out;
     }
     out.clip = globals.view_proj * model * vec4<f32>(in.pos, 1.0);
     out.color = in.color;
     out.local = in.pos.xy;
     out.kind = in.kind;
+    out.valpha = in.alpha;
     return out;
 }
 
@@ -79,8 +83,9 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 
     if (in.kind > 5.5) {
         // Mesh note: the shape is real geometry, so the fragment is just
-        // the tinted fill. Depth and backface culling do the rest.
-        return in.color;
+        // the tinted fill. Depth and backface culling do the rest. Glass
+        // faces carry the game's fixed alpha on their vertices.
+        return vec4<f32>(in.color.rgb, in.color.a * in.valpha);
     }
 
     if (in.kind > 4.5) {

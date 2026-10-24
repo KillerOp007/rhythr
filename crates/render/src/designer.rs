@@ -249,11 +249,13 @@ pub fn mesh_from_plan(plan: &NotePlan, depth: f32) -> Result<Mesh, Error> {
         for p in &tri.points {
             mesh.vertices.push(Vertex {
                 pos: [p[0], p[1], d],
+                alpha: 1.0,
             });
         }
         for p in &tri.points {
             mesh.vertices.push(Vertex {
                 pos: [p[0], p[1], -d],
+                alpha: 1.0,
             });
         }
         for t in tri.indices.chunks_exact(3) {
@@ -276,11 +278,13 @@ pub fn mesh_from_plan(plan: &NotePlan, depth: f32) -> Result<Mesh, Error> {
             for p in contour {
                 mesh.vertices.push(Vertex {
                     pos: [p[0], p[1], d],
+                    alpha: 1.0,
                 });
             }
             for p in contour {
                 mesh.vertices.push(Vertex {
                     pos: [p[0], p[1], -d],
+                    alpha: 1.0,
                 });
             }
             for i in 0..m {
