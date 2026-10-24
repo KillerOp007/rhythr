@@ -5,7 +5,6 @@ import { createView } from "./view.js";
 import { invoke, coalesced } from "./ipc.js";
 import { render } from "./render.js";
 import { mountPreviews } from "./preview.js";
-import { toDesignUnits } from "./units.js";
 import {
   makeRecent,
   autosave,
@@ -58,8 +57,7 @@ async function boot() {
   const evaluate = coalesced(
     "kit_evaluate",
     (ev) => {
-      // The view edits in design units; the kernel answers normalised.
-      store.setEvaluated(toDesignUnits(ev));
+      store.setEvaluated(ev);
       $("kt-triangles").textContent = ev.triangles == null ? "" : `${ev.triangles} triangles`;
       if (ev.mesh_error) {
         evalStatus(ev.mesh_error);

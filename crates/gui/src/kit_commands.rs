@@ -21,12 +21,11 @@ pub struct LevelRegion {
     pub glass: Shapes,
 }
 
-/// What the front view draws: everything in note units after the
-/// kernel's normalisation, plus the factor that maps the document's
-/// transforms onto it.
+/// What the front view draws, in note units, which are the document's
+/// own units: the note box is fixed and parts are cut to it, never
+/// rescaled.
 #[derive(Serialize, Debug)]
 pub struct Evaluated {
-    pub scale: f32,
     pub levels: Vec<f32>,
     pub parts: Vec<PartGeometry>,
     pub intervals: Vec<LevelRegion>,
@@ -87,7 +86,6 @@ pub fn evaluate_design(design: &Design) -> Result<Evaluated, String> {
         Err(e) => (None, Some(user_message(&e))),
     };
     Ok(Evaluated {
-        scale: ev.scale,
         levels: ev.levels.clone(),
         parts: ev
             .parts
@@ -277,7 +275,6 @@ mod tests {
     fn the_default_note_evaluates_to_one_band() {
         let e = evaluate_design(&Design::default_note()).unwrap();
         assert_eq!(e.intervals.len(), 1);
-        assert!((e.scale - 1.0).abs() < 1e-4);
         assert_eq!(e.parts.len(), 1);
         assert!(e.triangles.unwrap() > 500);
         assert!(e.mesh_error.is_none());

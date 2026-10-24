@@ -1,14 +1,12 @@
 // The front view: an orthographic Canvas 2D drawing of what the kernel
 // produced, each part's own outline, and the selected part's handles. The
-// only place geometry is edited. Everything here is in design units: the
-// geometry arrives converted (units.js), handles sit on the document's
-// transforms unscaled, and the note box the game scales the design into is
-// an overlay that follows the largest part. Showing the normalised result
-// instead made a moved part shrink and a hidden part's neighbour grow.
+// only place geometry is edited. Design units are note units: the note
+// box is fixed at the unit square, the kernel cuts every part to it and
+// never rescales anything, so a part keeps its drawn size whatever moves
+// or hides, and the outlines show exactly what the note keeps.
 import {
   makeView, unit, toPx, toWorld, zoomAt, partRect, rectCorners, rectContains, handleAt, scaleFrom, angleFrom, HITBOX,
 } from "./view-math.js";
-import { boxExtent } from "./units.js";
 
 const GLASS_ALPHA = 0.57;
 const HANDLE_PX = 7;
@@ -78,18 +76,17 @@ export function createView(canvas, store, hooks) {
     return hatch;
   }
 
-  // The note box in design units: the game scales the design so that this
-  // square becomes the unit box, so it grows with the largest part.
+  // The note box, fixed: what lies inside is the note, a part past the
+  // edge is cut there. The dashed square is the game's true hit area.
   function box() {
-    const e = boxExtent(store.state.evaluated);
-    const a = toPx(view, size, [-e, e]);
-    const b = toPx(view, size, [e, -e]);
+    const a = toPx(view, size, [-1, 1]);
+    const b = toPx(view, size, [1, -1]);
     ctx.strokeStyle = "rgba(255,255,255,0.35)";
     ctx.lineWidth = 1;
     ctx.setLineDash([]);
     ctx.strokeRect(a[0], a[1], b[0] - a[0], b[1] - a[1]);
-    const ha = toPx(view, size, [-HITBOX * e, HITBOX * e]);
-    const hb = toPx(view, size, [HITBOX * e, -HITBOX * e]);
+    const ha = toPx(view, size, [-HITBOX, HITBOX]);
+    const hb = toPx(view, size, [HITBOX, -HITBOX]);
     ctx.setLineDash([4, 4]);
     ctx.strokeStyle = "rgba(255,255,255,0.18)";
     ctx.strokeRect(ha[0], ha[1], hb[0] - ha[0], hb[1] - ha[1]);
@@ -344,14 +341,11 @@ export function createView(canvas, store, hooks) {
     spaceDown = false;
   });
 
-  // Fits the note box: the design is shown at the size the game gives it,
-  // so a design that grew past the canvas comes back into view and the
-  // default design reads 100%.
   function resetView() {
-    view.z = clamp(1 / boxExtent(store.state.evaluated), 0.4, 12);
+    view.z = 1;
     view.cx = 0;
     view.cy = 0;
-    hooks.onZoom(Math.round(view.z * 100));
+    hooks.onZoom(100);
     draw();
   }
 

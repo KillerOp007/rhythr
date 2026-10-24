@@ -25,7 +25,6 @@ struct LevelRegion {
 
 #[derive(Serialize)]
 struct Evaluated {
-    scale: f32,
     levels: Vec<f32>,
     parts: Vec<PartGeometry>,
     intervals: Vec<LevelRegion>,
@@ -47,22 +46,34 @@ fn message(e: &KitError) -> String {
 
 fn main() {
     if std::env::args().any(|a| a == "--default") {
-        println!("{}", serde_json::to_string(&Design::default_note()).unwrap());
+        println!(
+            "{}",
+            serde_json::to_string(&Design::default_note()).unwrap()
+        );
         return;
     }
     let mut text = String::new();
-    std::io::stdin().read_to_string(&mut text).expect("read stdin");
+    std::io::stdin()
+        .read_to_string(&mut text)
+        .expect("read stdin");
     let design: Design = match serde_json::from_str(&text) {
         Ok(d) => d,
         Err(e) => {
-            println!("{}", serde_json::to_string(&serde_json::json!({ "error": format!("design: {e}") })).unwrap());
+            println!(
+                "{}",
+                serde_json::to_string(&serde_json::json!({ "error": format!("design: {e}") }))
+                    .unwrap()
+            );
             return;
         }
     };
     let ev = match levels::evaluate(&design) {
         Ok(ev) => ev,
         Err(e) => {
-            println!("{}", serde_json::to_string(&serde_json::json!({ "error": message(&e) })).unwrap());
+            println!(
+                "{}",
+                serde_json::to_string(&serde_json::json!({ "error": message(&e) })).unwrap()
+            );
             return;
         }
     };
@@ -71,7 +82,6 @@ fn main() {
         Err(e) => (None, Some(message(&e))),
     };
     let out = Evaluated {
-        scale: ev.scale,
         levels: ev.levels.clone(),
         parts: ev
             .parts

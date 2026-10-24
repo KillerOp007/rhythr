@@ -2,9 +2,9 @@
 //! point's angle and applied before the transform, so a turned shape
 //! keeps its wave phase), the 2D transform, symmetry copies, then one
 //! nonzero clean so overlapping copies merge. Rounding and the rim are
-//! deferred to `finish_part`, which the evaluation runs AFTER the whole
-//! note is normalised, so both work in note units on the merged region
-//! the way the v1 editor applied them.
+//! deferred to `finish_part`, which the evaluation runs on the merged
+//! region of the part, in note units (the box is fixed, so design units
+//! are note units), before the part is cut to the box.
 
 use crate::kit::doc::*;
 use crate::kit::geom::{boolean, clean, offset, Contour, FillRule, OverlayRule, Shapes};
@@ -40,7 +40,7 @@ pub struct ResolvedPart {
     pub material: Material,
     pub depth: Depth,
     /// Corner rounding radius and rim thickness in note units, applied
-    /// by `finish_part` once the note is normalised.
+    /// by `finish_part` on the merged region.
     pub round: Option<f32>,
     pub rim: Option<f32>,
     pub shapes: Shapes,
@@ -166,7 +166,7 @@ pub fn resolve_part(part: &Part) -> Result<ResolvedPart, KitError> {
 }
 
 /// Rounding (closing, then opening) and the rim (the region minus its
-/// erosion) in note units, on a merged and normalised region. Where the
+/// erosion) in note units, on a merged region. Where the
 /// region is thinner than the rounding or the rim allows, it stays as it
 /// is: a finish never deletes a part. Offsets are the expensive step,
 /// so the complexity budget is checked before them.

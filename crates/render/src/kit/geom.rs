@@ -30,11 +30,10 @@ pub const KIT_RANGE: f32 = 64.0;
 /// Smallest area a region result keeps: a square of side 0.001 on a note
 /// two units wide. Offsets leave micro loops of a few lattice cells at
 /// inner corners, and a later dilation turns each one into a full disc of
-/// the offset radius. The threshold is in whatever units the call runs in:
-/// design units in `resolve_part`'s clean and the remover clip, note units
-/// after normalisation. A design smaller than about 0.03 in extent before
-/// normalisation therefore loses detail; Phase 2 keeps transforms in the
-/// editor's ranges.
+/// the offset radius. The threshold is in note units, which are the
+/// design's own units (the box is fixed, nothing is rescaled). A part
+/// smaller than about 0.03 in extent therefore loses detail; the editor
+/// keeps transforms in its ranges.
 pub const MIN_SHAPE_AREA: f32 = 1e-6;
 
 /// Signed area, positive for counterclockwise. Summed in f64 relative to

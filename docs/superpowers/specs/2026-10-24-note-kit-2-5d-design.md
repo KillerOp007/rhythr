@@ -103,9 +103,12 @@ Rules
 
 - Depth bands live in [-2.0, 0.5] in note units. Defaults: a new part
   spans [-0.1, 0.1] like the built-in circle.
-- The hard size cap applies to the union of all Add parts: the kernel
-  normalises the resolved silhouette to the unit box; the editor shows
-  the cap and the true hit area exactly as v2 does.
+- The note box is fixed (owner decision, 24.10. evening, after the first
+  test round): transform units are note units, nothing is ever rescaled,
+  and whatever a part puts outside the unit box is cut away, like an
+  artboard. The editor shows the box and the true hit area. A v1 design
+  is fitted to the box once, at migration, because v1 normalised on
+  every evaluation.
 - A v1 design (the current .rhsd and autosave) loads as one Add part:
   slider shapes become a Polygon, Square or Circle part with the same
   effects, freeform becomes Points holding the loop v1 built from the
@@ -133,12 +136,14 @@ pipeline keeps working until the editor switches over.
    complexity budget per part (points and contours) so a corrupt file
    degrades instead of running away.
 6. Round (closing then opening) and rim (region minus its erosion) are a
-   finish in note units: the level evaluation applies them after the
-   whole design is normalised to the box and before the level set, on
-   the merged region of the part, never deleting a part (a region too
-   thin to erode keeps its outline). A finish never makes a part larger;
-   a chord-sized overshoot is cut to the box, anything larger is an
-   error. Region results drop shapes below a visible area, because the
+   finish in note units: the level evaluation applies them before the
+   level set, on the merged region of the part, never deleting a part (a
+   region too thin to erode keeps its outline). After the finish every
+   part is cut to the unit box, quietly: a part may reach past the box
+   or lie beyond it, and what lies outside is not part of the note. The
+   finish comes first so a part's own corners round and its rim follows
+   its own outline, while the box edge stays a straight cut. Region
+   results drop shapes below a visible area, because the
    erosion leaves micro loops that a later dilation would blow up.
 
 4.2 Level evaluation: `evaluate(design) -> Evaluation`
@@ -153,14 +158,10 @@ pipeline keeps working until the editor switches over.
    its adds; a part id in more than one group is a document error).
    Glass is a second region per interval: `glass(i) = union(glass adds)
    minus union(all cuts) minus solid(i)`; opaque wins where they overlap.
-3. Before the level set, the design is normalised: the silhouette is the
-   largest extent over the parts that add material (loose Add parts and
-   Add members of Add-mode groups; cuts and the members of Cut-mode
-   groups only remove and never set the size), every part is scaled by
-   1/extent and re-snapped to the lattice, removers are clipped to a
-   square three times the silhouette before scaling so a scaled-up cut
-   cannot leave the lattice range, and then the finish of 4.1 step 6
-   runs.
+3. Before the level set, every part is finished (4.1 step 6) and cut to
+   the unit box. There is no normalisation: the silhouette is whatever
+   the parts that add material cover inside the box, and a design with
+   nothing inside the box is empty (KitError::Empty).
 4. All overlay operations run through one fixed-origin integer lattice
    (i_overlay with a shared adapter: cell 1/65536, origin fixed, never
    recentred on the input) so identical input polygons produce
@@ -240,7 +241,7 @@ until the switch is complete, then the v1 window is removed.
   panels and state from ever disagreeing.
 - IPC: `kit_evaluate(design)` returns, for drawing and hit testing, the
   resolved contours per part, the solid and glass silhouettes per
-  level, the normalisation scale, validator report and triangle count;
+  level, validator report and triangle count;
   `kit_mesh(design)` returns positions, indices and material ranges for
   the turntable; `kit_preview(design, time, still)` renders through the
   real renderer with the cached skin as today; `kit_export(design,

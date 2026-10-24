@@ -4,7 +4,8 @@
 
 use crate::designer::ControlPoint;
 use crate::kit::doc::*;
-use crate::kit::resolve::MAX_REPEAT;
+use crate::kit::geom::extent;
+use crate::kit::resolve::{resolve_part, MAX_REPEAT};
 use crate::kit::KitError;
 
 /// One stored v1 freeform point, read in f64 as the editor held it.
@@ -144,28 +145,41 @@ pub fn from_v1(json: &str) -> Result<Design, KitError> {
         (shape, "Shape", 0.0 - f("twist", 0.0))
     };
     let depth = f("depth", 0.05).clamp(0.005, 0.5);
+    let mut part = Part {
+        id: "p1".into(),
+        name: name.into(),
+        visible: true,
+        locked: false,
+        shape,
+        transform: Transform {
+            rotation,
+            ..Transform::default()
+        },
+        mode: Mode::Add,
+        depth: Depth {
+            front: depth,
+            back: -depth,
+        },
+        material: Material::Solid,
+        effects,
+    };
+    // v1 fitted its outline to the box on every evaluation; the kit keeps
+    // the box fixed and cuts to it, so the fit happens once, here: the
+    // part is sized so its outline (waves and symmetry included; the rim
+    // and rounding never reach further) spans the box as v1 showed it.
+    // Rotation and the effects scale with the part, so the look is kept.
+    if let Ok(resolved) = resolve_part(&part) {
+        let e = extent(&resolved.shapes);
+        if e > 1e-6 && (e - 1.0).abs() > 1e-4 {
+            part.transform.w /= e;
+            part.transform.h /= e;
+        }
+    }
     Ok(Design {
         version: 2,
         name: "note".into(),
         colors,
-        parts: vec![Part {
-            id: "p1".into(),
-            name: name.into(),
-            visible: true,
-            locked: false,
-            shape,
-            transform: Transform {
-                rotation,
-                ..Transform::default()
-            },
-            mode: Mode::Add,
-            depth: Depth {
-                front: depth,
-                back: -depth,
-            },
-            material: Material::Solid,
-            effects,
-        }],
+        parts: vec![part],
         groups: Vec::new(),
     })
 }
@@ -303,6 +317,26 @@ mod tests {
         let p = &d.parts[0];
         assert_eq!(p.effects.repeat, None);
         assert_eq!(p.effects.mirror, Mirror::None);
+    }
+
+    #[test]
+    fn a_v1_design_is_fitted_to_the_box_once() {
+        // The wedge's points reach 0.3; v1 showed the loop filling the
+        // box, so the migrated part is sized to do the same. A slider
+        // shape with waves reached past the box in v1 and was shrunk to
+        // it; the part is sized down the same way.
+        let d = from_v1(WEDGE).unwrap();
+        let p = &d.parts[0];
+        assert!(
+            p.transform.w > 1.0 && (p.transform.w - p.transform.h).abs() < 1e-6,
+            "{:?}",
+            p.transform
+        );
+        let ev = crate::kit::levels::evaluate(&d).unwrap();
+        assert!((extent(&ev.intervals[0].solid) - 1.0).abs() < 2e-2);
+        let d = from_v1(SLIDERS).unwrap();
+        let ev = crate::kit::levels::evaluate(&d).unwrap();
+        assert!((extent(&ev.intervals[0].solid) - 1.0).abs() < 2e-2);
     }
 
     #[test]
