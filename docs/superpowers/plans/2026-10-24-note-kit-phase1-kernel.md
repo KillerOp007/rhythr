@@ -131,6 +131,8 @@ pub enum KitError {
     Invalid(String),
     #[error("too many triangles: {0} (limit {MAX_TRIANGLES})")]
     Budget(usize),
+    #[error("part too complex: {0} points in {1} contours")]
+    Complexity(usize, usize),
 }
 ```
 
@@ -1336,14 +1338,32 @@ mod tests {
 
     #[test]
     fn corrupt_parameters_are_capped_not_fatal() {
-        let mut p = part(Shape::Circle);
-        p.transform = Transform { x: 0.6, w: 0.2, h: 0.2, ..Transform::default() };
+        // A three-point source keeps this cheap: the caps are what is
+        // under test, not the geometry. Never run this against code
+        // without the caps.
+        let ctrl = |x: f32, y: f32| crate::designer::ControlPoint { x, y, smooth: false };
+        let mut p = part(Shape::Points { control: vec![ctrl(0.6, 0.0), ctrl(0.9, 0.1), ctrl(0.6, 0.2)] });
         p.effects.repeat = Some(u32::MAX);
         p.effects.waves = Some(Waves { count: u32::MAX, depth: 40.0, style: WaveStyle::Sine });
         let r = resolve_part(&p).unwrap();
         assert!(!r.shapes.is_empty());
+        assert!(r.shapes.len() <= 32, "repeat is capped at 32 copies");
         let finished = finish_part(&r.shapes, Some(5.0), Some(5.0)).unwrap();
         assert!(!finished.is_empty());
+    }
+
+    #[test]
+    fn an_overly_complex_part_is_a_clear_error() {
+        // The caps bound the loops, not the geometry; a source beyond the
+        // point budget is refused before any offset can run away.
+        let huge: Vec<[f32; 2]> = (0..20_000)
+            .map(|i| {
+                let t = i as f32 / 20_000.0 * std::f32::consts::TAU;
+                [t.cos(), t.sin()]
+            })
+            .collect();
+        let p = part(Shape::Contours { contours: vec![huge], label: String::new() });
+        assert!(matches!(resolve_part(&p), Err(KitError::Complexity(..))));
     }
 
     #[test]
@@ -1412,10 +1432,25 @@ use crate::kit::KitError;
 
 /// Caps on stored parameters: a corrupt document degrades, it never
 /// allocates or loops without bound.
-const MAX_REPEAT: u32 = 64;
-const MAX_WAVES: u32 = 64;
+const MAX_REPEAT: u32 = 32;
+const MAX_WAVES: u32 = 32;
 const MAX_WAVE_DEPTH: f32 = 0.95;
 const MAX_FINISH: f32 = 0.9;
+/// Complexity budget of one resolved part. The caps above bound the
+/// loops, not the geometry: thirty-two wavy copies can merge into
+/// thousands of contours, and an offset on that runs for minutes and
+/// takes gigabytes. A part beyond this budget is a clear error instead.
+pub const MAX_PART_POINTS: usize = 16_384;
+pub const MAX_PART_CONTOURS: usize = 512;
+
+fn complexity_check(shapes: &Shapes) -> Result<(), KitError> {
+    let contours: usize = shapes.iter().map(|s| s.len()).sum();
+    let points: usize = shapes.iter().flatten().map(|c| c.len()).sum();
+    if contours > MAX_PART_CONTOURS || points > MAX_PART_POINTS {
+        return Err(KitError::Complexity(points, contours));
+    }
+    Ok(())
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedPart {
@@ -1533,14 +1568,17 @@ pub fn resolve_part(part: &Part) -> Result<ResolvedPart, KitError> {
     apply_transform(&mut contours, &part.transform);
     let copies = symmetry_copies(contours, &part.effects);
     let shapes = clean(&copies, FillRule::NonZero)?;
+    complexity_check(&shapes)?;
     Ok(ResolvedPart { shapes, ..empty() })
 }
 
 /// Rounding (closing, then opening) and the rim (the region minus its
 /// erosion) in note units, on a merged and normalised region. Where the
 /// region is thinner than the rounding or the rim allows, it stays as it
-/// is: a finish never deletes a part.
+/// is: a finish never deletes a part. Offsets are the expensive step,
+/// so the complexity budget is checked before them.
 pub fn finish_part(shapes: &Shapes, round: Option<f32>, rim: Option<f32>) -> Result<Shapes, KitError> {
+    complexity_check(shapes)?;
     let mut region = shapes.clone();
     if let Some(r) = finish_value(round) {
         let closed = offset(&offset(&region, r)?, -r)?;
@@ -1564,7 +1602,7 @@ Add `pub mod resolve;` to `kit/mod.rs`.
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `cargo test -p rhythia-render kit::resolve`
-Expected: 10 passed.
+Expected: 11 passed, the whole module in well under a second.
 
 - [ ] **Step 5: Commit**
 
