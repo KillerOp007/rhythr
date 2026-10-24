@@ -1355,10 +1355,13 @@ mod tests {
     #[test]
     fn an_overly_complex_part_is_a_clear_error() {
         // The caps bound the loops, not the geometry; a source beyond the
-        // point budget is refused before any offset can run away.
-        let huge: Vec<[f32; 2]> = (0..20_000)
+        // point budget is refused before any offset can run away. The
+        // budget measures the cleaned region, and the lattice drops
+        // collinear points (a 20k-point circle cleans to about 15k), so
+        // the source has to be well above the budget to be refused.
+        let huge: Vec<[f32; 2]> = (0..40_000)
             .map(|i| {
-                let t = i as f32 / 20_000.0 * std::f32::consts::TAU;
+                let t = i as f32 / 40_000.0 * std::f32::consts::TAU;
                 [t.cos(), t.sin()]
             })
             .collect();
