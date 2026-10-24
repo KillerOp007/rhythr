@@ -38,7 +38,7 @@ pub struct Evaluated {
 
 /// Words the window never shows (spec 5.3, the vocabulary rule). The
 /// kernel's own texts for internal failures can contain them.
-const BANNED_WORDS: [&str; 9] = [
+const BANNED_WORDS: [&str; 15] = [
     "boolean",
     "union",
     "mesh",
@@ -48,6 +48,12 @@ const BANNED_WORDS: [&str; 9] = [
     "lattice",
     "triangulation",
     "degenerate",
+    "edge",
+    "orientation",
+    "index",
+    "triangle",
+    "surface",
+    "zip",
 ];
 
 /// The window never shows kernel vocabulary (spec 5.3).
@@ -275,17 +281,39 @@ mod tests {
             KitError::Empty,
             KitError::Invalid("vertex 3 leaves the unit box: [1.2, 0.0, 0.0]".into()),
             KitError::Invalid("solid: degenerate triangle [1, 2, 2]".into()),
+            KitError::Invalid("solid: open edge 3-7 (surface not closed)".into()),
         ] {
             let m = user_message(&e).to_lowercase();
             for b in banned {
                 assert!(!m.contains(b), "{m} contains {b}");
             }
         }
+        // Every internal failure text becomes the one fixed sentence (the
+        // loop above only knows the first six words, so say it outright).
+        for internal in [
+            "solid: open edge 3-7 (surface not closed)",
+            "glass: edge 1-2 used 3 times but 2-1 1 times (inconsistent orientation)",
+            "index 9 out of range",
+            "zip: invalid archive",
+        ] {
+            assert_eq!(
+                user_message(&KitError::Invalid(internal.into())),
+                "this design could not be built; try fewer parts, less rounding or fewer waves",
+                "{internal}"
+            );
+        }
         // The kernel's precise, plain-worded texts stay as they are.
         let grew = "part p1 grew beyond the box after rounding: 1.2";
         assert_eq!(user_message(&KitError::Invalid(grew.into())), grew);
         let order = "part p1: front must be above back";
         assert_eq!(user_message(&KitError::Doc(order.into())), order);
+        let depth = "part p1: depth must stay within -2..0.5";
+        assert_eq!(user_message(&KitError::Doc(depth.into())), depth);
+        let intervals = "65 depth intervals, at most 64";
+        assert_eq!(
+            user_message(&KitError::Invalid(intervals.into())),
+            intervals
+        );
     }
 
     #[test]
@@ -299,6 +327,9 @@ mod tests {
         assert_eq!(d.version, 2);
         assert_eq!(d.parts.len(), 1);
         assert!(load_document("not json")
+            .unwrap_err()
+            .starts_with("not a design file"));
+        assert!(load_document("[]")
             .unwrap_err()
             .starts_with("not a design file"));
         assert!(load_document("{}")
