@@ -65,6 +65,27 @@ test("undo_is_bounded_and_load_resets_history", () => {
   assert.equal(s.state.dirty, false);
 });
 
+test("toggles_never_merge", () => {
+  // Discrete clicks are separate undo steps even inside the coalescing window.
+  const labels = ["visible", "lock", "mode", "material", "shape", "name", "color-add", "color-remove", "color-reorder"];
+  for (const label of labels) {
+    const s = createStore(design(), { now: () => 1000 });
+    s.commit(label, (d) => (d.name = "a"));
+    s.commit(label, (d) => (d.name = "b"));
+    assert.equal(s.state.undo.length, 2, `${label} merged`);
+  }
+  // A picker drag is one gesture: same label, one step.
+  let t = 1000;
+  const s = createStore(design(), { now: () => t });
+  s.commit("color:0", (d) => (d.colors[0] = "#111111"));
+  t += 10;
+  s.commit("color:0", (d) => (d.colors[0] = "#222222"));
+  assert.equal(s.state.undo.length, 1);
+  t += 10;
+  s.commit("color:1", (d) => d.colors.push("#333333"));
+  assert.equal(s.state.undo.length, 2, "another colour is another gesture");
+});
+
 test("serialize_writes_the_kit_format", () => {
   const s = createStore(design());
   const d = JSON.parse(s.serialize());

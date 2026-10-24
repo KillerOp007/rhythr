@@ -10,9 +10,14 @@ export const UNDO_LIMIT = 100;
 // A continuous gesture (a slider drag, a key held down) is one undo step:
 // commits with the same label inside this window merge into the first.
 export const COALESCE_MS = 350;
-// Structural edits are discrete actions: two quick removes (or adds) are two
-// undo steps, never one.
-const DISCRETE = new Set(["add", "remove", "duplicate", "reorder"]);
+// Structural edits and button clicks are discrete actions: two quick removes
+// (or toggles) are two undo steps, never one. Only slider, field and picker
+// gestures coalesce.
+const DISCRETE = new Set([
+  "add", "remove", "duplicate", "reorder",
+  "visible", "lock", "mode", "material", "shape", "name",
+  "color-add", "color-remove", "color-reorder",
+]);
 
 export const SHAPES = {
   circle: () => ({ kind: "circle" }),

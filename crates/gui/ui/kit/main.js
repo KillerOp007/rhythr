@@ -2,6 +2,7 @@
 import { createStore } from "./store.js";
 import { createView } from "./view.js";
 import { invoke, coalesced } from "./ipc.js";
+import { render } from "./render.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -43,6 +44,7 @@ async function boot() {
   });
   $("kt-view-reset").addEventListener("click", view.resetView);
   store.subscribe((s) => {
+    render(store);
     view.draw();
     const serial = store.serialize();
     if (serial !== lastSerial) {
@@ -58,8 +60,10 @@ async function boot() {
   for (const b of document.querySelectorAll("[data-add]")) {
     b.addEventListener("click", () => store.addPart(b.dataset.add));
   }
+  $("kt-color-add").addEventListener("click", () => store.commit("color-add", (d) => d.colors.push("#a2e0ff")));
   $("kt-undo").addEventListener("click", () => store.undo());
   $("kt-redo").addEventListener("click", () => store.redo());
+  render(store);
   view.fit();
   evaluate({ design: store.state.design });
   window.kitStore = store;
