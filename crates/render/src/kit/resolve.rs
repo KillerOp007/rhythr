@@ -1,11 +1,22 @@
-//! A part becomes clean regions: source outline, effects in a fixed
-//! order (waves, round, rim), the 2D transform, symmetry copies, then
-//! one nonzero clean so overlapping copies merge.
+//! A part becomes clean regions: source outline, waves (keyed on each
+//! point's angle and applied before the transform, so a turned shape
+//! keeps its wave phase), the 2D transform, symmetry copies, then one
+//! nonzero clean so overlapping copies merge. Rounding and the rim are
+//! deferred to `finish_part`, which the evaluation runs AFTER the whole
+//! note is normalised, so both work in note units on the merged region
+//! the way the v1 editor applied them.
 
 use crate::kit::doc::*;
 use crate::kit::geom::{boolean, clean, offset, Contour, FillRule, OverlayRule, Shapes};
 use crate::kit::shapes::base_contours;
 use crate::kit::KitError;
+
+/// Caps on stored parameters: a corrupt document degrades, it never
+/// allocates or loops without bound.
+const MAX_REPEAT: u32 = 64;
+const MAX_WAVES: u32 = 64;
+const MAX_WAVE_DEPTH: f32 = 0.95;
+const MAX_FINISH: f32 = 0.9;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedPart {
@@ -13,6 +24,10 @@ pub struct ResolvedPart {
     pub mode: Mode,
     pub material: Material,
     pub depth: Depth,
+    /// Corner rounding radius and rim thickness in note units, applied
+    /// by `finish_part` once the note is normalised.
+    pub round: Option<f32>,
+    pub rim: Option<f32>,
     pub shapes: Shapes,
 }
 
@@ -28,13 +43,15 @@ fn wave_fn(style: WaveStyle, k: f32) -> f32 {
 /// Radial modulation around the part's own centre; a point's angle
 /// picks the phase, so any dense outline (not only circles) waves.
 fn apply_waves(contours: &mut [Contour], w: &Waves) {
-    if w.count == 0 || w.depth == 0.0 {
+    let count = w.count.min(MAX_WAVES);
+    let depth = w.depth.clamp(-MAX_WAVE_DEPTH, MAX_WAVE_DEPTH);
+    if count == 0 || depth == 0.0 {
         return;
     }
     for c in contours.iter_mut() {
         for p in c.iter_mut() {
             let th = p[1].atan2(p[0]);
-            let f = 1.0 + w.depth * wave_fn(w.style, w.count as f32 * th);
+            let f = 1.0 + depth * wave_fn(w.style, count as f32 * th);
             p[0] *= f;
             p[1] *= f;
         }
@@ -80,7 +97,7 @@ fn symmetry_copies(contours: Vec<Contour>, e: &Effects) -> Vec<Contour> {
             out.extend(reflect(&contours, -1.0, -1.0));
         }
     }
-    if let Some(n) = e.repeat.filter(|n| *n >= 2) {
+    if let Some(n) = e.repeat.filter(|n| *n >= 2).map(|n| n.min(MAX_REPEAT)) {
         let base = out.clone();
         for k in 1..n {
             let a = std::f32::consts::TAU * k as f32 / n as f32;
@@ -96,12 +113,19 @@ fn symmetry_copies(contours: Vec<Contour>, e: &Effects) -> Vec<Contour> {
     out
 }
 
+fn finish_value(v: Option<f32>) -> Option<f32> {
+    v.filter(|x| x.is_finite() && *x > 1e-4)
+        .map(|x| x.min(MAX_FINISH))
+}
+
 pub fn resolve_part(part: &Part) -> Result<ResolvedPart, KitError> {
     let empty = || ResolvedPart {
         id: part.id.clone(),
         mode: part.mode,
         material: part.material,
         depth: part.depth,
+        round: finish_value(part.effects.round),
+        rim: finish_value(part.effects.rim),
         shapes: Vec::new(),
     };
     let mut contours = base_contours(&part.shape);
@@ -111,24 +135,36 @@ pub fn resolve_part(part: &Part) -> Result<ResolvedPart, KitError> {
     if let Some(w) = &part.effects.waves {
         apply_waves(&mut contours, w);
     }
-    // Round and rim work on clean regions; both are offsets.
-    let mut region: Shapes = clean(&contours, FillRule::NonZero)?;
-    if let Some(r) = part.effects.round.filter(|r| *r > 1e-4) {
-        // Closing then opening: concave corners first, then convex ones.
-        region = offset(&offset(&region, r)?, -2.0 * r)?;
-        region = offset(&region, r)?;
+    apply_transform(&mut contours, &part.transform);
+    let copies = symmetry_copies(contours, &part.effects);
+    let shapes = clean(&copies, FillRule::NonZero)?;
+    Ok(ResolvedPart { shapes, ..empty() })
+}
+
+/// Rounding (closing, then opening) and the rim (the region minus its
+/// erosion) in note units, on a merged and normalised region. Where the
+/// region is thinner than the rounding or the rim allows, it stays as it
+/// is: a finish never deletes a part.
+pub fn finish_part(
+    shapes: &Shapes,
+    round: Option<f32>,
+    rim: Option<f32>,
+) -> Result<Shapes, KitError> {
+    let mut region = shapes.clone();
+    if let Some(r) = finish_value(round) {
+        let closed = offset(&offset(&region, r)?, -r)?;
+        let opened = offset(&closed, -r)?;
+        if !opened.is_empty() {
+            region = offset(&opened, r)?;
+        }
     }
-    if let Some(t) = part.effects.rim.filter(|t| *t > 1e-4) {
+    if let Some(t) = finish_value(rim) {
         let eroded = offset(&region, -t)?;
         if !eroded.is_empty() {
             region = boolean(&region, &eroded, OverlayRule::Difference)?;
         }
     }
-    let mut flat: Vec<Contour> = region.into_iter().flatten().collect();
-    apply_transform(&mut flat, &part.transform);
-    let copies = symmetry_copies(flat, &part.effects);
-    let shapes = clean(&copies, FillRule::NonZero)?;
-    Ok(ResolvedPart { shapes, ..empty() })
+    Ok(region)
 }
 
 #[cfg(test)]
@@ -193,23 +229,105 @@ mod tests {
         assert!((ys.iter().cloned().fold(f32::MIN, f32::max) - 0.5).abs() < 1e-3);
     }
 
+    fn hole_extent(shapes: &Shapes) -> f32 {
+        shapes[0][1]
+            .iter()
+            .map(|p| p[0].abs().max(p[1].abs()))
+            .fold(0.0f32, f32::max)
+    }
+
     #[test]
-    fn rim_makes_a_hole_and_round_softens_corners() {
-        let mut p = part(Shape::Square { rounding: 0.0 });
-        p.effects.rim = Some(0.3);
-        let r = resolve_part(&p).unwrap();
-        assert_eq!(r.shapes[0].len(), 2, "outer plus hole");
-        assert!(signed_area(&r.shapes[0][1]) < 0.0);
-        let mut q = part(Shape::Square { rounding: 0.0 });
-        q.effects.round = Some(0.3);
-        let r = resolve_part(&q).unwrap();
-        // The corner at (1,1) is gone: no point further than 1.3 from the
-        // centre along the diagonal direction.
-        let max_diag = r.shapes[0][0]
+    fn finish_rims_and_rounds_in_note_units() {
+        let r = resolve_part(&part(Shape::Square { rounding: 0.0 })).unwrap();
+        assert_eq!(r.rim, None, "resolution carries the rim, finish applies it");
+        let rimmed = finish_part(&r.shapes, None, Some(0.3)).unwrap();
+        assert_eq!(rimmed[0].len(), 2, "outer plus hole");
+        assert!(signed_area(&rimmed[0][1]) < 0.0);
+        assert!((hole_extent(&rimmed) - 0.7).abs() < 1e-3);
+        let rounded = finish_part(&r.shapes, Some(0.3), None).unwrap();
+        // The corner at (1,1) is gone while the flat sides still touch 1:
+        // the diagonal reach of a sharp corner is 2.0, of this rounding
+        // about 1.78.
+        let max_diag = rounded[0][0]
             .iter()
             .map(|v| v[0] + v[1])
             .fold(f32::MIN, f32::max);
-        assert!(max_diag < 1.9, "diagonal reach {max_diag}");
+        assert!(
+            max_diag < 1.85 && max_diag > 1.7,
+            "diagonal reach {max_diag}"
+        );
+        assert!((extent(&rounded) - 1.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn a_finish_never_deletes_a_part() {
+        // A ring whose wall is thinner than the rounding or the rim keeps
+        // its region instead of vanishing.
+        let r = resolve_part(&part(Shape::Ring { thickness: 0.4 })).unwrap();
+        let rounded = finish_part(&r.shapes, Some(0.25), None).unwrap();
+        assert_eq!(rounded.len(), 1);
+        assert_eq!(rounded[0].len(), 2);
+        let rimmed = finish_part(&r.shapes, None, Some(0.5)).unwrap();
+        assert_eq!(rimmed[0].len(), 2);
+    }
+
+    #[test]
+    fn rim_is_uniform_after_an_anisotropic_transform() {
+        // A rim is a note-unit thickness, so a part scaled differently in
+        // x and y still gets the same band on every side.
+        let mut p = part(Shape::Square { rounding: 0.0 });
+        p.transform = Transform {
+            w: 0.5,
+            h: 0.25,
+            ..Transform::default()
+        };
+        let r = resolve_part(&p).unwrap();
+        let rimmed = finish_part(&r.shapes, None, Some(0.05)).unwrap();
+        let hole = &rimmed[0][1];
+        let hx = hole.iter().map(|q| q[0].abs()).fold(0.0f32, f32::max);
+        let hy = hole.iter().map(|q| q[1].abs()).fold(0.0f32, f32::max);
+        assert!((hx - 0.45).abs() < 1e-3, "hole half-width {hx}");
+        assert!((hy - 0.2).abs() < 1e-3, "hole half-height {hy}");
+    }
+
+    #[test]
+    fn rotation_is_counterclockwise() {
+        // A triangle with its apex up: turned 90 degrees counterclockwise
+        // the apex points left, so x never exceeds zero.
+        let ctrl = |x: f32, y: f32| crate::designer::ControlPoint {
+            x,
+            y,
+            smooth: false,
+        };
+        let mut p = part(Shape::Points {
+            control: vec![ctrl(1.0, 0.0), ctrl(0.0, 1.0), ctrl(-1.0, 0.0)],
+        });
+        p.transform.rotation = 90.0;
+        let r = resolve_part(&p).unwrap();
+        let xs: Vec<f32> = r.shapes[0][0].iter().map(|q| q[0]).collect();
+        assert!(xs.iter().cloned().fold(f32::MAX, f32::min) < -0.9);
+        assert!(xs.iter().cloned().fold(f32::MIN, f32::max) < 0.01);
+    }
+
+    #[test]
+    fn corrupt_parameters_are_capped_not_fatal() {
+        let mut p = part(Shape::Circle);
+        p.transform = Transform {
+            x: 0.6,
+            w: 0.2,
+            h: 0.2,
+            ..Transform::default()
+        };
+        p.effects.repeat = Some(u32::MAX);
+        p.effects.waves = Some(Waves {
+            count: u32::MAX,
+            depth: 40.0,
+            style: WaveStyle::Sine,
+        });
+        let r = resolve_part(&p).unwrap();
+        assert!(!r.shapes.is_empty());
+        let finished = finish_part(&r.shapes, Some(5.0), Some(5.0)).unwrap();
+        assert!(!finished.is_empty());
     }
 
     #[test]
@@ -262,7 +380,7 @@ mod tests {
     }
 
     #[test]
-    fn hidden_or_degenerate_parts_resolve_to_nothing() {
+    fn degenerate_parts_resolve_to_nothing() {
         let mut p = part(Shape::Points { control: vec![] });
         let r = resolve_part(&p).unwrap();
         assert!(r.shapes.is_empty());
