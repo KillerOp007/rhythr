@@ -25,6 +25,12 @@ pub type Shapes = Vec<Vec<Contour>>;
 /// editor allows, while 64 * 65536 stays far inside the i32 engine.
 pub const KIT_RANGE: f32 = 64.0;
 
+/// Smallest area a region result keeps, in note units squared: a square
+/// of side 0.001 on a note two units wide. Offsets leave micro loops of a
+/// few lattice cells at inner corners, and a later dilation turns each
+/// one into a full disc of the offset radius.
+pub const MIN_SHAPE_AREA: f32 = 1e-6;
+
 /// Signed area, positive for counterclockwise. Summed in f64 relative to
 /// the first vertex: a sliver one lattice cell wide would otherwise
 /// cancel in f32 and come out with the wrong sign.
@@ -98,17 +104,26 @@ fn overlay(
     rule: OverlayRule,
     fill: FillRule,
 ) -> Result<Shapes, KitError> {
-    overlay_with(subject, clip, rule, fill, false)
+    overlay_with(subject, clip, rule, fill, false, MIN_SHAPE_AREA)
 }
 
 /// `keep_collinear` sets both of i_overlay's collinear options (input and
 /// output); false is exactly the library default every other caller uses.
+/// `min_area` (note units squared) is i_overlay's `min_output_area`: a
+/// contour whose area is smaller is dropped from the result. The field
+/// compares the AREA, not twice the area (core/extract.rs shifts the
+/// doubled area right by one before comparing), and the float wrapper
+/// multiplies it by the adapter's scale squared, which is KIT_SCALE *
+/// KIT_SCALE here, so the note-unit value goes in unconverted. Region
+/// paths pass MIN_SHAPE_AREA; the face path passes 0 so a subdivision
+/// stays an exact partition.
 fn overlay_with(
     subject: &Shapes,
     clip: &Shapes,
     rule: OverlayRule,
     fill: FillRule,
     keep_collinear: bool,
+    min_area: f32,
 ) -> Result<Shapes, KitError> {
     check_range(subject.iter().flatten().flatten())?;
     check_range(clip.iter().flatten().flatten())?;
@@ -117,6 +132,7 @@ fn overlay_with(
     let mut options = OverlayOptions::default();
     options.preserve_input_collinear = keep_collinear;
     options.preserve_output_collinear = keep_collinear;
+    options.min_output_area = min_area;
     let out: Shapes =
         FloatOverlay::new_custom(adapter(), options, Solver::default(), points.max(16))
             .unsafe_add_source(subject, ShapeType::Subject)
@@ -155,7 +171,9 @@ pub fn boolean(a: &Shapes, b: &Shapes, rule: OverlayRule) -> Result<Shapes, KitE
 /// `boolean` with i_overlay's collinear options on. The default drops an
 /// exactly collinear vertex from the output, so a corner that one face
 /// keeps can vanish from its neighbour and the two stop sharing edges one
-/// to one. Faces that must keep every shared vertex come from here.
+/// to one. Faces that must keep every shared vertex come from here. It
+/// also drops no small contour (no minimum area): faces are an exact
+/// partition, and a missing sliver face would leave open edges.
 pub fn boolean_keep_collinear(
     a: &Shapes,
     b: &Shapes,
@@ -164,7 +182,7 @@ pub fn boolean_keep_collinear(
     if a.is_empty() && b.is_empty() {
         return Ok(Vec::new());
     }
-    overlay_with(a, b, rule, FillRule::NonZero, true)
+    overlay_with(a, b, rule, FillRule::NonZero, true, 0.0)
 }
 
 /// Grows (delta > 0) or shrinks (delta < 0) a region, round joins. A
@@ -374,5 +392,40 @@ mod tests {
                 assert!((k - k.round()).abs() < 1e-2, "{v} is off the lattice");
             }
         }
+    }
+
+    #[test]
+    fn micro_loops_vanish_from_region_results() {
+        // A unit square and a three-point loop 1e-4 across (area 5e-9).
+        let square = vec![[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]];
+        let micro = vec![[2.0, 2.0], [2.0001, 2.0], [2.0, 2.0001]];
+        let r = clean(&[square.clone(), micro.clone()], FillRule::NonZero).unwrap();
+        assert_eq!(r.len(), 1, "the micro loop must go");
+        let snapped = snap(&vec![vec![square], vec![micro]]).unwrap();
+        assert_eq!(snapped.len(), 1);
+    }
+
+    #[test]
+    fn small_but_visible_shapes_survive() {
+        let tiny = vec![[0.0, 0.0], [0.01, 0.0], [0.01, 0.01], [0.0, 0.01]];
+        let r = clean(&[tiny], FillRule::NonZero).unwrap();
+        assert_eq!(r.len(), 1);
+    }
+
+    #[test]
+    fn face_results_keep_every_sliver() {
+        let square: Shapes = vec![vec![vec![
+            [-1.0, -1.0],
+            [1.0, -1.0],
+            [1.0, 1.0],
+            [-1.0, 1.0],
+        ]]];
+        let micro: Shapes = vec![vec![vec![[2.0, 2.0], [2.0001, 2.0], [2.0, 2.0001]]]];
+        let r = boolean_keep_collinear(&square, &micro, OverlayRule::Union).unwrap();
+        assert_eq!(
+            r.len(),
+            2,
+            "faces are an exact partition, nothing is dropped"
+        );
     }
 }

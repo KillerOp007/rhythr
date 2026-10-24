@@ -731,9 +731,26 @@ mod tests {
     #[test]
     fn a_finished_part_never_leaves_the_box() {
         // From the property run: Pill with round, mirror X, once with a
-        // rim, once with repeat 6; the chord-join erosion overshot the box.
+        // rim, once with repeat 6. The erosion left micro loops that the
+        // dilation blew into discs of radius r (extents 1.17 and 1.20).
+        // With micro loops dropped the first stays the closed pill pair
+        // (area about 0.99) and the second ends near 0.97, so the box cut
+        // has nothing left to do; the bounds pin both.
         #[allow(clippy::type_complexity)]
-        let cases: [(f32, f32, f32, f32, f32, f32, f32, Option<f32>, Option<u32>); 2] = [
+        let cases: [(
+            f32,
+            f32,
+            f32,
+            f32,
+            f32,
+            f32,
+            f32,
+            Option<f32>,
+            Option<u32>,
+            f32,
+            f32,
+            f32,
+        ); 2] = [
             (
                 0.5097575,
                 0.07726318,
@@ -744,6 +761,9 @@ mod tests {
                 0.28260398,
                 Some(0.21721794),
                 None,
+                0.99,
+                1.0 + 1e-4,
+                0.9,
             ),
             (
                 0.8990014,
@@ -755,9 +775,14 @@ mod tests {
                 0.20572755,
                 None,
                 Some(6),
+                0.95,
+                0.99,
+                0.0,
             ),
         ];
-        for (aspect, x, y, w, h, rotation, round, rim, repeat) in cases {
+        for (aspect, x, y, w, h, rotation, round, rim, repeat, min_extent, max_extent, min_area) in
+            cases
+        {
             let mut p = part("p", Shape::Pill { aspect }, Mode::Add, 0.1, -0.1);
             p.transform = Transform {
                 x,
@@ -771,10 +796,26 @@ mod tests {
             p.effects.mirror = Mirror::X;
             p.effects.repeat = repeat;
             let ev = evaluate(&design(vec![p])).unwrap();
-            for iv in &ev.intervals {
-                let e = extent(&iv.solid).max(extent(&iv.glass));
-                assert!(e <= 1.0 + 1e-4, "a finished part reaches {e}");
-            }
+            let e = ev
+                .intervals
+                .iter()
+                .map(|iv| extent(&iv.solid).max(extent(&iv.glass)))
+                .fold(0.0, f32::max);
+            assert!(
+                e <= max_extent,
+                "a finished part reaches {e}, allowed {max_extent}"
+            );
+            assert!(e >= min_extent, "the finish wrecked the shape: extent {e}");
+            let area: f32 = ev.intervals[0]
+                .solid
+                .iter()
+                .filter_map(|s| s.first())
+                .map(|c| crate::kit::geom::signed_area(c))
+                .sum();
+            assert!(
+                area >= min_area,
+                "the finish wrecked the shape: area {area}"
+            );
         }
     }
 }
