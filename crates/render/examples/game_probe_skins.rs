@@ -329,7 +329,12 @@ fn main() {
             part("inlay", material, &plate, -0.1, 0.1, 0.5, false),
         ];
         let obj = obj_text(&parts, true);
-        write_rhs(&dir, name, &obj, &mtl_text(&[("Material.001", 1.0), (material, d)]));
+        write_rhs(
+            &dir,
+            name,
+            &obj,
+            &mtl_text(&[("Material.001", 1.0), (material, d)]),
+        );
         render_png(&dir, name, &obj);
         let _ = writeln!(summary, "{name}: inlay in hole, material {material}, d {d}");
     }
