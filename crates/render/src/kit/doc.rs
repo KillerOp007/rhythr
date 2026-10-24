@@ -55,7 +55,11 @@ fn yes() -> bool {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Shape {
     Circle,
-    Square,
+    /// A square with a side flat at the bottom; rounding blends toward
+    /// the circle exactly as Polygon does.
+    Square {
+        rounding: f32,
+    },
     Polygon {
         sides: u32,
         rounding: f32,

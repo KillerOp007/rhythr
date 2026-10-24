@@ -73,13 +73,11 @@ pub fn from_v1(json: &str) -> Result<Design, KitError> {
                 },
             });
         }
-        // v1 applied the rounding slider to squares as well, and drew the
-        // square as a 4-gon turned 45 degrees; the kit's sharp `Square`
-        // would lose that rounding.
-        let kind = s("shape", "circle");
-        let shape = match kind.as_str() {
-            "square" => Shape::Polygon {
-                sides: 4,
+        // v1 applied the rounding slider to squares as well; the kit's
+        // Square carries rounding and its own 45 degree turn, so waves keep
+        // the phase v1 gave them (they were evaluated before the turn).
+        let shape = match s("shape", "circle").as_str() {
+            "square" => Shape::Square {
                 rounding: f("round", 0.3),
             },
             "ngon" => Shape::Polygon {
@@ -88,10 +86,10 @@ pub fn from_v1(json: &str) -> Result<Design, KitError> {
             },
             _ => Shape::Circle,
         };
-        // v1 sampled its radius at (angle + offset + twist), which turns
-        // the shape by MINUS that angle; the kit rotates counterclockwise.
-        let offset_deg = if kind == "square" { 45.0 } else { 0.0 };
-        (shape, "Shape", -(offset_deg + f("twist", 0.0)))
+        // v1 sampled its radius at (angle + twist), which turns the shape
+        // by MINUS twist; the kit rotates counterclockwise. Written as a
+        // subtraction so a zero twist serialises as 0.0, not -0.0.
+        (shape, "Shape", 0.0 - f("twist", 0.0))
     };
     let depth = f("depth", 0.05).clamp(0.005, 0.5);
     Ok(Design {
@@ -164,20 +162,18 @@ mod tests {
     }
 
     #[test]
-    fn a_v1_square_keeps_its_rounding_as_a_turned_four_gon() {
+    fn a_v1_square_keeps_its_rounding() {
         let json = SLIDERS
             .replace(r#""shape":"ngon""#, r#""shape":"square""#)
             .replace(r#""twist":30"#, r#""twist":0"#);
         let d = from_v1(&json).unwrap();
         let p = &d.parts[0];
-        assert_eq!(
-            p.shape,
-            Shape::Polygon {
-                sides: 4,
-                rounding: 0.3
-            }
+        assert_eq!(p.shape, Shape::Square { rounding: 0.3 });
+        assert_eq!(p.transform.rotation, 0.0);
+        assert!(
+            !p.transform.rotation.is_sign_negative(),
+            "a zero twist must not serialise as -0.0"
         );
-        assert_eq!(p.transform.rotation, -45.0);
     }
 
     #[test]
