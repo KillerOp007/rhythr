@@ -3245,12 +3245,75 @@ use rhythia_render::kit::doc::*;
 use rhythia_render::kit::export::export_rhs;
 use rhythia_render::kit::levels::evaluate;
 use rhythia_render::kit::mesh::build_mesh;
-use rhythia_render::kit::validate::validate;
-use rhythia_render::kit::KitError;
+use rhythia_render::kit::validate::{validate, KitMesh};
+use rhythia_render::kit::{KitError, KIT_SCALE};
+use std::collections::HashMap;
+
+/// Within one material, no vertex may sit strictly inside another
+/// triangle's edge at the same z: a seam between two faces has to be split
+/// identically on both sides, or the caps and walls meet in T-junctions.
+/// Exact on the lattice; vertices are bucketed by z and sorted by x so an
+/// edge scans only the vertices inside its x span.
+fn no_t_junctions(m: &KitMesh) -> bool {
+    let li = |v: f32| (v * KIT_SCALE).round() as i64;
+    let pts: Vec<[i64; 2]> = m.positions.iter().map(|p| [li(p[0]), li(p[1])]).collect();
+    for range in [m.solid.clone(), m.glass.clone()] {
+        let idx = &m.indices[range];
+        let mut by_z: HashMap<u32, Vec<u32>> = HashMap::new();
+        for &i in idx {
+            by_z.entry(m.positions[i as usize][2].to_bits()).or_default().push(i);
+        }
+        for v in by_z.values_mut() {
+            v.sort_unstable();
+            v.dedup();
+            v.sort_by_key(|&i| pts[i as usize][0]);
+        }
+        for t in idx.chunks_exact(3) {
+            for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+                let za = m.positions[a as usize][2].to_bits();
+                if za != m.positions[b as usize][2].to_bits() {
+                    continue;
+                }
+                let (pa, pb) = (pts[a as usize], pts[b as usize]);
+                let (x0, x1) = (pa[0].min(pb[0]), pa[0].max(pb[0]));
+                let verts = &by_z[&za];
+                let start = verts.partition_point(|&i| pts[i as usize][0] < x0);
+                for &v in &verts[start..] {
+                    let pv = pts[v as usize];
+                    if pv[0] > x1 {
+                        break;
+                    }
+                    if v == a || v == b {
+                        continue;
+                    }
+                    let d = [pb[0] - pa[0], pb[1] - pa[1]];
+                    let e = [pv[0] - pa[0], pv[1] - pa[1]];
+                    let inside_x = pv[0] > x0 && pv[0] < x1;
+                    let inside_y = pv[1] > pa[1].min(pb[1]) && pv[1] < pa[1].max(pb[1]);
+                    if d[0] * e[1] - d[1] * e[0] == 0 && (inside_x || inside_y) {
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+    true
+}
+
+/// Half the time on a 0.1 grid, so parts sit flush and seams run exactly
+/// collinear, which is where face sharing is hardest.
+fn coord() -> impl Strategy<Value = f32> {
+    prop_oneof![(-0.6f32..0.6), (-6i32..=6).prop_map(|k| k as f32 * 0.1)]
+}
+
+fn size() -> impl Strategy<Value = f32> {
+    prop_oneof![(0.2f32..1.0), (2i32..=10).prop_map(|k| k as f32 * 0.1)]
+}
 
 fn shape() -> impl Strategy<Value = Shape> {
     prop_oneof![
         Just(Shape::Circle),
+        Just(Shape::Square { rounding: 0.0 }),
         (0.0f32..1.0).prop_map(|rounding| Shape::Square { rounding }),
         (3u32..10, 0.0f32..1.0).prop_map(|(sides, rounding)| Shape::Polygon { sides, rounding }),
         (3u32..9, 0.2f32..0.9).prop_map(|(points, inner)| Shape::Star { points, inner }),
@@ -3273,11 +3336,11 @@ fn effects() -> impl Strategy<Value = Effects> {
 fn part(i: usize) -> impl Strategy<Value = Part> {
     (
         shape(),
-        -0.6f32..0.6,
-        -0.6f32..0.6,
-        0.2f32..1.0,
-        0.2f32..1.0,
-        0.0f32..360.0,
+        coord(),
+        coord(),
+        size(),
+        size(),
+        prop_oneof![2 => 0.0f32..360.0, 1 => Just(0.0f32), 1 => Just(90.0f32)],
         prop_oneof![3 => Just(Mode::Add), 1 => Just(Mode::Cut)],
         -1.9f32..0.4,
         0.05f32..0.5,
@@ -3316,6 +3379,7 @@ proptest! {
             Ok(ev) => {
                 let m = build_mesh(&ev).unwrap();
                 let r = validate(&m).unwrap();
+                prop_assert!(no_t_junctions(&m), "a vertex sits inside another triangle's edge: {:?}", d);
                 prop_assert!(r.triangles <= 40_000);
                 prop_assert!(m.positions.iter().all(|p| p[0].abs() <= 1.0001 && p[1].abs() <= 1.0001));
                 let m2 = build_mesh(&evaluate(&d).unwrap()).unwrap();
