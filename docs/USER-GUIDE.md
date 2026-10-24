@@ -173,6 +173,19 @@ endorsed by Rhythia or Capo Games.
   `.rhs` pack that works in rhythr's Config slot and imports into the
   game. The material file is always bundled, so exports from here never
   trip the game's missing-mtl crash.
+- **Note Kit (beta)** (button next to the Note Designer): the next
+  designer, built from parts. Add discs, squares, polygons, stars, rings
+  and pills, move, scale and rotate them on the canvas, switch a part to
+  Cut to carve into the others, give each part its own Depth band so
+  the note gets real relief, and mark parts as Glass to draw them
+  translucent like the game does. The canvas shows exactly the outline
+  the export will have. The previews (still and gameplay loop through
+  the real renderer) start hidden; the Previews button or the P key
+  shows them, and the choice is remembered. Designs autosave, save as
+  `.rhsd` files, and export as `.rhs` packs like the Note Designer.
+  "From old designer" brings your current Note Designer note in as one
+  part. Groups, waves, rims, point editing and the turntable follow in
+  the next updates; the Note Designer stays until the kit is complete.
 - **Hit sound choice**: under the Hit sounds slider, pick the game's
   default or one of its four alternative packs (Bass, Creamy, Pick,
   Vulnus), or choose your own audio file: anything your ffmpeg reads is
