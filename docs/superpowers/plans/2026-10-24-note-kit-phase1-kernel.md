@@ -2997,10 +2997,78 @@ pub fn export_rhs(design: &Design, name: &str) -> Result<Vec<u8>, KitError> {
 
 Add `pub mod export;` to `kit/mod.rs`.
 
+**Amendment (controller ruling after the review of 5a76009; binding):**
+
+1. `export_rhs` validates `name` before anything else: non-empty, at most 64 characters, ASCII letters, digits, spaces, `_` and `-` only; anything else is `KitError::Invalid(format!("skin name {name:?} must be letters, digits, spaces, _ or -"))`. The name reaches the config JSON, two zip entry paths and the obj's `o` line, so a quote, a slash, a newline or `..` would break the archive or escape the skin folder. `to_obj` and `export_rhs` carry a doc comment stating that contract.
+2. Four tests added (the brief's four stay unchanged):
+
+```rust
+    #[test]
+    fn unsafe_names_are_refused() {
+        let long = "x".repeat(65);
+        for bad in ["", "a\"b", "a/b", "a\\b", "a\nb", "..", long.as_str()] {
+            assert!(
+                matches!(export_rhs(&glass_design(), bad), Err(KitError::Invalid(_))),
+                "{bad:?}"
+            );
+        }
+        assert!(export_rhs(&glass_design(), "My Note_2-b").is_ok());
+    }
+
+    #[test]
+    fn the_archive_always_carries_the_mtl_and_names_glass_only_when_present() {
+        let entries = |bytes: &[u8]| -> Vec<(String, String)> {
+            let mut zr = zip::ZipArchive::new(std::io::Cursor::new(bytes.to_vec())).unwrap();
+            (0..zr.len())
+                .map(|i| {
+                    let mut f = zr.by_index(i).unwrap();
+                    let mut s = String::new();
+                    std::io::Read::read_to_string(&mut f, &mut s).unwrap();
+                    (f.name().to_string(), s)
+                })
+                .collect()
+        };
+        let with_glass = entries(&export_rhs(&glass_design(), "g").unwrap());
+        let mtl = with_glass.iter().find(|(n, _)| n == "noteSkin/note.mtl").expect("mtl bundled");
+        assert!(mtl.1.contains("newmtl Transparent"));
+        let solid_only = entries(&export_rhs(&Design::default_note(), "s").unwrap());
+        let mtl = solid_only.iter().find(|(n, _)| n == "noteSkin/note.mtl").expect("mtl bundled");
+        assert!(!mtl.1.contains("Transparent"));
+        let obj = solid_only.iter().find(|(n, _)| n == "noteSkin/s.obj").unwrap();
+        assert!(!obj.1.contains("usemtl Transparent"));
+    }
+
+    #[test]
+    fn sections_carry_their_own_ranges_in_order() {
+        let ev = crate::kit::levels::evaluate(&glass_design()).unwrap();
+        let m = crate::kit::mesh::build_mesh(&ev).unwrap();
+        let obj = to_obj(&m, "note");
+        let solid_at = obj.find("usemtl Material.001\n").unwrap();
+        let glass_at = obj.find("usemtl Transparent\n").unwrap();
+        assert!(solid_at < glass_at);
+        let faces = |s: &str| s.matches("\nf ").count();
+        assert_eq!(faces(&obj[solid_at..glass_at]), m.solid.len() / 3);
+        assert_eq!(faces(&obj[glass_at..]), m.glass.len() / 3);
+    }
+
+    #[test]
+    fn a_glass_only_design_has_one_transparent_section() {
+        // Pinned, not endorsed: the game decides which material counts as
+        // the opaque first one, and Task 12 probes a glass-only note in play.
+        let mut d = Design::default_note();
+        d.parts[0].material = Material::Glass;
+        let ev = crate::kit::levels::evaluate(&d).unwrap();
+        let m = crate::kit::mesh::build_mesh(&ev).unwrap();
+        let obj = to_obj(&m, "note");
+        assert!(!obj.contains("usemtl Material.001"));
+        assert_eq!(obj.matches("usemtl Transparent\n").count(), 1);
+    }
+```
+
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `cargo test -p rhythia-render kit::export`
-Expected: 4 passed.
+Expected: 8 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -3431,7 +3499,7 @@ Expected: compiles under glibc 2.35.
 
 - [ ] **Step 4: Render the reference designs and send one to the game**
 
-Write three design JSON files to the scratchpad (a ring with a recessed plate, the ring with a glass inlay, a disc with a rotated cut bar), render each with `cargo run --release -p rhythia-render --example kit_render_png -- <design.json> <out.png>`, and look at the PNGs. Export each with a tiny one-off `cargo run --example` call to `export_rhs` (or add a `--rhs <out.rhs>` third argument to `kit_render_png.rs` that writes `export_rhs(&design, "probe")`), copy the three .rhs files to `/home/killer/RhythiaRenderer/game-probes/kit/` and ask the owner to import them from a local folder and screenshot them in play. The acceptance criterion: all three draw, the glass inlay is translucent, the recessed plate shows parallax, no crash at map end.
+Write four design JSON files to the scratchpad (a ring with a recessed plate, the ring with a glass inlay, a disc with a rotated cut bar, and a glass-only disc, whose obj has a single `usemtl Transparent` section and no `Material.001`: the game answers whether a lone second-named material draws translucent or opaque, and the answer goes into the ledger and the spec), render each with `cargo run --release -p rhythia-render --example kit_render_png -- <design.json> <out.png>`, and look at the PNGs. Export each with a tiny one-off `cargo run --example` call to `export_rhs` (or add a `--rhs <out.rhs>` third argument to `kit_render_png.rs` that writes `export_rhs(&design, "probe")`), copy the four .rhs files to `/home/killer/RhythiaRenderer/game-probes/kit/` and ask the owner to import them from a local folder and screenshot them in play. The acceptance criterion: all four draw, the glass inlay is translucent, the recessed plate shows parallax, no crash at map end; the glass-only disc is an observation, not a pass or fail.
 
 - [ ] **Step 5: Commit**
 
