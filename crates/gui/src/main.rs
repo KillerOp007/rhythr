@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager};
 
+mod kit_commands;
 mod live;
 
 use rhythia_formats::{map::Map, rhr::Replay};
@@ -6417,6 +6418,13 @@ fn main() {
             designer_import_glyph,
             designer_read_image,
             designer_preview,
+            kit_commands::kit_evaluate,
+            kit_commands::kit_mesh,
+            kit_commands::kit_default_doc,
+            kit_commands::kit_migrate_v1,
+            kit_commands::kit_doc_load,
+            kit_commands::kit_doc_save,
+            kit_commands::kit_export,
             designer_export,
             set_clip,
             clear_clip,
