@@ -680,6 +680,58 @@ mod tests {
         assert!(is_empty(&clean(&[line], FillRule::NonZero).unwrap()));
         assert!(is_empty(&clean(&[], FillRule::NonZero).unwrap()));
     }
+
+    #[test]
+    fn off_centre_inputs_share_ring_vertices_bit_for_bit() {
+        // i_overlay's own fixed-scale calls centre their lattice on each
+        // call's bounding box, so a ring and the cap cut around it came
+        // back on different lattices. The shared adapter ends that: the
+        // cap's hole must be the ring, bit for bit, for inputs that are
+        // not centred and for inputs already on the lattice but with a
+        // bounding-box centre half a cell off it.
+        let rect = |x0: f32, y0: f32, x1: f32, y1: f32| -> Contour {
+            vec![[x0, y0], [x1, y0], [x1, y1], [x0, y1]]
+        };
+        let bits = |c: &Contour| {
+            let mut v: Vec<[u32; 2]> = c.iter().map(|p| [p[0].to_bits(), p[1].to_bits()]).collect();
+            v.sort();
+            v
+        };
+        for inner in [
+            rect(0.1, -0.3, 0.7, 0.45),
+            rect(0.25, -0.25, 0.5 + 1.0 / 65536.0, 0.5),
+        ] {
+            let r1 = clean(&[inner], FillRule::NonZero).unwrap();
+            let r2 = clean(&[rect(-1.0, -1.0, 1.3, 1.0)], FillRule::NonZero).unwrap();
+            let cap = boolean(&r2, &r1, OverlayRule::Difference).unwrap();
+            assert_eq!(cap.len(), 1);
+            assert_eq!(cap[0].len(), 2, "outer plus the hole the ring cut");
+            assert_eq!(bits(&cap[0][1]), bits(&r1[0][0]));
+        }
+    }
+
+    #[test]
+    fn offset_grows_a_region_and_shrinks_its_hole() {
+        let mut hole = square(0.5);
+        hole.reverse();
+        let ring = clean(&[square(1.0), hole], FillRule::NonZero).unwrap();
+        assert_eq!(ring[0].len(), 2);
+        let grown = offset(&ring, 0.1).unwrap();
+        assert!((extent(&grown) - 1.1).abs() < 2e-2);
+        let hole_extent = grown[0][1]
+            .iter()
+            .map(|p| p[0].abs().max(p[1].abs()))
+            .fold(0.0f32, f32::max);
+        assert!((hole_extent - 0.4).abs() < 1e-3, "hole extent {hole_extent}");
+    }
+
+    #[test]
+    fn out_of_range_or_nan_input_is_a_scale_error() {
+        let far: Contour = vec![[100.0, 0.0], [101.0, 0.0], [100.0, 1.0]];
+        assert!(matches!(clean(&[far], FillRule::NonZero), Err(KitError::Scale(_))));
+        let a = clean(&[square(1.0)], FillRule::NonZero).unwrap();
+        assert!(matches!(offset(&a, f32::NAN), Err(KitError::Scale(_))));
+    }
 }
 ```
 
@@ -693,34 +745,49 @@ Expected: compile error, `clean` not found.
 `crates/render/src/kit/geom.rs`:
 
 ```rust
-//! Fixed-scale wrappers around i_overlay. Every operation snaps to the
-//! same integer grid, so a region derived twice from the same inputs is
-//! bit-identical, and contours shared between neighbouring operations
-//! line up vertex for vertex.
+//! Fixed-scale, fixed-origin wrappers around i_overlay. Every operation
+//! snaps to ONE integer lattice (cell 1/65536, origin at the note's
+//! centre, spanning plus and minus KIT_RANGE), so a region derived twice
+//! from the same inputs is bit-identical, and contours shared between
+//! neighbouring operations line up vertex for vertex. i_overlay's own
+//! fixed-scale entry points fix the cell size but centre the lattice on
+//! each call's bounding box, which is why the adapter is built here.
 
 use crate::kit::{KitError, KIT_SCALE};
 pub use i_overlay::core::fill_rule::FillRule;
+use i_overlay::core::overlay::ShapeType;
 pub use i_overlay::core::overlay_rule::OverlayRule;
-use i_overlay::float::scale::FixedScaleFloatOverlay;
+use i_overlay::float::overlay::FloatOverlay;
+use i_overlay::i_float::adapter::FloatPointAdapter;
+use i_overlay::i_float::float::rect::FloatRect;
 use i_overlay::mesh::outline::offset::OutlineOffset;
 use i_overlay::mesh::style::{LineJoin, OutlineStyle};
 
 pub type Contour = Vec<[f32; 2]>;
 pub type Shapes = Vec<Vec<Contour>>;
 
-fn scale_err(e: i_overlay::float::scale::FixedScaleOverlayError) -> KitError {
-    KitError::Scale(format!("{e:?}"))
-}
+/// Half-extent of the lattice in note units. Notes live in the unit box
+/// and depth never exceeds 2, so 64 leaves room for any transform the
+/// editor allows, while 64 * 65536 stays far inside the i32 engine.
+pub const KIT_RANGE: f32 = 64.0;
 
-/// Signed area, positive for counterclockwise.
+/// Signed area, positive for counterclockwise. Summed in f64 relative to
+/// the first vertex: a sliver one lattice cell wide would otherwise
+/// cancel in f32 and come out with the wrong sign.
 pub fn signed_area(c: &[[f32; 2]]) -> f32 {
-    let mut a = 0.0;
+    if c.len() < 3 {
+        return 0.0;
+    }
+    let (ox, oy) = (c[0][0] as f64, c[0][1] as f64);
+    let mut a = 0.0f64;
     for i in 0..c.len() {
         let p = c[i];
         let q = c[(i + 1) % c.len()];
-        a += p[0] * q[1] - q[0] * p[1];
+        let (px, py) = (p[0] as f64 - ox, p[1] as f64 - oy);
+        let (qx, qy) = (q[0] as f64 - ox, q[1] as f64 - oy);
+        a += px * qy - qx * py;
     }
-    a * 0.5
+    (a * 0.5) as f32
 }
 
 /// Outer counterclockwise, holes clockwise: the wall builder encodes
@@ -738,25 +805,55 @@ pub fn orient(shapes: &mut Shapes) {
 }
 
 fn tidy(mut shapes: Shapes) -> Shapes {
+    // A shape whose outer boundary degenerates is dropped whole: keeping
+    // a surviving hole would promote it to a filled region.
+    shapes.retain(|s| s.first().is_some_and(|outer| outer.len() >= 3));
     for s in shapes.iter_mut() {
         s.retain(|c| c.len() >= 3);
     }
-    shapes.retain(|s| !s.is_empty());
     orient(&mut shapes);
     shapes
 }
 
+fn check_range<'a>(pts: impl Iterator<Item = &'a [f32; 2]>) -> Result<(), KitError> {
+    for p in pts {
+        let ok = p[0].is_finite() && p[1].is_finite() && p[0].abs() <= KIT_RANGE && p[1].abs() <= KIT_RANGE;
+        if !ok {
+            return Err(KitError::Scale(format!(
+                "point {p:?} is outside the lattice range of {KIT_RANGE}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// The one lattice every operation shares.
+fn adapter() -> FloatPointAdapter<[f32; 2], i32> {
+    FloatPointAdapter::with_scale(
+        FloatRect::new(-KIT_RANGE, KIT_RANGE, -KIT_RANGE, KIT_RANGE),
+        KIT_SCALE,
+    )
+}
+
+fn overlay(subject: &Shapes, clip: &Shapes, rule: OverlayRule, fill: FillRule) -> Result<Shapes, KitError> {
+    check_range(subject.iter().flatten().flatten())?;
+    check_range(clip.iter().flatten().flatten())?;
+    let points = subject.iter().flatten().map(|c| c.len()).sum::<usize>()
+        + clip.iter().flatten().map(|c| c.len()).sum::<usize>();
+    let out: Shapes = FloatOverlay::with_adapter(adapter(), points.max(16))
+        .unsafe_add_source(subject, ShapeType::Subject)
+        .unsafe_add_source(clip, ShapeType::Clip)
+        .overlay(rule, fill);
+    Ok(tidy(out))
+}
+
 /// Resolves raw contours into clean regions under `rule`.
 pub fn clean(contours: &[Contour], rule: FillRule) -> Result<Shapes, KitError> {
-    let subj: Vec<Contour> = contours.iter().filter(|c| c.len() >= 3).cloned().collect();
-    if subj.is_empty() {
+    let raw: Vec<Contour> = contours.iter().filter(|c| c.len() >= 3).cloned().collect();
+    if raw.is_empty() {
         return Ok(Vec::new());
     }
-    let clip: Vec<Contour> = Vec::new();
-    let shapes: Shapes = subj
-        .overlay_with_fixed_scale(&clip, OverlayRule::Subject, rule, KIT_SCALE)
-        .map_err(scale_err)?;
-    Ok(tidy(shapes))
+    overlay(&vec![raw], &Vec::new(), OverlayRule::Subject, rule)
 }
 
 /// Boolean of two clean regions (nonzero: both are already consistent).
@@ -764,24 +861,37 @@ pub fn boolean(a: &Shapes, b: &Shapes, rule: OverlayRule) -> Result<Shapes, KitE
     if a.is_empty() && b.is_empty() {
         return Ok(Vec::new());
     }
-    let shapes: Shapes = a
-        .overlay_with_fixed_scale(b, rule, FillRule::NonZero, KIT_SCALE)
-        .map_err(scale_err)?;
-    Ok(tidy(shapes))
+    overlay(a, b, rule, FillRule::NonZero)
 }
 
 /// Grows (delta > 0) or shrinks (delta < 0) a region, round joins. A
 /// region thinner than twice a negative delta vanishes, which is the
-/// correct limit.
+/// correct limit. The outline call centres its own lattice on the input,
+/// so its result passes through the shared lattice once more; the input
+/// is oriented first because the outline builder reads facing from the
+/// traversal direction.
 pub fn offset(shapes: &Shapes, delta: f32) -> Result<Shapes, KitError> {
+    if !delta.is_finite() {
+        return Err(KitError::Scale(format!("offset {delta} is not finite")));
+    }
     if shapes.is_empty() || delta == 0.0 {
         return Ok(shapes.clone());
     }
+    check_range(shapes.iter().flatten().flatten())?;
+    let mut input = shapes.clone();
+    orient(&mut input);
     let style = OutlineStyle::new(delta).line_join(LineJoin::Round(0.2));
-    let out: Shapes = shapes.outline_fixed_scale(&style, KIT_SCALE).map_err(scale_err)?;
-    Ok(tidy(out))
+    let grown: Shapes = input
+        .outline_fixed_scale(&style, KIT_SCALE)
+        .map_err(|e| KitError::Scale(format!("{e:?}")))?;
+    let grown = tidy(grown);
+    if grown.is_empty() {
+        return Ok(Vec::new());
+    }
+    overlay(&grown, &Vec::new(), OverlayRule::Subject, FillRule::NonZero)
 }
 
+/// The largest |x| or |y| over every outer contour.
 pub fn extent(shapes: &Shapes) -> f32 {
     shapes
         .iter()
@@ -791,6 +901,7 @@ pub fn extent(shapes: &Shapes) -> f32 {
         .fold(0.0f32, f32::max)
 }
 
+/// True when no shape has a usable outer contour.
 pub fn is_empty(shapes: &Shapes) -> bool {
     shapes.iter().all(|s| s.is_empty() || s[0].len() < 3)
 }
@@ -798,12 +909,12 @@ pub fn is_empty(shapes: &Shapes) -> bool {
 
 Add `pub mod geom;` to `kit/mod.rs`.
 
-Note on `OverlayRule::Subject` with an empty clip: it returns the subject cleaned under `rule`. If i_overlay rejects an empty clip resource at runtime (the test will show it), pass the subject itself as the clip with `OverlayRule::Union` instead; both give the cleaned subject.
+The adapter-based overlay is the i_overlay 8.1 API verified against the crate source: `FloatOverlay::with_adapter(adapter, capacity)` returns a builder, `unsafe_add_source(resource, ShapeType)` chains, `overlay(rule, fill)` returns `Shapes`; `OverlayRule::Subject` with an empty clip returns the subject cleaned under `fill`. If a name differs in your i_overlay version, look at `~/.cargo/registry/src/*/i_overlay-8.1.0/src/float/overlay.rs` and report what you find; do not fall back to `overlay_with_fixed_scale`, whose lattice origin moves with the input.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `cargo test -p rhythia-render kit::geom`
-Expected: 5 passed. If `offset_shrinks_and_grows` fails on the exact extent of the grown square, loosen only that tolerance (round joins approximate the corner arc); never loosen the bit-identity test.
+Expected: 8 passed. If `offset_shrinks_and_grows` fails on the exact extent of the grown square, loosen only that tolerance (round joins approximate the corner arc); never loosen either bit-identity test.
 
 - [ ] **Step 5: Commit**
 
