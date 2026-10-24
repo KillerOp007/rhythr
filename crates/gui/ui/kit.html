@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>rhythr · Note Kit</title>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="kit.css" />
+</head>
+<body id="kit-body">
+  <header id="kt-toolbar">
+    <div class="group" id="kt-add">
+      <span class="label">Add</span>
+      <button class="btn small" data-add="circle">Disc</button>
+      <button class="btn small" data-add="square">Square</button>
+      <button class="btn small" data-add="polygon">Polygon</button>
+      <button class="btn small" data-add="star">Star</button>
+      <button class="btn small" data-add="ring">Ring</button>
+      <button class="btn small" data-add="pill">Pill</button>
+    </div>
+    <div class="group">
+      <button class="btn small ghost" id="kt-undo" title="Undo (Ctrl+Z)">Undo</button>
+      <button class="btn small ghost" id="kt-redo" title="Redo (Ctrl+Y)">Redo</button>
+    </div>
+    <div class="group">
+      <button class="btn small" id="kt-previews" title="Show or hide the previews (P)">Previews</button>
+    </div>
+    <div class="group grow"></div>
+    <div class="group">
+      <button class="btn small ghost" id="kt-new" title="New design">New</button>
+      <button class="btn small ghost" id="kt-load" title="Open a design (Ctrl+O)">Open</button>
+      <button class="btn small ghost" id="kt-save" title="Save the design (Ctrl+S)">Save</button>
+      <button class="btn small ghost" id="kt-import-old" title="Bring in the note from the old Note Designer">From old designer</button>
+      <button class="btn small" id="kt-export" title="Export as .rhs for rhythr and the game">Export .rhs</button>
+    </div>
+  </header>
+  <main id="kt-root">
+    <aside id="kt-parts-pane">
+      <h2>Parts</h2>
+      <div id="kt-parts"></div>
+      <div class="hint">Top of the list draws on top. Drag to reorder.</div>
+    </aside>
+    <section id="kt-centre">
+      <div id="kt-canvas-box">
+        <canvas id="kt-canvas"></canvas>
+        <button id="kt-view-reset" class="btn small ghost" title="Reset zoom and pan">100%</button>
+      </div>
+      <div id="kt-canvas-hint" class="hint">
+        Click selects a part, drag moves it, corner handles scale (Shift keeps the proportions),
+        the handle above rotates, arrows nudge. Wheel zooms, middle drag or Space+drag pans.
+        The solid square is the hard size limit; the dashed one is the game's true hit area.
+      </div>
+      <div id="kt-splitter" title="Drag to resize editor vs. previews" hidden></div>
+      <div id="kt-preview-box" hidden>
+        <div id="kt-preview-row">
+          <figure>
+            <img id="kt-still" alt="Note close-up" />
+            <figcaption class="hint">Still: first three colors on approach</figcaption>
+          </figure>
+          <figure>
+            <img id="kt-preview" alt="Gameplay preview" />
+            <figcaption class="hint">Gameplay loop, real renderer</figcaption>
+          </figure>
+        </div>
+      </div>
+    </section>
+    <aside id="kt-inspector">
+      <div id="kt-inspector-body"></div>
+      <h2>Colors</h2>
+      <div id="kt-colors"></div>
+      <button class="btn small ghost" id="kt-color-add">Add color</button>
+    </aside>
+  </main>
+  <footer id="kt-status-bar">
+    <span id="kt-status"></span>
+    <span id="kt-triangles" class="hint"></span>
+  </footer>
+  <script type="module" src="kit/main.js"></script>
+</body>
+</html>
