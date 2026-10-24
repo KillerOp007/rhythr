@@ -394,8 +394,19 @@ mod tests {
         assert_eq!(p.shape, Shape::Polygon { sides: 6, rounding: 0.3 });
         assert_eq!(p.effects.rim, Some(0.22));
         assert_eq!(p.effects.waves, Some(Waves { count: 5, depth: 0.25, style: WaveStyle::Spike }));
-        assert_eq!(p.transform.rotation, 30.0);
+        // v1 sampled the radius at angle + twist, which turns the shape
+        // clockwise; the kit rotates counterclockwise, hence the sign.
+        assert_eq!(p.transform.rotation, -30.0);
         assert_eq!(p.depth, Depth { front: 0.05, back: -0.05 });
+    }
+
+    #[test]
+    fn a_v1_square_keeps_its_rounding_as_a_turned_four_gon() {
+        let json = SLIDERS.replace(r#""shape":"ngon""#, r#""shape":"square""#).replace(r#""twist":30"#, r#""twist":0"#);
+        let d = from_v1(&json).unwrap();
+        let p = &d.parts[0];
+        assert_eq!(p.shape, Shape::Polygon { sides: 4, rounding: 0.3 });
+        assert_eq!(p.transform.rotation, -45.0);
     }
 
     #[test]
@@ -507,13 +518,20 @@ pub fn from_v1(json: &str) -> Result<Design, KitError> {
                 },
             });
         }
+        // v1 applied the rounding slider to squares as well, and drew the
+        // square as a 4-gon turned 45 degrees; the kit's sharp `Square`
+        // would lose that rounding.
         let shape = match s("shape", "circle").as_str() {
-            "square" => Shape::Square,
+            "square" => Shape::Polygon { sides: 4, rounding: f("round", 0.3) },
             "ngon" => Shape::Polygon { sides: f("n", 6.0) as u32, rounding: f("round", 0.3) },
             _ => Shape::Circle,
         };
         (shape, "Shape")
     };
+    // v1 sampled its radius at (angle + offset + twist), which turns the
+    // shape by MINUS that angle; the kit rotates counterclockwise by plus.
+    let offset_deg = if s("shape", "circle") == "square" { 45.0 } else { 0.0 };
+    let rotation = -(offset_deg + f("twist", 0.0));
     let depth = f("depth", 0.05).clamp(0.005, 0.5);
     Ok(Design {
         version: 2,
@@ -525,7 +543,7 @@ pub fn from_v1(json: &str) -> Result<Design, KitError> {
             visible: true,
             locked: false,
             shape,
-            transform: Transform { rotation: f("twist", 0.0), ..Transform::default() },
+            transform: Transform { rotation, ..Transform::default() },
             mode: Mode::Add,
             depth: Depth { front: depth, back: -depth },
             material: Material::Solid,
@@ -541,7 +559,7 @@ Add `pub mod migrate;` to `kit/mod.rs`.
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `cargo test -p rhythia-render kit::migrate`
-Expected: 4 passed.
+Expected: 5 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -907,7 +925,9 @@ pub fn base_contours(shape: &Shape) -> Vec<Contour> {
         Shape::Circle => vec![polar(SAMPLES, |_| 1.0)],
         Shape::Square => vec![polar(SAMPLES, |th| ngon_radius(4, 0.0, th, PI / 4.0))],
         Shape::Polygon { sides, rounding } => {
-            vec![polar(SAMPLES, |th| ngon_radius(*sides, *rounding, th, PI / 4.0))]
+            // Vertex at angle zero, as the v1 editor drew its polygons;
+            // only the square is turned so a side sits flat.
+            vec![polar(SAMPLES, |th| ngon_radius(*sides, *rounding, th, 0.0))]
         }
         Shape::Star { points, inner } => {
             let n = (*points).max(2) as f32;
