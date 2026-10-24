@@ -53,6 +53,8 @@ Non-goals
 | Approach fade double-blends overlapping geometry | probes 5 and 6: an inlay over a disc shows only on far, faded notes | parts overlapping in screen space look brighter during the fade; the preview reproduces it |
 | Any material after the first draws translucent at a fixed alpha; the .mtl `d` value is ignored | probes 7a to 7d: Glass at d 0.35, 0.7, 1.0 and "Transparent" at d 1.0 all look the same | glass is a switch, not a slider; measured alpha about 0.57 (probe 7a screenshot) |
 | Archives import only from local paths | "File path is unsafe" from a UNC share | documentation note for users |
+| A kit skin whose obj uses only `Transparent` draws translucent | kit probe 4 (glass-only disc, 24.10. evening): clearly darker notes | the game's "first material" is the first in the .mtl, not the first the obj uses; a glass-only design works; rhythr's loader must take the material order from the bundled .mtl (Phase 2), it keys on `usemtl` order today and shows such a skin opaque |
+| Kit probes 1 to 3 pass in play | ring with recessed plate shows parallax; glass inlay translucent; the cut bar shows as a notch at the rim and, seen at an angle, as a line across the disc (its walls) | Phase 1 acceptance met; grooves in an unlit note are visible only through parallax and their walls, a design hint for the editor |
 
 Coordinate convention of every built-in mesh: x and y half-extent 1.0
 (the hard size cap), front toward the player at +z, depth extends
