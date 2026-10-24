@@ -410,6 +410,19 @@ mod tests {
     }
 
     #[test]
+    fn freeform_and_imports_ignore_stale_slider_rotation() {
+        // v1 never turned freeform or imported outlines, even when the
+        // slider fields still said "square" or carried a twist.
+        let json = r##"{"P":{"shape":"square","n":6,"round":0.3,"hollow":false,"thick":0.22,
+          "depth":0.05,"waves":0,"waveDepth":0.25,"waveform":"sine","twist":30},
+          "free":[{"x":1,"y":0,"smooth":false},{"x":0.5,"y":0.5,"smooth":true}],
+          "symmetry":4,"mirror":false,"colors":["#ffffff"],"imported":null}"##;
+        assert_eq!(from_v1(json).unwrap().parts[0].transform.rotation, 0.0);
+        let json = json.replace(r#""imported":null"#, r#""imported":[[[-1,-1],[1,-1],[1,1],[-1,1]]]"#);
+        assert_eq!(from_v1(&json).unwrap().parts[0].transform.rotation, 0.0);
+    }
+
+    #[test]
     fn freeform_keeps_symmetry_and_mirror_as_effects() {
         let json = r##"{"P":{"shape":"circle","n":6,"round":0.3,"hollow":false,"thick":0.22,
           "depth":0.05,"waves":0,"waveDepth":0.25,"waveform":"sine","twist":0},
@@ -495,8 +508,11 @@ pub fn from_v1(json: &str) -> Result<Design, KitError> {
         .filter(|x| x.is_array())
         .and_then(|x| serde_json::from_value(x.clone()).ok());
 
-    let (shape, name) = if let Some(contours) = imported {
-        (Shape::Contours { contours, label: "import".into() }, "Import")
+    // Only the slider outline turned with twist (and the square's 45
+    // degree offset) in v1; freeform and imported outlines never did, so
+    // their rotation is zero even when the slider fields still hold values.
+    let (shape, name, rotation) = if let Some(contours) = imported {
+        (Shape::Contours { contours, label: "import".into() }, "Import", 0.0)
     } else if let Some(control) = free.filter(|c| c.len() >= 2) {
         if symmetry > 1 {
             effects.repeat = Some(symmetry);
@@ -504,7 +520,7 @@ pub fn from_v1(json: &str) -> Result<Design, KitError> {
         if mirror {
             effects.mirror = Mirror::X;
         }
-        (Shape::Points { control }, "Freeform")
+        (Shape::Points { control }, "Freeform", 0.0)
     } else {
         let waves = f("waves", 0.0) as u32;
         if waves > 0 {
@@ -521,17 +537,17 @@ pub fn from_v1(json: &str) -> Result<Design, KitError> {
         // v1 applied the rounding slider to squares as well, and drew the
         // square as a 4-gon turned 45 degrees; the kit's sharp `Square`
         // would lose that rounding.
-        let shape = match s("shape", "circle").as_str() {
+        let kind = s("shape", "circle");
+        let shape = match kind.as_str() {
             "square" => Shape::Polygon { sides: 4, rounding: f("round", 0.3) },
             "ngon" => Shape::Polygon { sides: f("n", 6.0) as u32, rounding: f("round", 0.3) },
             _ => Shape::Circle,
         };
-        (shape, "Shape")
+        // v1 sampled its radius at (angle + offset + twist), which turns
+        // the shape by MINUS that angle; the kit rotates counterclockwise.
+        let offset_deg = if kind == "square" { 45.0 } else { 0.0 };
+        (shape, "Shape", -(offset_deg + f("twist", 0.0)))
     };
-    // v1 sampled its radius at (angle + offset + twist), which turns the
-    // shape by MINUS that angle; the kit rotates counterclockwise by plus.
-    let offset_deg = if s("shape", "circle") == "square" { 45.0 } else { 0.0 };
-    let rotation = -(offset_deg + f("twist", 0.0));
     let depth = f("depth", 0.05).clamp(0.005, 0.5);
     Ok(Design {
         version: 2,
@@ -559,7 +575,7 @@ Add `pub mod migrate;` to `kit/mod.rs`.
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `cargo test -p rhythia-render kit::migrate`
-Expected: 5 passed.
+Expected: 6 passed.
 
 - [ ] **Step 5: Commit**
 
