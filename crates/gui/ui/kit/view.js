@@ -24,12 +24,18 @@ export function createView(canvas, store, hooks) {
     return box.clientWidth > 0 && box.clientHeight > 0;
   }
 
+  // Pointer positions in the canvas's own client box: the 1 px border sits
+  // outside it, and the bitmap is sized to it, so they line up exactly.
+  function local(e) {
+    const rect = canvas.getBoundingClientRect();
+    return [e.clientX - rect.left - canvas.clientLeft, e.clientY - rect.top - canvas.clientTop];
+  }
+
   function fit() {
     if (!boxHasArea()) return;
-    const box = canvas.parentElement;
     const dpr = window.devicePixelRatio || 1;
-    size.w = Math.max(200, box.clientWidth);
-    size.h = Math.max(200, box.clientHeight);
+    size.w = Math.max(200, canvas.clientWidth);
+    size.h = Math.max(200, canvas.clientHeight);
     canvas.width = Math.round(size.w * dpr);
     canvas.height = Math.round(size.h * dpr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -93,8 +99,14 @@ export function createView(canvas, store, hooks) {
       // nonzero rule cuts the holes without any extra bookkeeping.
       ctx.fillStyle = colour;
       for (const iv of ev.intervals) ctx.fill(path(iv.solid), "nonzero");
+      // The kernel lists a glass part in every band it spans, and the
+      // renderer does not stack those layers: one path, one fill. Windings
+      // of separate bands add up, so a band's hole stays open only where no
+      // other band has glass.
+      const glass = new Path2D();
+      for (const iv of ev.intervals) glass.addPath(path(iv.glass));
       ctx.globalAlpha = GLASS_ALPHA;
-      for (const iv of ev.intervals) ctx.fill(path(iv.glass), "nonzero");
+      ctx.fill(glass, "nonzero");
       ctx.globalAlpha = 1;
       for (const part of s.design.parts) {
         const geom = ev.parts.find((g) => g.id === part.id);
@@ -177,10 +189,13 @@ export function createView(canvas, store, hooks) {
     return null;
   }
 
+  // The WebView's own menu offers Reload, which would discard the design.
+  canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+
   canvas.addEventListener("pointerdown", (e) => {
-    const rect = canvas.getBoundingClientRect();
-    const mx = e.clientX - rect.left;
-    const my = e.clientY - rect.top;
+    // A press that starts no gesture must not leave the last one running.
+    gesture = null;
+    const [mx, my] = local(e);
     canvas.setPointerCapture(e.pointerId);
     if (e.button === 1 || spaceDown) {
       gesture = { kind: "pan", mx, my, cx: view.cx, cy: view.cy };
@@ -216,9 +231,7 @@ export function createView(canvas, store, hooks) {
 
   canvas.addEventListener("pointermove", (e) => {
     if (!gesture || !canvas.hasPointerCapture(e.pointerId)) return;
-    const rect = canvas.getBoundingClientRect();
-    const mx = e.clientX - rect.left;
-    const my = e.clientY - rect.top;
+    const [mx, my] = local(e);
     if (gesture.kind === "pan") {
       const u = unit(view, size);
       view.cx = gesture.cx - (mx - gesture.mx) / u;
@@ -226,9 +239,16 @@ export function createView(canvas, store, hooks) {
       draw();
       return;
     }
+    // The part can vanish mid-drag (undo, delete): the gesture ends with it.
+    const part = store.part(gesture.id);
+    if (!part) {
+      gesture = null;
+      return;
+    }
     const wp = toWorld(view, size, mx, my);
-    // The normalisation factor is read once at pointerdown: it can change
-    // while a drag re-evaluates, and the handle must stay under the cursor.
+    // The normalisation factor is read once at pointerdown, so the document
+    // delta of a drag stays stable while re-evaluation changes the factor.
+    // The drawn part may still rescale about the origin meanwhile.
     // Labels carry the part id: undo coalescing merges by label, and a
     // gesture on one part must never merge into a gesture on another.
     if (gesture.kind === "move") {
@@ -247,7 +267,6 @@ export function createView(canvas, store, hooks) {
         p.transform.h = clamp(hh / gesture.scale, 0.02, 1.5);
       });
     } else if (gesture.kind === "rotate") {
-      const part = store.part(gesture.id);
       const r = partRect(part.transform, gesture.scale);
       let a = angleFrom(r, wp);
       if (e.shiftKey) a = Math.round(a / 15) * 15;
@@ -270,9 +289,13 @@ export function createView(canvas, store, hooks) {
     "wheel",
     (e) => {
       e.preventDefault();
-      if (!boxHasArea()) return;
-      const rect = canvas.getBoundingClientRect();
-      zoomAt(view, size, e.clientX - rect.left, e.clientY - rect.top, e.deltaY < 0 ? 1.15 : 1 / 1.15);
+      if (!e.deltaY || !boxHasArea()) return;
+      // Proportional to the wheel delta, so a trackpad's many small events
+      // zoom as far as one mouse notch does; one event never moves more
+      // than a factor of two.
+      const factor = clamp(Math.exp(-e.deltaY * 0.0015), 0.5, 2);
+      const [mx, my] = local(e);
+      zoomAt(view, size, mx, my, factor);
       hooks.onZoom(Math.round(view.z * 100));
       draw();
     },
