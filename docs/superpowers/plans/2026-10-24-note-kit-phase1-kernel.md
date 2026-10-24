@@ -1952,10 +1952,142 @@ pub fn evaluate(design: &Design) -> Result<Evaluation, KitError> {
 
 Add `pub mod levels;` to `kit/mod.rs`.
 
+**Amendment after the review of 1bf98f1 (controller ruling; binding where it differs from the Step 3 code above):**
+
+1. Group materials. An Add-mode group folds per material: with `cuts = union(the group's Cut members)`, it contributes `subtract(union(its solid Add members), cuts)` as Add/Solid and `subtract(union(its glass Add members), cuts)` as Add/Glass (an empty contribution is skipped). A Cut-mode group contributes `subtract(union(all its Add members), cuts)` as one Cut. The rule "glass only when every member is glass" is wrong: a cut defaults to Solid and would turn a glass lens opaque. Glass stays glass and loses to solid only where the two overlap (spec 4.2 step 2).
+2. Groups are validated before anything is resolved: a part id listed in more than one group is `KitError::Doc(format!("part {id} is in more than one group"))`.
+3. The silhouette is the largest `extent` over the parts that add material: loose Add parts and Add members of Add-mode groups. Cut parts and every member of a Cut-mode group only remove and never count. The union of the adds is not built: the extent of a union equals the largest extent of its inputs.
+4. When `scale > 1.0`, every remover (a loose Cut part, a Cut member of an Add-mode group, every member of a Cut-mode group) is intersected with the silhouette square `vec![vec![vec![[-m, -m], [m, -m], [m, m], [-m, m]]]]` via `boolean(.., OverlayRule::Intersect)` BEFORE scaling: outside the square it removes nothing, and without the clip a scale above 1 pushes a cut past `KIT_RANGE` and a valid design fails with `KitError::Scale`.
+5. After scaling (only when `scale != 1.0`) every part is re-snapped to the lattice with a new helper in `geom.rs`, so single-contributor intervals sit on the same grid as overlay results:
+
+```rust
+/// Passes a region through the shared lattice once more, so coordinates
+/// produced outside i_overlay (a scale, a hand-written contour) sit on
+/// the same grid as every overlay result.
+pub fn snap(shapes: &Shapes) -> Result<Shapes, KitError> {
+    if shapes.is_empty() {
+        return Ok(Vec::new());
+    }
+    overlay(shapes, &Vec::new(), OverlayRule::Subject, FillRule::NonZero)
+}
+```
+
+with one test in `geom.rs`:
+
+```rust
+    #[test]
+    fn snap_puts_every_coordinate_on_the_lattice() {
+        let tri: Shapes = vec![vec![vec![[0.1, 0.2], [0.3, 0.2], [0.3, 0.7]]]];
+        let snapped = snap(&tri).unwrap();
+        assert_eq!(snapped[0][0].len(), 3);
+        for p in snapped.iter().flatten().flatten() {
+            for v in p {
+                let k = v * KIT_SCALE;
+                assert!((k - k.round()).abs() < 1e-2, "{v} is off the lattice");
+            }
+        }
+    }
+```
+
+6. The comment above the finish loop states the real invariant: a finish never makes a part larger (a rim keeps the outer loop, a rounding pulls convex corners inward), so the box is never exceeded; the finish runs per part on the normalised region.
+7. Housekeeping: the group membership lookup is a `HashSet<&str>`, the flag that at least one interval holds material is named `any_region`, and the level sort uses `f32::total_cmp` (NaN is already rejected by the depth validation, so the sort needs no unwrap).
+8. Six more tests in `levels.rs`; the nine above stay unchanged:
+
+```rust
+    #[test]
+    fn glass_keeps_its_material_inside_a_group() {
+        let mut lens = part("lens", Shape::Circle, Mode::Add, 0.1, -0.1);
+        lens.material = Material::Glass;
+        let mut hole = part("hole", Shape::Square { rounding: 0.0 }, Mode::Cut, 0.1, -0.1);
+        hole.transform = Transform { w: 0.5, h: 0.5, ..Transform::default() };
+        let mut d = design(vec![lens, hole]);
+        d.groups = vec![Group { id: "g".into(), name: "g".into(), parts: vec!["lens".into(), "hole".into()], mode: Mode::Add }];
+        let ev = evaluate(&d).unwrap();
+        // The cut defaults to Solid, which must not turn the lens solid.
+        assert!(is_empty(&ev.intervals[0].solid));
+        assert_eq!(ev.intervals[0].glass.len(), 1);
+        assert_eq!(ev.intervals[0].glass[0].len(), 2, "the lens keeps its hole");
+    }
+
+    #[test]
+    fn a_cut_group_removes_the_union_of_its_adds() {
+        let plate = part("plate", Shape::Square { rounding: 0.0 }, Mode::Add, 0.1, -0.1);
+        let mut a = part("a", Shape::Circle, Mode::Add, 0.1, -0.1);
+        a.transform = Transform { x: -0.5, w: 0.3, h: 0.3, ..Transform::default() };
+        let mut b = part("b", Shape::Circle, Mode::Add, 0.1, -0.1);
+        b.transform = Transform { x: 0.9, w: 0.3, h: 0.3, ..Transform::default() };
+        let mut d = design(vec![plate, a, b]);
+        d.groups = vec![Group { id: "g".into(), name: "g".into(), parts: vec!["a".into(), "b".into()], mode: Mode::Cut }];
+        let ev = evaluate(&d).unwrap();
+        // One hole inside, one bite at the edge; the discs add nothing.
+        assert_eq!(ev.intervals[0].solid.len(), 1);
+        assert_eq!(ev.intervals[0].solid[0].len(), 2);
+        // The discs do not count toward the silhouette: the plate stays the box.
+        assert!((ev.scale - 1.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn a_part_in_two_groups_is_a_doc_error() {
+        let base = part("base", Shape::Circle, Mode::Add, 0.1, -0.1);
+        let mut d = design(vec![base]);
+        d.groups = vec![
+            Group { id: "g1".into(), name: "g1".into(), parts: vec!["base".into()], mode: Mode::Add },
+            Group { id: "g2".into(), name: "g2".into(), parts: vec!["base".into()], mode: Mode::Cut },
+        ];
+        assert!(matches!(evaluate(&d), Err(KitError::Doc(_))));
+    }
+
+    #[test]
+    fn a_far_cut_does_not_fail_a_small_note() {
+        // The disc has half-extent 0.01, so the scale is 100; the cut's far
+        // edge would land at 100, past KIT_RANGE, without the clip.
+        let mut disc = part("disc", Shape::Circle, Mode::Add, 0.1, -0.1);
+        disc.transform = Transform { w: 0.01, h: 0.01, ..Transform::default() };
+        let mut cut = part("cut", Shape::Square { rounding: 0.0 }, Mode::Cut, 0.1, -0.1);
+        cut.transform = Transform { x: 0.5, w: 0.5, h: 0.5, ..Transform::default() };
+        let ev = evaluate(&design(vec![disc, cut])).unwrap();
+        assert!((ev.scale - 100.0).abs() < 0.1);
+        let solid = &ev.intervals[0].solid;
+        assert_eq!(solid.len(), 1);
+        // The cut covers x >= 0: the left half-disc remains and reaches -1.
+        assert!(solid[0][0].iter().all(|p| p[0] <= 1e-3));
+        assert!((extent(solid) - 1.0).abs() < 2e-3);
+    }
+
+    #[test]
+    fn glass_survives_where_it_does_not_overlap_solid() {
+        let mut solid = part("solid", Shape::Square { rounding: 0.0 }, Mode::Add, 0.1, -0.1);
+        solid.transform = Transform { x: -0.5, w: 0.5, h: 0.5, ..Transform::default() };
+        let mut glass = part("glass", Shape::Square { rounding: 0.0 }, Mode::Add, 0.1, -0.1);
+        glass.material = Material::Glass;
+        glass.transform = Transform { x: 0.5, w: 0.5, h: 0.5, ..Transform::default() };
+        let ev = evaluate(&design(vec![solid, glass])).unwrap();
+        let iv = &ev.intervals[0];
+        // Side by side, both survive and together fill the box.
+        assert_eq!(iv.solid.len(), 1);
+        assert_eq!(iv.glass.len(), 1);
+        assert!(iv.solid[0][0].iter().all(|p| p[0] <= 1e-4));
+        assert!(iv.glass[0][0].iter().all(|p| p[0] >= -1e-4));
+        assert!((extent(&iv.glass) - 1.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn a_cut_stays_inside_its_band() {
+        let plate = part("plate", Shape::Square { rounding: 0.0 }, Mode::Add, 0.1, -0.3);
+        let mut hole = part("hole", Shape::Circle, Mode::Cut, 0.1, -0.1);
+        hole.transform = Transform { w: 0.4, h: 0.4, ..Transform::default() };
+        let ev = evaluate(&design(vec![plate, hole])).unwrap();
+        assert_eq!(ev.levels.len(), 3);
+        // Lower band: the plate is whole. Upper band: the plate has the hole.
+        assert_eq!(ev.intervals[0].solid[0].len(), 1);
+        assert_eq!(ev.intervals[1].solid[0].len(), 2);
+    }
+```
+
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: `cargo test -p rhythia-render kit::levels`
-Expected: 9 passed.
+Run: `cargo test -p rhythia-render kit::levels` and `cargo test -p rhythia-render kit::geom`
+Expected: 15 passed in levels, 9 passed in geom.
 
 - [ ] **Step 5: Commit**
 
