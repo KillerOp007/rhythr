@@ -183,11 +183,24 @@ pub fn evaluate(design: &Design) -> Result<Evaluation, KitError> {
     }
     // Rounding and rims are note-unit finishes, so they run on each part's
     // normalised, merged region (the v1 editor normalised first too). A
-    // finish never makes a part larger (a rim keeps the outer loop, a
-    // rounding pulls convex corners inward), so the box is never exceeded.
+    // finish is meant never to make a part larger (a rim keeps the outer
+    // loop, a rounding pulls convex corners inward), but the offsets are
+    // polygons, so the cut below enforces the box.
+    let unit_box: Shapes = vec![vec![vec![
+        [-1.0, -1.0],
+        [1.0, -1.0],
+        [1.0, 1.0],
+        [-1.0, 1.0],
+    ]]];
     for p in &mut parts {
         if p.round.is_some() || p.rim.is_some() {
             p.shapes = finish_part(&p.shapes, p.round, p.rim)?;
+            // The erode step of a finish is a chord polygon, slightly
+            // larger than the true erosion, so a rounding can overshoot
+            // the box; the box is a promise, so it is cut.
+            if extent(&p.shapes) > 1.0 {
+                p.shapes = boolean(&p.shapes, &unit_box, OverlayRule::Intersect)?;
+            }
         }
     }
     parts.retain(|p| !p.shapes.is_empty());
@@ -713,5 +726,55 @@ mod tests {
         assert_eq!(solid.len(), 1);
         assert_eq!(solid[0].len(), 1, "no band carved along the edge");
         assert!((extent(solid) - 1.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn a_finished_part_never_leaves_the_box() {
+        // From the property run: Pill with round, mirror X, once with a
+        // rim, once with repeat 6; the chord-join erosion overshot the box.
+        #[allow(clippy::type_complexity)]
+        let cases: [(f32, f32, f32, f32, f32, f32, f32, Option<f32>, Option<u32>); 2] = [
+            (
+                0.5097575,
+                0.07726318,
+                0.52711946,
+                0.66777325,
+                0.31767842,
+                148.8582,
+                0.28260398,
+                Some(0.21721794),
+                None,
+            ),
+            (
+                0.8990014,
+                -0.2,
+                -0.1736307,
+                0.8,
+                0.3,
+                270.0241,
+                0.20572755,
+                None,
+                Some(6),
+            ),
+        ];
+        for (aspect, x, y, w, h, rotation, round, rim, repeat) in cases {
+            let mut p = part("p", Shape::Pill { aspect }, Mode::Add, 0.1, -0.1);
+            p.transform = Transform {
+                x,
+                y,
+                w,
+                h,
+                rotation,
+            };
+            p.effects.round = Some(round);
+            p.effects.rim = rim;
+            p.effects.mirror = Mirror::X;
+            p.effects.repeat = repeat;
+            let ev = evaluate(&design(vec![p])).unwrap();
+            for iv in &ev.intervals {
+                let e = extent(&iv.solid).max(extent(&iv.glass));
+                assert!(e <= 1.0 + 1e-4, "a finished part reaches {e}");
+            }
+        }
     }
 }
