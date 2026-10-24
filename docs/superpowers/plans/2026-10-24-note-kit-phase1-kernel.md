@@ -874,7 +874,7 @@ Expected: compile error, `base_contours` not found.
 //! and rounding have points to work with) and counterclockwise; imports
 //! pass through as stored.
 
-use crate::designer::{flatten_controls, ControlPoint};
+use crate::designer::flatten_controls;
 use crate::kit::doc::Shape;
 use crate::kit::geom::Contour;
 use std::f32::consts::{PI, TAU};
@@ -951,12 +951,9 @@ pub fn base_contours(shape: &Shape) -> Vec<Contour> {
         }
     }
 }
-
-#[allow(dead_code)]
-fn _assert_control_point_is_pub(_: ControlPoint) {}
 ```
 
-Remove the last three lines (`_assert_control_point_is_pub`) if clippy complains; they only document that `ControlPoint` is the designer's type.
+(`ControlPoint` is the designer's type; the import above only serves the `Points` arm. If the import is unused after your edit, drop it.)
 
 Add `pub mod shapes;` to `kit/mod.rs`.
 
@@ -1902,7 +1899,14 @@ mod tests {
         let single = mesh_of(vec![part("c", Shape::Circle, Mode::Add, 0.1, -0.3)]);
         // Same geometry up to the extra level: a cap would double the count.
         assert!((fused.indices.len() as i64 - single.indices.len() as i64).abs() < single.indices.len() as i64 / 2);
-        assert!(!fused.positions.iter().any(|p| (p[2] + 0.1).abs() < 1e-6 && false));
+        // No cap at the shared level: a cap triangle has all three
+        // vertices at that z, a wall triangle never does.
+        let caps_at_shared_level = fused
+            .indices
+            .chunks_exact(3)
+            .filter(|t| t.iter().all(|&i| (fused.positions[i as usize][2] + 0.1).abs() < 1e-6))
+            .count();
+        assert_eq!(caps_at_shared_level, 0);
     }
 
     #[test]
@@ -2031,7 +2035,7 @@ fn emit_material(regions: &[Shapes], levels: &[f32], pool: &mut Pool, out: &mut 
     let faces = subdivide(regions)?;
     let n = regions.len();
     // Caps: per level, per face, where membership changes across the level.
-    for (fi, info) in faces.iter().enumerate() {
+    for info in &faces {
         let pts: Vec<[f32; 2]> = info.face.iter().flatten().copied().collect();
         for (li, &z) in levels.iter().enumerate() {
             let below = li > 0 && info.members & (1u64 << (li - 1)) != 0;
@@ -2050,7 +2054,6 @@ fn emit_material(regions: &[Shapes], levels: &[f32], pool: &mut Pool, out: &mut 
                 }
             }
         }
-        let _ = fi;
     }
     // Walls: directed edges with the face on the left; the neighbour is
     // whoever owns the reverse edge.
@@ -2511,8 +2514,8 @@ fn main() {
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: `cargo test -p rhythia-render`
-Expected: every existing test still passes (the vertex layout change touches every mesh path; the designer tests and the obj round trip prove nothing regressed), the two new mesh tests pass, and `kit_render` passes. If the centre pixel is off by more than the tolerance, print `centre` and check that the note sits where the test samples (x 1.0, y 1.0 is the centre cell at 320 by 320); adjust the sample coordinates, not the alpha.
+Run: `cargo check --workspace --examples --tests && cargo test -p rhythia-render`
+Expected: the whole workspace compiles (every `Vertex { pos: ... }` literal anywhere, in examples such as `crates/render/examples/game_probe_skins.rs` too, must gain `alpha: 1.0`; `cargo check --workspace` is what finds them all), every existing test still passes (the vertex layout change touches every mesh path; the designer tests and the obj round trip prove nothing regressed), the two new mesh tests pass, and `kit_render` passes. If the centre pixel is off by more than the tolerance, print `centre` and check that the note sits where the test samples (x 1.0, y 1.0 is the centre cell at 320 by 320); adjust the sample coordinates, not the alpha.
 
 - [ ] **Step 5: Commit**
 
