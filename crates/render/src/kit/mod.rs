@@ -7,6 +7,7 @@
 pub mod doc;
 pub mod geom;
 pub mod migrate;
+pub mod resolve;
 pub mod shapes;
 
 pub use doc::*;
