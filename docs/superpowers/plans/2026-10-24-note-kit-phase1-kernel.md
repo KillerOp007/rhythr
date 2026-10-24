@@ -1111,7 +1111,7 @@ fn sample_edges(corners: &[[f32; 2]], total: usize) -> Contour {
         ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)).sqrt()
     };
     let perimeter: f32 = (0..n).map(len).sum();
-    if n < 3 || !(perimeter > 0.0) {
+    if n < 3 || !(perimeter.is_finite() && perimeter > 0.0) {
         return corners.to_vec();
     }
     let mut c = Vec::with_capacity(total + n);
