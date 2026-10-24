@@ -3,6 +3,7 @@ import { createStore } from "./store.js";
 import { createView } from "./view.js";
 import { invoke, coalesced } from "./ipc.js";
 import { render } from "./render.js";
+import { mountPreviews } from "./preview.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -43,6 +44,17 @@ async function boot() {
     onZoom: (pct) => ($("kt-view-reset").textContent = `${pct}%`),
   });
   $("kt-view-reset").addEventListener("click", view.resetView);
+  const previews = mountPreviews(
+    store,
+    {
+      toggle: $("kt-previews"),
+      box: $("kt-preview-box"),
+      splitter: $("kt-splitter"),
+      still: $("kt-still"),
+      loop: $("kt-preview"),
+    },
+    invoke,
+  );
   store.subscribe((s) => {
     render(store);
     view.draw();
@@ -50,6 +62,7 @@ async function boot() {
     if (serial !== lastSerial) {
       lastSerial = serial;
       evaluate({ design: s.design });
+      previews.designChanged(s.design);
     }
     // Someone else wrote the status line: it is no longer ours to clear.
     if (statusFromEval && s.status.text !== evalText) statusFromEval = false;
@@ -66,6 +79,9 @@ async function boot() {
   render(store);
   view.fit();
   evaluate({ design: store.state.design });
+  // A remembered "on" state needs the starting design too; the subscriber
+  // only sees later changes.
+  previews.designChanged(store.state.design);
   window.kitStore = store;
 }
 
