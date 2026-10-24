@@ -36,6 +36,20 @@ pub struct Evaluated {
     pub mesh_error: Option<String>,
 }
 
+/// Words the window never shows (spec 5.3, the vocabulary rule). The
+/// kernel's own texts for internal failures can contain them.
+const BANNED_WORDS: [&str; 9] = [
+    "boolean",
+    "union",
+    "mesh",
+    "vertex",
+    "modifier",
+    "manifold",
+    "lattice",
+    "triangulation",
+    "degenerate",
+];
+
 /// The window never shows kernel vocabulary (spec 5.3).
 pub fn user_message(e: &KitError) -> String {
     match e {
@@ -47,7 +61,16 @@ pub fn user_message(e: &KitError) -> String {
             format!("too complex: {points} points in {outlines} outlines; lower Repeat or Waves")
         }
         KitError::Scale(_) => "a part reaches too far from the centre".into(),
-        KitError::Doc(m) | KitError::Invalid(m) => m.clone(),
+        KitError::Doc(m) | KitError::Invalid(m) => {
+            let lower = m.to_lowercase();
+            if BANNED_WORDS.iter().any(|w| lower.contains(w)) {
+                eprintln!("kit: {m}");
+                "this design could not be built; try fewer parts, less rounding or fewer waves"
+                    .into()
+            } else {
+                m.clone()
+            }
+        }
     }
 }
 
@@ -109,8 +132,9 @@ pub fn build_design(design: &Design) -> Result<Built, String> {
 }
 
 /// A saved document: version 2 as is (re-serialised so the editor only
-/// ever sees serde's spelling), anything else is the old designer's
-/// format and migrates. Returns the design's JSON.
+/// ever sees serde's spelling), the old designer's format (it has a `P`
+/// key) migrates, anything else is not a design file. Returns the
+/// design's JSON.
 pub fn load_document(text: &str) -> Result<String, String> {
     let value: serde_json::Value =
         serde_json::from_str(text).map_err(|e| format!("not a design file: {e}"))?;
@@ -118,6 +142,9 @@ pub fn load_document(text: &str) -> Result<String, String> {
         let d: Design =
             serde_json::from_value(value).map_err(|e| format!("design file damaged: {e}"))?;
         return serde_json::to_string(&d).map_err(|e| e.to_string());
+    }
+    if value.get("P").is_none() {
+        return Err("not a design file: neither a kit design nor an old designer document".into());
     }
     let d = migrate::from_v1(text).map_err(|e| user_message(&e))?;
     serde_json::to_string(&d).map_err(|e| e.to_string())
@@ -246,12 +273,19 @@ mod tests {
             KitError::Complexity(20_000, 3),
             KitError::Scale("point [100.0, 0.0] is outside the lattice range of 64".into()),
             KitError::Empty,
+            KitError::Invalid("vertex 3 leaves the unit box: [1.2, 0.0, 0.0]".into()),
+            KitError::Invalid("solid: degenerate triangle [1, 2, 2]".into()),
         ] {
             let m = user_message(&e).to_lowercase();
             for b in banned {
                 assert!(!m.contains(b), "{m} contains {b}");
             }
         }
+        // The kernel's precise, plain-worded texts stay as they are.
+        let grew = "part p1 grew beyond the box after rounding: 1.2";
+        assert_eq!(user_message(&KitError::Invalid(grew.into())), grew);
+        let order = "part p1: front must be above back";
+        assert_eq!(user_message(&KitError::Doc(order.into())), order);
     }
 
     #[test]
@@ -265,6 +299,12 @@ mod tests {
         assert_eq!(d.version, 2);
         assert_eq!(d.parts.len(), 1);
         assert!(load_document("not json")
+            .unwrap_err()
+            .starts_with("not a design file"));
+        assert!(load_document("{}")
+            .unwrap_err()
+            .starts_with("not a design file"));
+        assert!(load_document("{\"version\":3}")
             .unwrap_err()
             .starts_with("not a design file"));
     }
