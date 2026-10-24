@@ -2103,10 +2103,56 @@ with one test in `geom.rs`:
     }
 ```
 
+**Amendment 3 (controller ruling after the Task 11 property run; binding):**
+
+The property test found finished parts leaving the box by up to a hundredth (a vertex at y = 1.000885, another at y = -1.0108, both from a Pill with `round`, `mirror: X`, one with `rim`, one with `repeat`). Cause: the erode step of a finish is a polygon whose round joins are chords, slightly larger than the true erosion, so erode-then-dilate (and a rim built on a rounded region) overshoots the original outline. The box is a hard promise. In `evaluate`, right after `finish_part` in the finish loop, a finished part whose `extent` exceeds 1.0 is intersected with the unit square:
+
+```rust
+    let unit_box: Shapes = vec![vec![vec![[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]]]];
+    for p in &mut parts {
+        if p.round.is_some() || p.rim.is_some() {
+            p.shapes = finish_part(&p.shapes, p.round, p.rim)?;
+            // The erode step of a finish is a chord polygon, slightly
+            // larger than the true erosion, so a rounding can overshoot
+            // the box by a thousandth; the box is a promise, so it is cut.
+            if extent(&p.shapes) > 1.0 {
+                p.shapes = boolean(&p.shapes, &unit_box, OverlayRule::Intersect)?;
+            }
+        }
+    }
+```
+
+One regression test in `levels.rs`, built from the two single-part designs the property run reported (run it RED first; if a design does not reproduce the overshoot on the current code, report the extents instead of changing the test):
+
+```rust
+    #[test]
+    fn a_finished_part_never_leaves_the_box() {
+        // From the property run: Pill with round, mirror X, once with a
+        // rim, once with repeat 6; the chord-join erosion overshot the box.
+        let cases: [(f32, f32, f32, f32, f32, f32, f32, Option<f32>, Option<u32>); 2] = [
+            (0.5097575, 0.07726318, 0.52711946, 0.66777325, 0.31767842, 148.8582, 0.28260398, Some(0.21721794), None),
+            (0.8990014, -0.2, -0.1736307, 0.8, 0.3, 270.0241, 0.20572755, None, Some(6)),
+        ];
+        for (aspect, x, y, w, h, rotation, round, rim, repeat) in cases {
+            let mut p = part("p", Shape::Pill { aspect }, Mode::Add, 0.1, -0.1);
+            p.transform = Transform { x, y, w, h, rotation };
+            p.effects.round = Some(round);
+            p.effects.rim = rim;
+            p.effects.mirror = Mirror::X;
+            p.effects.repeat = repeat;
+            let ev = evaluate(&design(vec![p])).unwrap();
+            for iv in &ev.intervals {
+                let e = extent(&iv.solid).max(extent(&iv.glass));
+                assert!(e <= 1.0 + 1e-4, "a finished part reaches {e}");
+            }
+        }
+    }
+```
+
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `cargo test -p rhythia-render kit::levels` and `cargo test -p rhythia-render kit::geom`
-Expected: 16 passed in levels, 9 passed in geom.
+Expected: 17 passed in levels, 9 passed in geom.
 
 - [ ] **Step 5: Commit**
 
@@ -3437,7 +3483,15 @@ fn design() -> impl Strategy<Value = Design> {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig { cases: 300, max_shrink_iters: 2000, ..ProptestConfig::default() })]
+    // A case costs about 0.2 s in release and ten times that in debug, so
+    // the plain `cargo test` run samples 24 designs and the release run
+    // the full 300; shrinking is bounded in steps and in time.
+    #![proptest_config(ProptestConfig {
+        cases: if cfg!(debug_assertions) { 24 } else { 300 },
+        max_shrink_iters: 300,
+        max_shrink_time: 120_000,
+        ..ProptestConfig::default()
+    })]
 
     #[test]
     fn every_design_is_watertight_in_the_box_or_cleanly_empty(d in design()) {
@@ -3445,7 +3499,14 @@ proptest! {
             Err(KitError::Empty) => {}
             Err(e) => prop_assert!(false, "unexpected error {e}"),
             Ok(ev) => {
-                let m = build_mesh(&ev).unwrap();
+                // The triangle budget is a clean refusal, not a defect: dense
+                // in-range designs (waves times repeat times mirror on five
+                // parts) legitimately pass 40k triangles.
+                let m = match build_mesh(&ev) {
+                    Ok(m) => m,
+                    Err(KitError::Budget(_)) => return Ok(()),
+                    Err(e) => return Err(TestCaseError::fail(format!("build_mesh failed: {e} on {d:?}"))),
+                };
                 let r = validate(&m).unwrap();
                 prop_assert!(no_t_junctions(&m), "a vertex sits inside another triangle's edge: {:?}", d);
                 prop_assert!(r.triangles <= 40_000);
@@ -3462,7 +3523,7 @@ proptest! {
 
 - [ ] **Step 2: Run the property tests**
 
-Run: `cargo test -p rhythia-render --test kit_properties -- --nocapture`
+Run: `cargo test -p rhythia-render --test kit_properties --release -- --nocapture` (the full 300 cases; the plain debug run that `cargo test` performs samples 24). Add `use proptest::test_runner::TestCaseError;` to the imports.
 Expected: passes. A failure prints a minimal shrunk design; copy it into a named regression test in `kit/mesh.rs` (same style as `crossing_bands_stay_watertight`), fix the kernel, and keep the regression test. Common first failures and their fixes: a part with `w` or `h` so small after rounding that the region vanishes (handled by `is_empty` checks; make sure `subdivide` skips empty regions), repeat copies landing exactly on each other (the nonzero clean merges them; if an overlay complains about a scale, the rotated copy exceeded the i32 range, which the box prevents).
 
 - [ ] **Step 3: Commit**
