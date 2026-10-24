@@ -104,34 +104,72 @@ export function fileStem(name) {
   return s && s !== "." && s !== ".." ? s : "my-note";
 }
 
-// Ctrl+S and Ctrl+O work from a focused field (they commit nothing
-// destructive); every other key, undo included, belongs to the field's own
-// text while one has focus.
-export function bindKeys(store, actions, isTyping) {
+const TEXT_TYPES = new Set(["text", "number", "search", "email", "url", "password"]);
+const inputType = (el) => String(el.type || "text").toLowerCase();
+
+// Takes the keyboard for editing text: undo, delete and the letter keys
+// belong to the field, not to the design.
+export function isTextEntry(el) {
+  if (!el) return false;
+  if (el.isContentEditable || el.tagName === "TEXTAREA") return true;
+  return el.tagName === "INPUT" && TEXT_TYPES.has(inputType(el));
+}
+
+// Takes the arrow keys as well: a slider, a colour input and a dropdown step
+// with them natively, and they stay out of the part nudge while focused.
+// Only text entry swallows the other shortcuts, so a slider that kept focus
+// after a drag does not disable undo.
+export function ownsArrows(el) {
+  if (!el) return false;
+  if (isTextEntry(el) || el.tagName === "SELECT") return true;
+  return el.tagName === "INPUT" && (inputType(el) === "range" || inputType(el) === "color");
+}
+
+// activeElement() returns document.activeElement. Ctrl+S and Ctrl+O work
+// from a focused text field, after blur() has committed what was typed
+// (the field's change event fires synchronously); every other shortcut
+// leaves a text field to its own editing.
+export function bindKeys(store, actions, activeElement) {
   window.addEventListener("keydown", (e) => {
     const mod = e.ctrlKey || e.metaKey;
     // Autofill dispatches keydown events without a key.
     const key = String(e.key || "").toLowerCase();
+    const active = activeElement();
     // A held key must not stack dialogs, repeat a removal or flip the previews.
-    if (mod && key === "s") { e.preventDefault(); if (!e.repeat) actions.save(); return; }
-    if (mod && key === "o") { e.preventDefault(); if (!e.repeat) actions.open(); return; }
-    if (isTyping()) return;
+    if (mod && (key === "s" || key === "o")) {
+      e.preventDefault();
+      if (isTextEntry(active)) active.blur();
+      if (!e.repeat) (key === "s" ? actions.save : actions.open)();
+      return;
+    }
+    if (isTextEntry(active)) return;
     if (mod && key === "z" && !e.shiftKey) { e.preventDefault(); store.undo(); return; }
     if (mod && (key === "y" || (key === "z" && e.shiftKey))) { e.preventDefault(); store.redo(); return; }
     if (!mod && !e.altKey && key === "p") { if (!e.repeat) actions.togglePreviews(); return; }
     if (e.key === "Escape") { store.select(null); return; }
     const p = store.part();
     if (!p) return;
-    if (e.key === "Delete" || e.key === "Backspace") { e.preventDefault(); if (!e.repeat) store.removePart(p.id); return; }
+    if (e.key === "Delete" || e.key === "Backspace") {
+      // Ctrl+Backspace is a word delete, not a part removal.
+      if (mod) return;
+      e.preventDefault();
+      if (!e.repeat) store.removePart(p.id);
+      return;
+    }
     if (mod && key === "d") { e.preventDefault(); if (!e.repeat) store.duplicatePart(p.id); return; }
-    if (mod || e.altKey) return;
+    if (mod || e.altKey || ownsArrows(active)) return;
     const step = e.shiftKey ? 0.1 : 0.01;
     const nudge = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, step], ArrowDown: [0, -step] }[e.key];
     if (nudge && !p.locked) {
       e.preventDefault();
-      store.updatePart(p.id, `nudge:${p.id}`, (x) => {
-        x.transform.x = Math.max(-1.5, Math.min(1.5, Math.round((x.transform.x + nudge[0]) * 1000) / 1000));
-        x.transform.y = Math.max(-1.5, Math.min(1.5, Math.round((x.transform.y + nudge[1]) * 1000) / 1000));
+      const clamp = (v) => Math.max(-1.5, Math.min(1.5, Math.round(v * 1000) / 1000));
+      const x = clamp(p.transform.x + nudge[0]);
+      const y = clamp(p.transform.y + nudge[1]);
+      // Already at the limit: no change, so no undo step and no evaluate.
+      if (x === p.transform.x && y === p.transform.y) return;
+      store.updatePart(p.id, `nudge:${p.id}`, (q) => {
+        q.transform.x = x;
+        q.transform.y = y;
       });
     }
   });

@@ -1,7 +1,7 @@
 // Bootstrap: the store, the front view, evaluation on every change, the
 // document buttons and the keyboard.
 import { createStore } from "./store.js";
-import { createView, isTyping } from "./view.js";
+import { createView } from "./view.js";
 import { invoke, coalesced } from "./ipc.js";
 import { render } from "./render.js";
 import { mountPreviews } from "./preview.js";
@@ -150,7 +150,12 @@ async function boot() {
   // confirmed first. A dialog that cannot be shown aborts with its error.
   async function discardOk(title) {
     if (!store.state.dirty) return true;
-    return dialog().ask("Discard the unsaved changes?", { title, kind: "warning" });
+    return dialog().ask("Discard the unsaved changes?", {
+      title,
+      kind: "warning",
+      okLabel: "Discard",
+      cancelLabel: "Cancel",
+    });
   }
   async function openPath(path) {
     // Read and check before asking, so a bad file never costs a prompt.
@@ -211,7 +216,7 @@ async function boot() {
     sel.blur();
     if (path) openRecent(path);
   });
-  bindKeys(store, { save: saveDoc, open: openDoc, togglePreviews: previews.toggle }, isTyping);
+  bindKeys(store, { save: saveDoc, open: openDoc, togglePreviews: previews.toggle }, () => document.activeElement);
   // The debounce must not hold back the last edit when the window goes.
   window.addEventListener("pagehide", autoSave.flush);
   document.addEventListener("visibilitychange", () => {
