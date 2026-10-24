@@ -4339,17 +4339,25 @@ async fn open_designer_window(app_handle: tauri::AppHandle) -> Result<(), String
         w.on_window_event(move |e| {
             if matches!(e, tauri::WindowEvent::Destroyed) {
                 if let Some(app) = handle.try_state::<App>() {
+                    // Renderer first, then the skins, all held until the
+                    // renderer is gone: the preview's own lock order
+                    // (renderer, then skin), so this cannot deadlock against
+                    // a frame in flight. A frame that lands between the
+                    // steps would otherwise rebuild a skin on the old
+                    // device that the next, new renderer would then reuse.
+                    // The kit skin is prepared on this same renderer, so it
+                    // must not outlive it either.
+                    let mut slot = app
+                        .designer_renderer
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner());
                     if let Ok(mut skin) = app.designer_skin.lock() {
                         *skin = None;
                     }
-                    // The renderer goes below; a kit skin prepared on it
-                    // must not outlive it.
                     if let Ok(mut skin) = app.kit_skin.lock() {
                         *skin = None;
                     }
-                    if let Ok(mut slot) = app.designer_renderer.lock() {
-                        *slot = None;
-                    }
+                    *slot = None;
                 }
             }
         });
@@ -4824,6 +4832,16 @@ mod kit_preview_tests {
         let url = preview_frame(&renderer, &cfg, &skin, 300.0, true).unwrap();
         assert!(url.starts_with("data:image/png;base64,"));
         assert!(url.len() > 1000);
+
+        // A frame of the right shape could still be an empty stage. Change
+        // the first note's colour on the same renderer: the picture only
+        // differs if the note is really in the frame and wears its colour.
+        let mut red = design.clone();
+        red.colors[0] = "#ff0000".into();
+        let (red_cfg, red_skin) = kit_skin_for(&renderer, &red).unwrap();
+        let red_url = preview_frame(&renderer, &red_cfg, &red_skin, 300.0, true).unwrap();
+        assert!(red_url.starts_with("data:image/png;base64,"));
+        assert_ne!(url, red_url, "the note's colour never reached the frame");
     }
 }
 
