@@ -1004,8 +1004,43 @@ mod tests {
         let cs = base_contours(&Shape::Contours { contours: raw.clone(), label: String::new() });
         assert_eq!(cs, raw);
     }
+
+    #[test]
+    fn star_edges_are_straight() {
+        // Every sample between the tip at (1, 0) and the first valley
+        // lies on their chord: a radius linear in the angle would bow it.
+        let inner = 0.45f32;
+        let cs = base_contours(&Shape::Star { points: 5, inner });
+        let tip = [1.0f32, 0.0];
+        let valley_angle = std::f32::consts::TAU / 10.0;
+        let valley = [inner * valley_angle.cos(), inner * valley_angle.sin()];
+        let mut between = 0;
+        for p in &cs[0] {
+            let ang = p[1].atan2(p[0]);
+            if ang > 1e-4 && ang < valley_angle - 1e-4 {
+                between += 1;
+                let cross = (valley[0] - tip[0]) * (p[1] - tip[1]) - (valley[1] - tip[1]) * (p[0] - tip[0]);
+                assert!(cross.abs() < 1e-5, "point {p:?} is off the chord by {cross}");
+            }
+        }
+        assert!(between >= 10, "only {between} samples on the first edge");
+    }
+
+    #[test]
+    fn pill_has_points_on_its_straight_sides() {
+        let aspect = 0.3f32;
+        let cs = base_contours(&Shape::Pill { aspect });
+        let on_side = cs[0]
+            .iter()
+            .filter(|p| (p[1].abs() - aspect).abs() < 1e-4 && p[0].abs() < 1.0 - aspect - 1e-3)
+            .count();
+        assert!(on_side >= 40, "only {on_side} points on the flat sides");
+        assert!((extent(&vec![cs[0].clone()]) - 1.0).abs() < 1e-3);
+    }
 }
 ```
+
+(`extent` is `crate::kit::geom::extent`; import it in the test module.)
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
@@ -1055,9 +1090,38 @@ fn ngon_radius(sides: u32, rounding: f32, th: f32, offset: f32) -> f32 {
 /// the rounding blend and the later wave phase untouched.
 fn fit_half_extent(mut c: Contour) -> Contour {
     let m = c.iter().flatten().fold(0.0f32, |m, v| m.max(v.abs()));
+    if !(m > 0.0) || !m.is_finite() {
+        return c;
+    }
     for p in &mut c {
         p[0] /= m;
         p[1] /= m;
+    }
+    c
+}
+
+/// Walks a closed polygon and resamples every edge in proportion to its
+/// length, about `total` points in all, so long straight runs carry
+/// interior points too: waves and rounding have nothing to work with on
+/// a bare segment.
+fn sample_edges(corners: &[[f32; 2]], total: usize) -> Contour {
+    let n = corners.len();
+    let len = |i: usize| {
+        let (a, b) = (corners[i], corners[(i + 1) % n]);
+        ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)).sqrt()
+    };
+    let perimeter: f32 = (0..n).map(len).sum();
+    if n < 3 || !(perimeter > 0.0) {
+        return corners.to_vec();
+    }
+    let mut c = Vec::with_capacity(total + n);
+    for i in 0..n {
+        let (a, b) = (corners[i], corners[(i + 1) % n]);
+        let per = ((total as f32 * len(i) / perimeter).round() as usize).max(1);
+        for s in 0..per {
+            let t = s as f32 / per as f32;
+            c.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]);
+        }
     }
     c
 }
@@ -1076,14 +1140,19 @@ pub fn base_contours(shape: &Shape) -> Vec<Contour> {
             vec![polar(SAMPLES, |th| ngon_radius(*sides, *rounding, th, 0.0))]
         }
         Shape::Star { points, inner } => {
-            let n = (*points).max(2) as f32;
+            // Tips at radius 1, valleys at `inner`, every edge sampled as
+            // a straight segment in Cartesian space: a radius linear in
+            // the angle would bow each edge into a spiral arc.
+            let n = (*points).max(2) as usize;
             let inner = inner.clamp(0.05, 0.95);
-            // Linear blend between tip and valley radius: straight edges.
-            vec![polar(SAMPLES, move |th| {
-                let sector = TAU / n;
-                let t = (th.rem_euclid(sector) / sector * 2.0 - 1.0).abs();
-                inner + (1.0 - inner) * t
-            })]
+            let corners: Vec<[f32; 2]> = (0..2 * n)
+                .map(|k| {
+                    let r = if k % 2 == 0 { 1.0 } else { inner };
+                    let th = k as f32 / (2 * n) as f32 * TAU;
+                    [r * th.cos(), r * th.sin()]
+                })
+                .collect();
+            vec![sample_edges(&corners, SAMPLES)]
         }
         Shape::Ring { thickness } => {
             let t = thickness.clamp(0.02, 0.98);
@@ -1092,21 +1161,22 @@ pub fn base_contours(shape: &Shape) -> Vec<Contour> {
             vec![polar(SAMPLES, |_| 1.0), hole]
         }
         Shape::Pill { aspect } => {
-            // A stadium: half-extent 1 along x, `aspect` along y.
-            let a = aspect.clamp(0.1, 1.0);
-            let r = a;
+            // A stadium: half-extent 1 along x, `aspect` along y. The two
+            // arcs are sampled directly; the straight sides between them
+            // get their points from the length-proportional resample.
+            let r = aspect.clamp(0.1, 1.0);
             let cx = 1.0 - r;
             let half = SAMPLES / 2;
-            let mut c = Vec::with_capacity(SAMPLES);
+            let mut arcs = Vec::with_capacity(SAMPLES);
             for i in 0..half {
                 let th = -PI / 2.0 + PI * i as f32 / half as f32;
-                c.push([cx + r * th.cos(), r * th.sin()]);
+                arcs.push([cx + r * th.cos(), r * th.sin()]);
             }
             for i in 0..half {
                 let th = PI / 2.0 + PI * i as f32 / half as f32;
-                c.push([-cx + r * th.cos(), r * th.sin()]);
+                arcs.push([-cx + r * th.cos(), r * th.sin()]);
             }
-            vec![c]
+            vec![sample_edges(&arcs, SAMPLES)]
         }
         Shape::Contours { contours, .. } => contours.clone(),
         Shape::Points { control } => {
@@ -1126,7 +1196,7 @@ Add `pub mod shapes;` to `kit/mod.rs`.
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `cargo test -p rhythia-render kit::shapes`
-Expected: 4 passed.
+Expected: every test in the module passes (the six above plus any the implementer added).
 
 - [ ] **Step 5: Commit**
 
