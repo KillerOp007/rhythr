@@ -4,6 +4,8 @@
 export const STILL_DELAY_MS = 250;
 export const LOOP_MS = 2700;
 export const FRAME_MS = 33;
+const ERROR_WAIT_MS = 250;
+const IDLE_WAIT_MS = 150;
 export const PREVIEWS_KEY = "rhythr.kit.previews";
 export const PREVIEW_H_KEY = "rhythr.kit.previewH";
 
@@ -27,7 +29,7 @@ export function createPreviewScheduler(io) {
     try {
       io.onStill(await io.invoke("kit_preview", { design, timeMs: 0, still: true }));
     } catch (e) {
-      io.onError(String(e));
+      io.onError(String(e), "still");
     } finally {
       stillBusy = false;
       if (stillAgain) {
@@ -54,15 +56,18 @@ export function createPreviewScheduler(io) {
       io.clearTimer(stillTimer);
       stillTimer = io.setTimer(still, STILL_DELAY_MS);
     },
-    // One gameplay frame; the caller paces the calls.
+    // One gameplay frame; the caller paces the calls. Resolves false when
+    // the call failed (the caller backs off), true otherwise.
     async tick() {
-      if (!enabled || !visible || !design || frameBusy) return;
+      if (!enabled || !visible || !design || frameBusy) return true;
       frameBusy = true;
       try {
         const timeMs = (io.now() - t0) % LOOP_MS;
         io.onFrame(await io.invoke("kit_preview", { design, timeMs, still: false }));
+        return true;
       } catch (e) {
-        io.onError(String(e));
+        io.onError(String(e), "loop");
+        return false;
       } finally {
         frameBusy = false;
       }
@@ -70,16 +75,36 @@ export function createPreviewScheduler(io) {
   };
 }
 
-export function mountPreviews(store, els, invoke) {
-  // A failing frame must not rewrite the panels thirty times a second, and a
-  // recovered preview must not leave its old error on screen. Only the
-  // status text this module wrote is ever cleared.
-  let lastPreviewError = "";
-  function clearPreviewError() {
-    if (!lastPreviewError) return;
-    if (store.state.status.text === lastPreviewError) store.setStatus("");
-    lastPreviewError = "";
+// The preview pane's own error line. The still and the loop each keep their
+// last error; the still's shows first. setText runs only when the shown
+// text changes, so a frame failing thirty times a second writes once, and a
+// recovered source clears only its own text.
+export function createErrorReporter(setText) {
+  const text = { still: "", loop: "" };
+  let shown = "";
+  function update() {
+    const next = text.still || text.loop;
+    if (next === shown) return;
+    shown = next;
+    setText(next);
   }
+  return {
+    report(source, msg) {
+      text[source] = msg;
+      update();
+    },
+    clear(source) {
+      text[source] = "";
+      update();
+    },
+  };
+}
+
+export function mountPreviews(store, els, invoke) {
+  const errors = createErrorReporter((text) => {
+    els.error.textContent = text;
+    els.error.hidden = !text;
+  });
   const sched = createPreviewScheduler({
     invoke,
     setTimer: (fn, ms) => setTimeout(fn, ms),
@@ -87,17 +112,13 @@ export function mountPreviews(store, els, invoke) {
     now: () => performance.now(),
     onStill: (url) => {
       els.still.src = url;
-      clearPreviewError();
+      errors.clear("still");
     },
     onFrame: (url) => {
       els.loop.src = url;
-      clearPreviewError();
+      errors.clear("loop");
     },
-    onError: (msg) => {
-      if (msg === lastPreviewError) return;
-      lastPreviewError = msg;
-      store.setStatus(msg, true);
-    },
+    onError: (msg, source) => errors.report(source, msg),
   });
   let saved = false;
   try {
@@ -118,12 +139,24 @@ export function mountPreviews(store, els, invoke) {
   }
   els.toggle.addEventListener("click", () => apply(!store.state.ui.previews));
   document.addEventListener("visibilitychange", () => sched.setVisible(!document.hidden));
+  // An exception in a tick or a callback must not end the loop. It waits
+  // 250 ms after a failed frame (no hammering the backend), 150 ms while
+  // the previews are off or the window is hidden, otherwise the rest of
+  // the frame.
   (async function loop() {
     while (true) {
-      const t = performance.now();
-      await sched.tick();
-      const took = performance.now() - t;
-      await new Promise((r) => setTimeout(r, Math.max(FRAME_MS - took, store.state.ui.previews ? 1 : 150)));
+      let wait = ERROR_WAIT_MS;
+      try {
+        const t = performance.now();
+        const ok = await sched.tick();
+        const took = performance.now() - t;
+        if (!ok) wait = ERROR_WAIT_MS;
+        else if (!store.state.ui.previews || document.hidden) wait = IDLE_WAIT_MS;
+        else wait = Math.max(FRAME_MS - took, 1);
+      } catch {
+        wait = ERROR_WAIT_MS;
+      }
+      await new Promise((r) => setTimeout(r, wait));
     }
   })();
   // The splitter from the old designer, same stored height.

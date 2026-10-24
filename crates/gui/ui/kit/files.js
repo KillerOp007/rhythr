@@ -17,16 +17,22 @@ export function makeRecent(storage) {
       return [];
     }
   };
+  const write = (l) => {
+    try {
+      storage.setItem(RECENT_KEY, JSON.stringify(l));
+    } catch {
+      // Best effort.
+    }
+    return l;
+  };
   return {
     list: read,
     add(path) {
-      const l = [path, ...read().filter((p) => p !== path)].slice(0, RECENT_LIMIT);
-      try {
-        storage.setItem(RECENT_KEY, JSON.stringify(l));
-      } catch {
-        // Best effort.
-      }
-      return l;
+      return write([path, ...read().filter((p) => p !== path)].slice(0, RECENT_LIMIT));
+    },
+    // An entry that can no longer be opened (moved, deleted, damaged).
+    remove(path) {
+      return write(read().filter((p) => p !== path));
     },
   };
 }
@@ -125,10 +131,10 @@ export function ownsArrows(el) {
   return el.tagName === "INPUT" && (inputType(el) === "range" || inputType(el) === "color");
 }
 
-// activeElement() returns document.activeElement. Ctrl+S and Ctrl+O work
-// from a focused text field, after blur() has committed what was typed
-// (the field's change event fires synchronously); every other shortcut
-// leaves a text field to its own editing.
+// activeElement() returns document.activeElement. Ctrl+S, Ctrl+Shift+S and
+// Ctrl+O work from a focused text field, after blur() has committed what
+// was typed (the field's change event fires synchronously); every other
+// shortcut leaves a text field to its own editing.
 export function bindKeys(store, actions, activeElement) {
   window.addEventListener("keydown", (e) => {
     const mod = e.ctrlKey || e.metaKey;
@@ -136,6 +142,13 @@ export function bindKeys(store, actions, activeElement) {
     const key = String(e.key || "").toLowerCase();
     const active = activeElement();
     // A held key must not stack dialogs, repeat a removal or flip the previews.
+    // Save as comes first: the plain branch below would take Ctrl+Shift+S too.
+    if (mod && e.shiftKey && key === "s") {
+      e.preventDefault();
+      if (isTextEntry(active)) active.blur();
+      if (!e.repeat) actions.saveAs();
+      return;
+    }
     if (mod && (key === "s" || key === "o")) {
       e.preventDefault();
       if (isTextEntry(active)) active.blur();

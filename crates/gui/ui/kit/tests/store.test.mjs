@@ -44,6 +44,45 @@ test("add_duplicate_remove_keep_ids_unique_and_selection_valid", () => {
   assert.equal(s.state.design.parts.length, 2);
 });
 
+test("add_and_duplicate_emit_once_with_the_new_part_selected", () => {
+  const s = createStore(design());
+  const seen = [];
+  s.subscribe((st) => seen.push(st.selected));
+  assert.equal(s.addPart("star"), "p2");
+  assert.deepEqual(seen, ["p2"], "one emit, already showing the new part");
+  assert.equal(s.duplicatePart("p2"), "p3");
+  assert.deepEqual(seen, ["p2", "p3"]);
+});
+
+test("end_gesture_splits_two_drags_inside_the_coalescing_window", () => {
+  // Without endGesture: two quick drags on one part merge into one step.
+  let t = 1000;
+  const a = createStore(design(), { now: () => t });
+  a.updatePart("p1", "move:p1", (p) => (p.transform.x = 0.1));
+  t += 10;
+  a.updatePart("p1", "move:p1", (p) => (p.transform.x = 0.2));
+  assert.equal(a.state.undo.length, 1);
+  // With it between them (the pointer was released): two steps.
+  t = 1000;
+  const b = createStore(design(), { now: () => t });
+  b.updatePart("p1", "move:p1", (p) => (p.transform.x = 0.1));
+  b.endGesture();
+  t += 10;
+  b.updatePart("p1", "move:p1", (p) => (p.transform.x = 0.2));
+  assert.equal(b.state.undo.length, 2);
+  assert.ok(b.undo());
+  assert.equal(b.part("p1").transform.x, 0.1);
+});
+
+test("an_evaluate_error_keeps_the_last_good_geometry", () => {
+  const s = createStore(design());
+  const ev = { scale: 1, levels: [], parts: [], intervals: [], triangles: 0, mesh_error: null };
+  s.setEvaluated(ev);
+  s.setEvalError("x");
+  assert.equal(s.state.evaluated, ev);
+  assert.equal(s.state.evalError, "x");
+});
+
 test("move_reorders_within_bounds", () => {
   const s = createStore(design());
   s.addPart("ring");

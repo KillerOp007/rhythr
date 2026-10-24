@@ -29,6 +29,18 @@ test("recent_keeps_the_newest_first_without_duplicates", () => {
   assert.equal(new Set(l).size, l.length);
 });
 
+test("recent_remove_drops_the_entry_and_keeps_the_others", () => {
+  const r = makeRecent(storage());
+  r.add("/p/a.rhsd");
+  r.add("/p/b.rhsd");
+  r.add("/p/c.rhsd");
+  const l = r.remove("/p/b.rhsd");
+  assert.deepEqual(l, ["/p/c.rhsd", "/p/a.rhsd"]);
+  assert.deepEqual(r.list(), ["/p/c.rhsd", "/p/a.rhsd"]);
+  r.remove("/p/missing.rhsd");
+  assert.deepEqual(r.list(), ["/p/c.rhsd", "/p/a.rhsd"]);
+});
+
 test("startup_prefers_the_autosave_and_falls_back_to_the_default", async () => {
   const calls = [];
   const invoke = async (name) => {
@@ -84,7 +96,12 @@ function rig(active) {
   const focus = { active };
   bindKeys(
     store,
-    { save: () => calls.push("save"), open: () => calls.push("open"), togglePreviews: () => calls.push("preview") },
+    {
+      save: () => calls.push("save"),
+      saveAs: () => calls.push("saveAs"),
+      open: () => calls.push("open"),
+      togglePreviews: () => calls.push("preview"),
+    },
     () => focus.active,
   );
   const press = (key, o = {}) => handler({ key, preventDefault() {}, ...o });
@@ -122,6 +139,20 @@ test("a_text_field_keeps_its_keys_and_is_blurred_before_save_and_open", () => {
   r.press("o", { ctrlKey: true });
   assert.deepEqual(calls, ["blur", "blur"]);
   assert.deepEqual(r.calls, ["save", "open"]);
+});
+
+test("ctrl_shift_s_saves_as_even_with_a_path_and_ctrl_s_saves", () => {
+  const blurs = [];
+  const field = { tagName: "INPUT", type: "text", blur: () => blurs.push("blur") };
+  const r = rig(field);
+  r.store.state.path = "/p/mine.rhsd";
+  r.press("S", { ctrlKey: true, shiftKey: true });
+  assert.deepEqual(r.calls, ["saveAs"]);
+  r.press("s", { ctrlKey: true });
+  assert.deepEqual(r.calls, ["saveAs", "save"]);
+  assert.deepEqual(blurs, ["blur", "blur"], "both blur the text field first");
+  r.press("S", { ctrlKey: true, shiftKey: true, repeat: true });
+  assert.deepEqual(r.calls, ["saveAs", "save"], "a held key does not stack dialogs");
 });
 
 test("a_nudge_at_the_limit_commits_nothing_and_ctrl_backspace_keeps_the_part", () => {

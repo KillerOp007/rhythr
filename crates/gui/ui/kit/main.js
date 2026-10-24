@@ -24,6 +24,7 @@ const RHS_FILTER = [{ name: "Rhythia skin", extensions: ["rhs"] }];
 // The dialog plugin is read when a handler runs, never at load.
 const dialog = () => window.__TAURI__.dialog;
 const errText = (e) => String(e && e.message ? e.message : e);
+const fileName = (path) => path.split(/[\\/]/).pop();
 
 function webviewStorage() {
   try {
@@ -83,6 +84,7 @@ async function boot() {
       splitter: $("kt-splitter"),
       still: $("kt-still"),
       loop: $("kt-preview"),
+      error: $("kt-preview-error"),
     },
     invoke,
   );
@@ -157,13 +159,25 @@ async function boot() {
       cancelLabel: "Cancel",
     });
   }
-  async function openPath(path) {
-    // Read and check before asking, so a bad file never costs a prompt.
-    const next = parseDesign(await invoke("kit_doc_load", { path }));
+  // What the backend read ({ json, migrated }) becomes the design. A file
+  // converted from the old designer keeps no path: Save then asks for a new
+  // file, so the old designer's document is never overwritten.
+  async function openLoaded(path, loaded) {
+    // Read and checked before asking, so a bad file never costs a prompt.
+    const next = parseDesign(loaded.json);
     if (!(await discardOk("Open design"))) return;
+    if (loaded.migrated) {
+      store.load(next, null);
+      recent.add(path);
+      store.setStatus(`Opened and converted from the old designer: ${fileName(path)}; Save will ask for a new file`);
+      return;
+    }
     store.load(next, path);
     recent.add(path);
     store.setStatus(`Opened: ${path}`);
+  }
+  async function openPath(path) {
+    await openLoaded(path, await invoke("kit_doc_load", { path }));
   }
   const newDoc = exclusive(async () => {
     if (!(await discardOk("New design"))) return;
@@ -175,13 +189,20 @@ async function boot() {
     if (!path || Array.isArray(path)) return;
     await openPath(path);
   });
-  const openRecent = exclusive(openPath);
-  const saveDoc = exclusive(async () => {
-    let path = store.state.path;
-    if (!path) {
-      path = await dialog().save({ defaultPath: `${fileStem(store.state.design.name)}.rhsd`, filters: DOC_FILTER });
-      if (!path) return;
+  // A recent entry the backend cannot read (moved, deleted, damaged) leaves
+  // the list; the subscriber rebuilds the dropdown on the status update.
+  const openRecent = exclusive(async (path) => {
+    let loaded;
+    try {
+      loaded = await invoke("kit_doc_load", { path });
+    } catch {
+      recent.remove(path);
+      store.setStatus(`${fileName(path)} could not be opened and was removed from the recent list`, true);
+      return;
     }
+    await openLoaded(path, loaded);
+  });
+  async function writeDoc(path) {
     const json = store.serialize();
     await invoke("kit_doc_save", { path, json });
     store.state.path = path;
@@ -189,6 +210,22 @@ async function boot() {
     if (store.serialize() === json) store.state.dirty = false;
     recent.add(path);
     store.setStatus(`Saved: ${path}`);
+  }
+  const defaultDocName = () => `${fileStem(store.state.design.name)}.rhsd`;
+  const saveDoc = exclusive(async () => {
+    let path = store.state.path;
+    if (!path) {
+      path = await dialog().save({ defaultPath: defaultDocName(), filters: DOC_FILTER });
+      if (!path) return;
+    }
+    await writeDoc(path);
+  });
+  // Always asks, so a design with a file can be written to another one.
+  const saveAsDoc = exclusive(async () => {
+    const current = store.state.path;
+    const path = await dialog().save({ defaultPath: current ? fileName(current) : defaultDocName(), filters: DOC_FILTER });
+    if (!path) return;
+    await writeDoc(path);
   });
   const importOld = exclusive(async () => {
     const next = await importOldDesigner(storage, invoke);
@@ -205,6 +242,7 @@ async function boot() {
   $("kt-new").addEventListener("click", newDoc);
   $("kt-load").addEventListener("click", openDoc);
   $("kt-save").addEventListener("click", saveDoc);
+  $("kt-save-as").addEventListener("click", saveAsDoc);
   $("kt-import-old").addEventListener("click", importOld);
   $("kt-export").addEventListener("click", exportRhs);
   $("kt-recent").addEventListener("change", (e) => {
@@ -216,7 +254,11 @@ async function boot() {
     sel.blur();
     if (path) openRecent(path);
   });
-  bindKeys(store, { save: saveDoc, open: openDoc, togglePreviews: previews.toggle }, () => document.activeElement);
+  bindKeys(
+    store,
+    { save: saveDoc, saveAs: saveAsDoc, open: openDoc, togglePreviews: previews.toggle },
+    () => document.activeElement,
+  );
   // The debounce must not hold back the last edit when the window goes.
   window.addEventListener("pagehide", autoSave.flush);
   document.addEventListener("visibilitychange", () => {

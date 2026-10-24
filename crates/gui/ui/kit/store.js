@@ -117,6 +117,12 @@ export function createStore(design, opts = {}) {
       emit();
       return true;
     },
+    // A released pointer ends the gesture: the next commit starts a new undo
+    // step even inside the coalescing window, so two quick drags on one part
+    // undo separately. Nothing on screen changes, so nothing is emitted.
+    endGesture() {
+      s.last = noLast();
+    },
     select(id) {
       s.selected = id;
       emit();
@@ -130,11 +136,14 @@ export function createStore(design, opts = {}) {
       while (ids.has(`p${n}`)) n++;
       return `p${n}`;
     },
+    // The selection is set inside the commit, so its one emit already shows
+    // the new part selected.
     addPart(kind) {
       const id = api.nextId();
-      api.commit("add", (d) => d.parts.push(newPart(id, kind)));
-      s.selected = id;
-      emit();
+      api.commit("add", (d) => {
+        d.parts.push(newPart(id, kind));
+        s.selected = id;
+      });
       return id;
     },
     removePart(id) {
@@ -153,9 +162,8 @@ export function createStore(design, opts = {}) {
         copy.name = `${src.name} copy`;
         const i = d.parts.findIndex((p) => p.id === id);
         d.parts.splice(i + 1, 0, copy);
+        s.selected = nid;
       });
-      s.selected = nid;
-      emit();
       return nid;
     },
     updatePart(id, label, patch) {

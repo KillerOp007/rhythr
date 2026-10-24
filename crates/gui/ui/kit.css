@@ -30,8 +30,12 @@
 #kt-canvas-hint { flex: 0 0 auto; }
 #kt-splitter { flex: 0 0 8px; margin: -2px 0; cursor: ns-resize; border-radius: 4px; background: transparent; touch-action: none; }
 #kt-splitter:hover { background: var(--accent-soft); }
-#kt-preview-box { flex: 0 0 clamp(140px, 26vh, 340px); min-height: 120px; }
-#kt-preview-row { display: flex; gap: 0.5rem; height: 100%; }
+/* A column, so the error line above the row takes its height from the box
+   instead of pushing the row out of it. */
+#kt-preview-box { flex: 0 0 clamp(140px, 26vh, 340px); min-height: 120px; display: flex; flex-direction: column; gap: 0.25rem; }
+/* "#kit-body .hint" sets the muted colour; the error must win over it. */
+#kit-body #kt-preview-error { color: var(--danger); }
+#kt-preview-row { display: flex; gap: 0.5rem; flex: 1 1 auto; min-height: 0; }
 #kt-preview-row figure { flex: 1 1 50%; min-width: 0; margin: 0; display: flex; flex-direction: column; gap: 0.15rem; }
 #kt-preview-row img { flex: 1 1 auto; min-height: 0; width: 100%; object-fit: contain; object-position: center; border: 1px solid var(--border); border-radius: var(--radius); background: #000; display: block; }
 #kt-inspector { flex: 0 0 320px; overflow-y: auto; padding-right: 0.25rem; }

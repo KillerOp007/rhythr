@@ -277,9 +277,11 @@ export function createView(canvas, store, hooks) {
   });
 
   // Every button takes pointer capture on pointerdown (a right click too,
-  // which starts no gesture), so every release gives it back.
+  // which starts no gesture), so every release gives it back. A gesture
+  // that ends is one undo step; the next drag, however quick, is another.
   const end = (e) => {
     if (canvas.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
+    if (gesture) store.endGesture();
     gesture = null;
   };
   canvas.addEventListener("pointerup", end);
@@ -290,10 +292,16 @@ export function createView(canvas, store, hooks) {
     (e) => {
       e.preventDefault();
       if (!e.deltaY || !boxHasArea()) return;
+      // The delta in pixels: WebView2 reports pixels, WebKitGTK may report
+      // lines (deltaMode 1) or pages (2), which would otherwise zoom far too
+      // slowly.
+      let dy = e.deltaY;
+      if (e.deltaMode === 1) dy *= 16;
+      else if (e.deltaMode === 2) dy *= size.h;
       // Proportional to the wheel delta, so a trackpad's many small events
       // zoom as far as one mouse notch does; one event never moves more
       // than a factor of two.
-      const factor = clamp(Math.exp(-e.deltaY * 0.0015), 0.5, 2);
+      const factor = clamp(Math.exp(-dy * 0.0015), 0.5, 2);
       const [mx, my] = local(e);
       zoomAt(view, size, mx, my, factor);
       hooks.onZoom(Math.round(view.z * 100));

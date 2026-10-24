@@ -32,6 +32,7 @@
         <option value="" disabled selected>Recent</option>
       </select>
       <button class="btn small ghost" id="kt-save" title="Save the design (Ctrl+S)">Save</button>
+      <button class="btn small ghost" id="kt-save-as" title="Save the design to a new file (Ctrl+Shift+S)">Save as</button>
       <button class="btn small ghost" id="kt-import-old" title="Bring in the note from the old Note Designer">From old designer</button>
       <button class="btn small" id="kt-export" title="Export as .rhs for rhythr and the game">Export .rhs</button>
     </div>
@@ -54,6 +55,7 @@
       </div>
       <div id="kt-splitter" title="Drag to resize editor vs. previews" hidden></div>
       <div id="kt-preview-box" hidden>
+        <div id="kt-preview-error" class="hint err" hidden></div>
         <div id="kt-preview-row">
           <figure>
             <img id="kt-still" alt="Note close-up" />
