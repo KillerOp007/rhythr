@@ -1,6 +1,8 @@
 //! The baked output: one .obj with a `usemtl` section per material, the
 //! .mtl it references (always bundled, the game crashes without it),
-//! and the colorset, in the archive layout the game's importer accepts.
+//! the colorset, in the archive layout the game's importer accepts, and
+//! the design itself as one more entry, so the one file is both the skin
+//! for the game and the editable document the editor opens again.
 
 use crate::kit::doc::Design;
 use crate::kit::levels::evaluate;
@@ -27,6 +29,30 @@ pub fn mtl_text() -> String {
 
 /// Longest accepted skin name, in characters.
 const MAX_NAME_CHARS: usize = 64;
+
+/// The archive entry that carries the editable design. The game ignores
+/// entries it does not know (verified 2026-10-24 with a probe skin), and
+/// rhythr's own reader only looks under the skin folders, so the entry
+/// rides along unseen until an editor opens the file.
+pub const DESIGN_ENTRY: &str = "rhythr/design.json";
+
+/// The design text embedded in a skin archive, `None` when the archive is
+/// a plain game skin (made by the game or by another tool) and carries
+/// none. The text is returned as stored: the old designer embeds its own
+/// document format, so the caller decides what it is.
+pub fn embedded_design(bytes: &[u8]) -> Result<Option<String>, KitError> {
+    let mut zr = zip::ZipArchive::new(std::io::Cursor::new(bytes))
+        .map_err(|_| KitError::Invalid("not a skin archive".into()))?;
+    let mut entry = match zr.by_name(DESIGN_ENTRY) {
+        Ok(e) => e,
+        Err(zip::result::ZipError::FileNotFound) => return Ok(None),
+        Err(_) => return Err(KitError::Invalid("not a skin archive".into())),
+    };
+    let mut text = String::new();
+    std::io::Read::read_to_string(&mut entry, &mut text)
+        .map_err(|_| KitError::Invalid("the embedded design is not readable text".into()))?;
+    Ok(Some(text))
+}
 
 /// The name reaches the config JSON, two archive entry paths and the obj's
 /// `o` line unescaped, so only characters that are inert in all of them
@@ -71,13 +97,16 @@ pub fn to_obj(mesh: &KitMesh, name: &str) -> String {
     s
 }
 
-/// Bakes `design` into a `.rhs` skin archive named `name`. The name is
-/// checked first and must be 1 to 64 ASCII letters, digits, spaces, `_` or
-/// `-`, with no space at either end; anything else is `KitError::Invalid`
-/// and nothing is built.
+/// Bakes `design` into a `.rhs` skin archive named `name`, with the design
+/// itself embedded under [`DESIGN_ENTRY`] so the file opens again in the
+/// editor. The name is checked first and must be 1 to 64 ASCII letters,
+/// digits, spaces, `_` or `-`, with no space at either end; anything else
+/// is `KitError::Invalid` and nothing is built.
 pub fn export_rhs(design: &Design, name: &str) -> Result<Vec<u8>, KitError> {
     use std::io::Write;
     check_name(name)?;
+    let design_json =
+        serde_json::to_string(design).map_err(|e| KitError::Invalid(format!("design: {e}")))?;
     let mesh = build_mesh(&evaluate(design)?)?;
     let obj = to_obj(&mesh, name);
     let colorset: String = design
@@ -107,6 +136,8 @@ pub fn export_rhs(design: &Design, name: &str) -> Result<Vec<u8>, KitError> {
             .map_err(zip_err)?;
         zw.write_all(colorset.as_bytes()).map_err(io_err)?;
     }
+    zw.start_file(DESIGN_ENTRY, opts).map_err(zip_err)?;
+    zw.write_all(design_json.as_bytes()).map_err(io_err)?;
     Ok(zw.finish().map_err(zip_err)?.into_inner())
 }
 
@@ -168,6 +199,41 @@ mod tests {
         assert_eq!(cfg.colorset.len(), 3);
         let obj = String::from_utf8(cfg.note_mesh.unwrap()).unwrap();
         assert!(obj.contains("usemtl Transparent"));
+    }
+
+    #[test]
+    fn the_archive_carries_its_design_and_gives_it_back() {
+        let design = glass_design();
+        let bytes = export_rhs(&design, "designed").unwrap();
+        let text = embedded_design(&bytes).unwrap().expect("design entry");
+        let back: Design = serde_json::from_str(&text).unwrap();
+        assert_eq!(back, design);
+        // The entry sits after the game's own entries and changes nothing
+        // for the skin reader.
+        let mut zr = zip::ZipArchive::new(std::io::Cursor::new(bytes.clone())).unwrap();
+        let names: Vec<String> = (0..zr.len())
+            .map(|i| zr.by_index(i).unwrap().name().to_string())
+            .collect();
+        assert_eq!(names.last().map(String::as_str), Some(DESIGN_ENTRY));
+        assert_eq!(names[0], "config");
+        let cfg = crate::config::SkinConfig::from_rhs(&bytes).unwrap();
+        assert!(cfg.note_mesh.is_some());
+    }
+
+    #[test]
+    fn a_plain_game_skin_has_no_design_and_junk_is_refused() {
+        use std::io::Write;
+        let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let opts = zip::write::SimpleFileOptions::default();
+        zw.start_file("config", opts).unwrap();
+        zw.write_all(b"{}").unwrap();
+        let plain = zw.finish().unwrap().into_inner();
+        assert_eq!(embedded_design(&plain).unwrap(), None);
+        assert!(matches!(
+            embedded_design(b"{\"version\":2}"),
+            Err(KitError::Invalid(_))
+        ));
+        assert!(matches!(embedded_design(b""), Err(KitError::Invalid(_))));
     }
 
     #[test]

@@ -278,7 +278,9 @@ until the switch is complete, then the v1 window is removed.
   v2, with the splitter.
 - Presets: the v2 gallery becomes multi-part presets (a gear with a
   hub, a shield with an emblem, a ring with a recessed plate).
-- Import: SVG and glyph become new parts; the reference underlay stays.
+- Import: SVG and glyph become new parts (landed in the Phase 2 test
+  rounds: the SVG button and the Letter field add `Contours` parts named
+  after their source); the reference underlay stays (Phase 4).
 
 5.3 Vocabulary
 
@@ -295,8 +297,15 @@ undefined), and `colorSet/<name>.txt`, exactly the layout the game
 accepts today. The skin name is validated first: letters, digits,
 spaces, `_` and `-`, 1 to 64 characters, no leading or trailing space,
 because it reaches the config JSON, two archive paths and the obj's `o`
-line. The design file (.rhsd, version 2) is the editable source; the
-.rhs is baked output.
+line. The design itself is written into the archive as its last entry,
+`rhythr/design.json` (the game ignores entries it does not know, verified
+2026-10-24 with a probe skin), so the one .rhs is both the game's skin
+and the editable document: Save writes it, Open reads it back, and a
+skin saved by the old designer carries its own document under the same
+entry and converts on open. A plain .rhsd (version 2 text, or the old
+designer's) still opens; a skin without the entry is refused with a
+sentence that says so. A design the kernel refuses is not written,
+because the game could not load it.
 
 ## 7. Testing
 
@@ -331,8 +340,10 @@ line. The design file (.rhsd, version 2) is the editable source; the
    v1 migration. Testbuild.
 3. Composition: groups, effects chips, symmetry, point edit, snapping,
    glass, turntable. Testbuild.
-4. Polish and acceptance: presets, imports as parts, user guide,
-   in-game probe round, removal of the v1 designer. Release candidate.
+4. Polish and acceptance: presets, reference underlay, user guide,
+   in-game probe round, removal of the v1 designer (imports as parts and
+   the one-file save landed early, in the Phase 2 test rounds). Release
+   candidate.
 
 ## 9. Decisions still open for the owner
 

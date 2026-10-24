@@ -170,6 +170,25 @@ pub fn load_document(text: &str) -> Result<Loaded, String> {
     })
 }
 
+/// What Open reads: a skin archive saved by the kit (the design rides
+/// inside it), a skin saved by the old designer (its document rides inside
+/// and converts), or a plain design text file (.rhsd, either editor's). A
+/// skin made by the game or another tool carries no design and is refused
+/// with a sentence that says so.
+pub fn load_bytes(bytes: &[u8]) -> Result<Loaded, String> {
+    if bytes.starts_with(b"PK") {
+        let text = export::embedded_design(bytes)
+            .map_err(|e| user_message(&e))?
+            .ok_or_else(|| {
+                "this skin carries no editable design: only skins saved by rhythr's Note Kit or Note Designer open here"
+                    .to_string()
+            })?;
+        return load_document(&text);
+    }
+    let text = std::str::from_utf8(bytes).map_err(|_| "not a design file".to_string())?;
+    load_document(text)
+}
+
 /// The skin name the export accepts (letters, digits, spaces, `_`, `-`,
 /// 1 to 64 characters, no leading or trailing space), from a file stem.
 pub fn skin_name_from(path: &str) -> String {
@@ -225,27 +244,17 @@ pub fn kit_migrate_v1(json: String) -> Result<String, String> {
 pub async fn kit_doc_load(path: String) -> Result<Loaded, String> {
     join(
         tauri::async_runtime::spawn_blocking(move || {
-            let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-            load_document(&text)
+            let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+            load_bytes(&bytes)
         })
         .await,
     )
 }
 
-#[tauri::command]
-pub async fn kit_doc_save(path: String, json: String) -> Result<String, String> {
-    join(
-        tauri::async_runtime::spawn_blocking(move || {
-            // Only a design that parses is written: the file is the user's work.
-            serde_json::from_str::<Design>(&json)
-                .map_err(|e| format!("design file damaged: {e}"))?;
-            std::fs::write(&path, json.as_bytes()).map_err(|e| e.to_string())?;
-            Ok(path)
-        })
-        .await,
-    )
-}
-
+/// The editor's Save: bakes the design into a skin archive at `path` with
+/// the design embedded, so the one file is the game's skin and the document
+/// that opens again. A design that cannot be built is not written (the
+/// game could not load it), and the error says why.
 #[tauri::command]
 pub async fn kit_export(design: Design, path: String) -> Result<String, String> {
     join(
@@ -359,6 +368,58 @@ mod tests {
         assert!(load_document("{\"version\":3}")
             .unwrap_err()
             .starts_with("not a design file"));
+    }
+
+    #[test]
+    fn a_saved_skin_opens_again_and_other_skins_say_what_they_are() {
+        let design = Design::default_note();
+        let bytes = export::export_rhs(&design, "note").unwrap();
+        let loaded = load_bytes(&bytes).unwrap();
+        assert!(!loaded.migrated);
+        assert_eq!(
+            serde_json::from_str::<Design>(&loaded.json).unwrap(),
+            design
+        );
+        // The old designer's skin carries its own document, which converts.
+        let square = vec![[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]];
+        let mesh = rhythia_render::designer::build_note_mesh(&square, None, 0.05).unwrap();
+        let colors = vec!["#ffffff".to_string()];
+        let old = rhythia_render::designer::export_rhs_with_design(
+            &mesh,
+            "old",
+            &colors,
+            Some(OLD_DESIGNER_FIXTURE),
+        )
+        .unwrap();
+        let loaded = load_bytes(&old).unwrap();
+        assert!(loaded.migrated);
+        assert_eq!(
+            serde_json::from_str::<Design>(&loaded.json)
+                .unwrap()
+                .parts
+                .len(),
+            1
+        );
+        // A plain game skin has nothing to edit.
+        let plain = rhythia_render::designer::export_rhs(&mesh, "plain", &colors).unwrap();
+        assert!(load_bytes(&plain)
+            .unwrap_err()
+            .starts_with("this skin carries no editable design"));
+        // Text files still open, and bytes that are neither are refused.
+        let kit = serde_json::to_string(&design).unwrap();
+        assert!(!load_bytes(kit.as_bytes()).unwrap().migrated);
+        assert!(
+            load_bytes(OLD_DESIGNER_FIXTURE.as_bytes())
+                .unwrap()
+                .migrated
+        );
+        assert!(load_bytes(b"\xff\xfe\x00")
+            .unwrap_err()
+            .starts_with("not a design file"));
+        assert_eq!(
+            load_bytes(b"PK\x03\x04junk").unwrap_err(),
+            "not a skin archive"
+        );
     }
 
     /// Every shape the editor's Add buttons write, inside a part exactly as

@@ -5120,14 +5120,32 @@ async fn designer_doc_save(path: String, json: String) -> Result<String, String>
     .map_err(err_str)?
 }
 
-/// Loads a design document saved by [`designer_doc_save`].
+/// Loads a design document saved by [`designer_doc_save`], or the one
+/// embedded in a .rhs written by [`designer_export`]. A skin saved by the
+/// Note Kit carries the kit's format, which this editor cannot show.
 #[tauri::command]
 async fn designer_doc_load(path: String) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let data = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+        let data = if bytes.starts_with(b"PK") {
+            rhythia_render::kit::export::embedded_design(&bytes)
+                .map_err(|_| "not a skin archive".to_string())?
+                .ok_or_else(|| {
+                    "this skin carries no editable design: only skins saved by rhythr's editors open here"
+                        .to_string()
+                })?
+        } else {
+            String::from_utf8(bytes).map_err(|_| "not a design file".to_string())?
+        };
         // A quick shape check so a wrong file errors here instead of
         // half-applying in the editor.
-        serde_json::from_str::<serde_json::Value>(&data).map_err(|e| e.to_string())?;
+        let value: serde_json::Value = serde_json::from_str(&data).map_err(|e| e.to_string())?;
+        if value.get("version").and_then(|v| v.as_u64()) == Some(2) {
+            return Err(
+                "this design was made in the Note Kit; open it there (Note Kit in the main window)"
+                    .into(),
+            );
+        }
         Ok(data)
     })
     .await
@@ -5135,10 +5153,15 @@ async fn designer_doc_load(path: String) -> Result<String, String> {
 }
 
 /// Writes the designed note as a complete .rhs pack at `path` (picked by
-/// the user through the save dialog). Loadable by rhythr and importable
-/// by the game, mtl always bundled.
+/// the user through the save dialog), with the editor's document embedded
+/// when `doc` is given, so the file opens again here or in the Note Kit.
+/// Loadable by rhythr and importable by the game, mtl always bundled.
 #[tauri::command]
-async fn designer_export(shape: DesignerShape, path: String) -> Result<String, String> {
+async fn designer_export(
+    shape: DesignerShape,
+    path: String,
+    doc: Option<String>,
+) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let mesh = rhythia_render::designer::build_note_mesh_multi(
             &shape.resolved_contours(),
@@ -5154,8 +5177,13 @@ async fn designer_export(shape: DesignerShape, path: String) -> Result<String, S
             .chars()
             .map(|c| if c.is_alphanumeric() { c } else { '_' })
             .collect();
-        let pack = rhythia_render::designer::export_rhs(&mesh, &name, &shape.colors)
-            .map_err(|e| e.to_string())?;
+        let pack = rhythia_render::designer::export_rhs_with_design(
+            &mesh,
+            &name,
+            &shape.colors,
+            doc.as_deref(),
+        )
+        .map_err(|e| e.to_string())?;
         std::fs::write(&path, pack).map_err(err_str)?;
         Ok(path)
     })
@@ -6655,7 +6683,6 @@ fn main() {
             kit_commands::kit_default_doc,
             kit_commands::kit_migrate_v1,
             kit_commands::kit_doc_load,
-            kit_commands::kit_doc_save,
             kit_commands::kit_export,
             kit_preview,
             open_kit_window,

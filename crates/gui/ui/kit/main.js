@@ -14,13 +14,18 @@ import {
   importOldDesigner,
   parseDesign,
   fileStem,
+  docPathFor,
+  glyphOf,
   bindKeys,
 } from "./files.js";
 
 const $ = (id) => document.getElementById(id);
 
-const DOC_FILTER = [{ name: "rhythr note design", extensions: ["rhsd"] }];
-const RHS_FILTER = [{ name: "Rhythia skin", extensions: ["rhs"] }];
+// One file: Save writes a .rhs that the game imports and that carries the
+// design, so Open takes it back. Plain .rhsd design files still open.
+const OPEN_FILTER = [{ name: "Rhythia skin or rhythr design", extensions: ["rhs", "rhsd"] }];
+const SAVE_FILTER = [{ name: "Rhythia skin", extensions: ["rhs"] }];
+const SVG_FILTER = [{ name: "SVG image", extensions: ["svg"] }];
 // The dialog plugin is read when a handler runs, never at load.
 const dialog = () => window.__TAURI__.dialog;
 const errText = (e) => String(e && e.message ? e.message : e);
@@ -161,22 +166,24 @@ async function boot() {
       cancelLabel: "Cancel",
     });
   }
-  // What the backend read ({ json, migrated }) becomes the design. A file
-  // converted from the old designer keeps no path: Save then asks for a new
-  // file, so the old designer's document is never overwritten.
+  // What the backend read ({ json, migrated }) becomes the design. Only a
+  // skin archive keeps its path: a file converted from the old designer or
+  // a plain .rhsd makes Save ask for a new .rhs, so nothing saved before is
+  // overwritten with another format.
   async function openLoaded(path, loaded) {
     // Read and checked before asking, so a bad file never costs a prompt.
     const next = parseDesign(loaded.json);
     if (!(await discardOk("Open design"))) return;
-    if (loaded.migrated) {
-      store.load(next, null);
-      recent.add(path);
-      store.setStatus(`Opened and converted from the old designer: ${fileName(path)}; Save will ask for a new file`);
-      return;
-    }
-    store.load(next, path);
+    const keep = docPathFor(path, loaded.migrated);
+    store.load(next, keep);
     recent.add(path);
-    store.setStatus(`Opened: ${path}`);
+    if (loaded.migrated) {
+      store.setStatus(`Opened and converted from the old designer: ${fileName(path)}; Save will ask for a new .rhs file`);
+    } else if (!keep) {
+      store.setStatus(`Opened: ${fileName(path)}; Save will ask for a .rhs file`);
+    } else {
+      store.setStatus(`Opened: ${path}`);
+    }
   }
   async function openPath(path) {
     await openLoaded(path, await invoke("kit_doc_load", { path }));
@@ -187,7 +194,7 @@ async function boot() {
     store.setStatus("");
   });
   const openDoc = exclusive(async () => {
-    const path = await dialog().open({ multiple: false, filters: DOC_FILTER });
+    const path = await dialog().open({ multiple: false, filters: OPEN_FILTER });
     if (!path || Array.isArray(path)) return;
     await openPath(path);
   });
@@ -204,20 +211,28 @@ async function boot() {
     }
     await openLoaded(path, loaded);
   });
+  // Save bakes the skin with the design inside. A design the kernel refuses
+  // (nothing visible, too detailed) is not written, because the game could
+  // not load it; the autosave keeps the work meanwhile.
   async function writeDoc(path) {
     const json = store.serialize();
-    await invoke("kit_doc_save", { path, json });
-    store.state.path = path;
+    let out;
+    try {
+      out = await invoke("kit_export", { design: store.state.design, path });
+    } catch (e) {
+      throw new Error(`Not saved, the skin would not load in the game: ${errText(e)}`);
+    }
+    store.state.path = out || path;
     // An edit made while the write was in flight is still unsaved.
     if (store.serialize() === json) store.state.dirty = false;
-    recent.add(path);
-    store.setStatus(`Saved: ${path}`);
+    recent.add(store.state.path);
+    store.setStatus(`Saved: ${store.state.path}. Load it via Config in the main window or import it in the game.`);
   }
-  const defaultDocName = () => `${fileStem(store.state.design.name)}.rhsd`;
+  const defaultDocName = () => `${fileStem(store.state.design.name)}.rhs`;
   const saveDoc = exclusive(async () => {
     let path = store.state.path;
     if (!path) {
-      path = await dialog().save({ defaultPath: defaultDocName(), filters: DOC_FILTER });
+      path = await dialog().save({ defaultPath: defaultDocName(), filters: SAVE_FILTER });
       if (!path) return;
     }
     await writeDoc(path);
@@ -225,7 +240,7 @@ async function boot() {
   // Always asks, so a design with a file can be written to another one.
   const saveAsDoc = exclusive(async () => {
     const current = store.state.path;
-    const path = await dialog().save({ defaultPath: current ? fileName(current) : defaultDocName(), filters: DOC_FILTER });
+    const path = await dialog().save({ defaultPath: current ? fileName(current) : defaultDocName(), filters: SAVE_FILTER });
     if (!path) return;
     await writeDoc(path);
   });
@@ -235,18 +250,41 @@ async function boot() {
     store.load(next, null);
     store.setStatus("Imported the note from the old Note Designer");
   });
-  const exportRhs = exclusive(async () => {
-    const path = await dialog().save({ defaultPath: `${fileStem(store.state.design.name)}.rhs`, filters: RHS_FILTER });
-    if (!path) return;
-    const out = await invoke("kit_export", { design: store.state.design, path });
-    store.setStatus(`Exported: ${out || path}`);
+  // Imports become parts: the backend resolves the file or the font once
+  // and the outline is stored in the design, so the kernel never touches
+  // either. Both land centred at the box size, like a shape from Add.
+  const addSvg = exclusive(async () => {
+    const path = await dialog().open({ multiple: false, filters: SVG_FILTER });
+    if (!path || Array.isArray(path)) return;
+    const contours = await invoke("designer_import_svg", { path });
+    store.addContours(contours, fileName(path).replace(/\.svg$/i, ""));
+    store.setStatus(`Added ${fileName(path)} as a part`);
+  });
+  const glyphField = $("kt-glyph");
+  const addGlyph = exclusive(async () => {
+    const ch = glyphOf(glyphField.value);
+    if (!ch) {
+      glyphField.focus();
+      store.setStatus("Type a letter, a digit or an emoji first", true);
+      return;
+    }
+    const contours = await invoke("designer_import_glyph", { ch });
+    store.addContours(contours, ch);
+    store.setStatus(`Added "${ch}" as a part`);
   });
   $("kt-new").addEventListener("click", newDoc);
   $("kt-load").addEventListener("click", openDoc);
   $("kt-save").addEventListener("click", saveDoc);
   $("kt-save-as").addEventListener("click", saveAsDoc);
   $("kt-import-old").addEventListener("click", importOld);
-  $("kt-export").addEventListener("click", exportRhs);
+  $("kt-add-svg").addEventListener("click", addSvg);
+  $("kt-add-glyph").addEventListener("click", addGlyph);
+  glyphField.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      if (!e.repeat) addGlyph();
+    }
+  });
   $("kt-recent").addEventListener("change", (e) => {
     const sel = e.currentTarget;
     const path = sel.value;

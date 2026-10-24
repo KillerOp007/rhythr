@@ -1,8 +1,9 @@
 // Browser harness for the Note Kit window: serves crates/gui/ui/ as the
 // desktop app would and stands in for the Tauri IPC, so kit.html can be
 // driven in a plain browser (by hand or with Playwright) against the real
-// kernel. kit_evaluate runs the kit_eval_json example; documents are real
-// files under a temp directory; previews and the export are canned.
+// kernel. kit_evaluate, kit_doc_load and kit_export run the kit_eval_json
+// example, so saved skins are real archives under a temp directory;
+// previews and the two imports (SVG, glyph) are canned outlines.
 //
 //   cargo build -p rhythia-render --example kit_eval_json
 //   node crates/gui/ui/kit/tests/harness.mjs      (PORT=8791 by default)
@@ -28,6 +29,14 @@ fs.mkdirSync(WORK, { recursive: true });
 fs.writeFileSync(LOG, "");
 
 const PNG_1x1 = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+// Stand-ins for the font and SVG importers (gui crate code): a square with a
+// square hole, orientation marking the hole as the real importers do, and a
+// triangle for any character. A character starting with "?" has "no font".
+const SVG_OUTLINE = [
+  [[-1, -1], [1, -1], [1, 1], [-1, 1]],
+  [[-0.5, -0.5], [-0.5, 0.5], [0.5, 0.5], [0.5, -0.5]],
+];
+const GLYPH_OUTLINE = [[[-1, -0.8], [1, -0.8], [0, 1]]];
 
 const SHIM = `<script>
 (() => {
@@ -97,13 +106,25 @@ async function invoke(name, args) {
       return await run(["--default"]);
     case "kit_preview":
       return PNG_1x1;
-    case "kit_doc_load":
-      return { json: fs.readFileSync(args.path, "utf8"), migrated: false };
-    case "kit_doc_save":
-      fs.writeFileSync(args.path, args.json);
-      return args.path;
-    case "kit_export":
-      return args.path;
+    case "kit_doc_load": {
+      const out = JSON.parse(await run(["--load", args.path]));
+      if (out.error) throw new Error(out.error);
+      return out;
+    }
+    case "kit_export": {
+      const out = JSON.parse(await run(["--save", args.path], JSON.stringify(args.design)));
+      if (out.error) throw new Error(out.error);
+      return out.path;
+    }
+    case "designer_import_svg":
+      if (!fs.existsSync(args.path)) throw new Error(`not a readable SVG: ${args.path}`);
+      return SVG_OUTLINE;
+    case "designer_import_glyph": {
+      const ch = String(args.ch || "").trim();
+      if (!ch) throw new Error("type a character first");
+      if (ch.startsWith("?")) throw new Error(`no installed font has an outline for '${ch}'`);
+      return GLYPH_OUTLINE;
+    }
     default:
       throw new Error(`harness: no handler for ${name}`);
   }

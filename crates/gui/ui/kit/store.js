@@ -146,6 +146,20 @@ export function createStore(design, opts = {}) {
       });
       return id;
     },
+    // An imported outline (an SVG's filled paths or a glyph) as a new part,
+    // named after its source and selected like any Add.
+    addContours(contours, label) {
+      const id = api.nextId();
+      const name = String(label || "").trim() || "Outline";
+      api.commit("add", (d) => {
+        const p = newPart(id, "circle");
+        p.name = name;
+        p.shape = { kind: "contours", contours, label: name };
+        d.parts.push(p);
+        s.selected = id;
+      });
+      return id;
+    },
     removePart(id) {
       api.commit("remove", (d) => {
         d.parts = d.parts.filter((p) => p.id !== id);

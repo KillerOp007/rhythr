@@ -16,6 +16,9 @@
       <button class="btn small" data-add="star">Star</button>
       <button class="btn small" data-add="ring">Ring</button>
       <button class="btn small" data-add="pill">Pill</button>
+      <button class="btn small" id="kt-add-svg" title="Add the filled paths of an SVG file as a part, holes included">SVG</button>
+      <input id="kt-glyph" type="text" maxlength="8" placeholder="A or emoji" title="A letter, digit, symbol or emoji from an installed font; Enter or the Letter button adds it as a part" />
+      <button class="btn small" id="kt-add-glyph" title="Add the typed letter or emoji as a part">Letter</button>
     </div>
     <div class="group">
       <button class="btn small ghost" id="kt-undo" title="Undo (Ctrl+Z)">Undo</button>
@@ -27,14 +30,13 @@
     <div class="group grow"></div>
     <div class="group">
       <button class="btn small ghost" id="kt-new" title="New design">New</button>
-      <button class="btn small ghost" id="kt-load" title="Open a design (Ctrl+O)">Open</button>
-      <select id="kt-recent" title="Recently opened or saved designs" disabled>
+      <button class="btn small ghost" id="kt-load" title="Open a skin saved by rhythr's editors, or a design file (Ctrl+O)">Open</button>
+      <select id="kt-recent" title="Recently opened or saved skins" disabled>
         <option value="" disabled selected>Recent</option>
       </select>
-      <button class="btn small ghost" id="kt-save" title="Save the design (Ctrl+S)">Save</button>
-      <button class="btn small ghost" id="kt-save-as" title="Save the design to a new file (Ctrl+Shift+S)">Save as</button>
-      <button class="btn small ghost" id="kt-import-old" title="Bring in the note from the old Note Designer">From old designer</button>
-      <button class="btn small" id="kt-export" title="Export as .rhs for rhythr and the game">Export .rhs</button>
+      <button class="btn small" id="kt-save" title="Save as .rhs: the skin for rhythr and the game, with your design inside (Ctrl+S)">Save .rhs</button>
+      <button class="btn small ghost" id="kt-save-as" title="Save to a new .rhs file (Ctrl+Shift+S)">Save as</button>
+      <button class="btn small ghost" id="kt-import-old" title="Bring in the note from the old Note Designer's autosave">From old designer</button>
     </div>
   </header>
   <main id="kt-root">
@@ -53,6 +55,8 @@
         the handle above rotates, arrows nudge. Wheel zooms, middle drag or Space+drag pans.
         The solid square is the note box: whatever a part puts outside it is cut off, nothing is
         ever rescaled. The dashed square is the game's true hit area.
+        Save writes one .rhs file: the skin for rhythr and the game, with your editable design
+        inside, so Open brings it back here. Import that file into the game from a local folder.
       </div>
       <div id="kt-splitter" title="Drag to resize editor vs. previews" hidden></div>
       <div id="kt-preview-box" hidden>

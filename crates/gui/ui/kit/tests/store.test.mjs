@@ -74,6 +74,24 @@ test("end_gesture_splits_two_drags_inside_the_coalescing_window", () => {
   assert.equal(b.part("p1").transform.x, 0.1);
 });
 
+test("an_imported_outline_becomes_a_selected_part_with_its_source_as_name", () => {
+  const s = createStore(design());
+  const outline = [[[-1, -1], [1, -1], [0, 1]]];
+  const id = s.addContours(outline, " A ");
+  const p = s.part(id);
+  assert.equal(p.shape.kind, "contours");
+  assert.deepEqual(p.shape.contours, outline);
+  assert.equal(p.shape.label, "A");
+  assert.equal(p.name, "A");
+  assert.deepEqual(p.transform, { x: 0, y: 0, w: 1, h: 1, rotation: 0 });
+  assert.equal(s.state.selected, id);
+  assert.equal(s.state.undo.length, 1);
+  assert.equal(s.addContours(outline, "").length > 0 && s.part().name, "Outline");
+  s.undo();
+  s.undo();
+  assert.equal(s.part(id), null);
+});
+
 test("an_evaluate_error_keeps_the_last_good_geometry", () => {
   const s = createStore(design());
   const ev = { scale: 1, levels: [], parts: [], intervals: [], triangles: 0, mesh_error: null };

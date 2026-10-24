@@ -8,6 +8,8 @@ import {
   isTextEntry,
   ownsArrows,
   bindKeys,
+  docPathFor,
+  glyphOf,
   RECENT_LIMIT,
   DOC_KEY,
   OLD_DOC_KEY,
@@ -18,6 +20,25 @@ function storage(init = {}) {
   const m = new Map(Object.entries(init));
   return { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), removeItem: (k) => m.delete(k) };
 }
+
+test("only_a_skin_archive_keeps_its_path_for_save", () => {
+  assert.equal(docPathFor("/p/note.rhs", false), "/p/note.rhs");
+  assert.equal(docPathFor("C:\\skins\\Note.RHS", false), "C:\\skins\\Note.RHS");
+  // A converted old designer file and a plain design text file make Save ask.
+  assert.equal(docPathFor("/p/note.rhs", true), null);
+  assert.equal(docPathFor("/p/note.rhsd", false), null);
+  assert.equal(docPathFor("", false), null);
+  assert.equal(docPathFor(null, false), null);
+});
+
+test("the_glyph_import_takes_the_first_character_typed", () => {
+  assert.equal(glyphOf(" A "), "A");
+  assert.equal(glyphOf("AB"), "A");
+  // An emoji outside the basic plane is one code point, not two halves.
+  assert.equal(glyphOf("\u{1F600}x"), "\u{1F600}");
+  assert.equal(glyphOf("   "), "");
+  assert.equal(glyphOf(null), "");
+});
 
 test("recent_keeps_the_newest_first_without_duplicates", () => {
   const r = makeRecent(storage());

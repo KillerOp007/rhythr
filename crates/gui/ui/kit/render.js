@@ -232,6 +232,10 @@ function buildInspector(store, body, p) {
     if (picker.value !== kind) up("shape", (x) => (x.shape = SHAPES[picker.value]()));
   });
   body.append(el("div", { class: "kt-field" }, [el("label", { text: "Shape" }), picker]));
+  if (kind === "contours") {
+    const from = p.shape.label ? ` from ${p.shape.label}` : "";
+    body.append(el("div", { class: "hint", text: `Imported outline${from}. Scale, turn, cut and rim it like any part; pick a shape above to replace it.` }));
+  }
   for (const [key, label, min, max, step] of shapeFields(kind)) {
     body.append(slider(p, label, (q) => q.shape[key], min, max, step, (v) => up(`shape.${key}:${id}`, (x) => (x.shape[key] = v))));
   }

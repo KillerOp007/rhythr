@@ -1,5 +1,6 @@
 // Documents: autosave in the webview's storage so closing never loses
-// work, a recent list, the old designer's autosave as an import, and the
+// work, a recent list, the old designer's autosave as an import, the file
+// rules (one .rhs is both the game's skin and the editable design) and the
 // keyboard. Storage, invoke and window are injected or read inside the
 // functions, so this module loads under node without a DOM.
 export const DOC_KEY = "rhythr.kit.doc";
@@ -100,6 +101,21 @@ export async function importOldDesigner(storage, invoke) {
   const old = storage.getItem(OLD_DOC_KEY);
   if (!old) throw new Error("nothing saved in the old Note Designer on this machine");
   return parseDesign(await invoke("kit_migrate_v1", { json: old }));
+}
+
+// The path a loaded file keeps for Save. Only a skin archive (.rhs) is
+// written back in place: a converted old designer document must never be
+// overwritten, and a plain .rhsd (either editor's design text) would turn
+// into an archive under the wrong name, so Save asks for a new file.
+export function docPathFor(path, migrated) {
+  if (migrated || !/\.rhs$/i.test(String(path || ""))) return null;
+  return path;
+}
+
+// The one character the glyph import outlines: the first code point of what
+// was typed, so the part's label matches what lands on the canvas.
+export function glyphOf(text) {
+  return Array.from(String(text || "").trim())[0] || "";
 }
 
 // A design's name as a file name: the dialog's default and, on the Rust side,

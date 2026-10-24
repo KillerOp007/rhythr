@@ -178,10 +178,16 @@ endorsed by Rhythia or Capo Games.
   and pills, move, scale and rotate them on the canvas, switch a part to
   Cut to carve into the others, give each part its own Depth band so
   the note gets real relief, and mark parts as Glass to draw them
-  translucent like the game does. The canvas shows exactly the outline
+  translucent like the game does. SVG and Letter bring an SVG file's
+  filled paths or a typed letter, digit or emoji (any installed font) in
+  as parts of their own. The canvas shows exactly the outline
   the export will have: a part keeps its size while you move it, and the
   solid square is the note box, which never changes. Whatever a part puts
-  outside the box is cut off, nothing is ever rescaled. The previews
+  outside the box is cut off, nothing is ever rescaled. Save writes one
+  `.rhs` file: the skin for rhythr and the game, with your editable design
+  inside, so Open brings it straight back; a skin saved by the old Note
+  Designer opens here too and is converted. Import the saved file into
+  the game from a local folder. The previews
   (still and gameplay loop through
   the real renderer) start hidden; the Previews button or the P key
   shows them, and the choice is remembered. Designs autosave, save as
