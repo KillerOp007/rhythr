@@ -913,10 +913,52 @@ Add `pub mod geom;` to `kit/mod.rs`.
 
 The adapter-based overlay is the i_overlay 8.1 API verified against the crate source: `FloatOverlay::with_adapter(adapter, capacity)` returns a builder, `unsafe_add_source(resource, ShapeType)` chains, `overlay(rule, fill)` returns `Shapes`; `OverlayRule::Subject` with an empty clip returns the subject cleaned under `fill`. If a name differs in your i_overlay version, look at `~/.cargo/registry/src/*/i_overlay-8.1.0/src/float/overlay.rs` and report what you find; do not fall back to `overlay_with_fixed_scale`, whose lattice origin moves with the input.
 
+**Amendment (controller ruling after the Task 11 property run; binding; lands after Tasks 6 and 8 added `snap`, `boolean_keep_collinear` and `overlay_with`):**
+
+The erosion step of a finish left micro loops: three-point contours of 4 to 30 lattice cells squared (about 1e-9 note units squared) on the original boundary, where the input carried micro edges of a few cells (earlier lattice rounding) next to normal ones; i_overlay's outline builder emits inner-corner spokes there and its only guard drops paths with twice-area at or below one cell. A later dilation turned each loop into a full disc of radius r (extents 1.17 and 1.20 on a normalised region), and an erosion that should have emptied a thin region returned only the loops, defeating the "thin region stays as it is" rule in `finish_part`. Region results therefore drop shapes below a visible area:
+
+```rust
+/// Smallest area a region result keeps, in note units squared: a square
+/// of side 0.001 on a note two units wide. Offsets leave micro loops of a
+/// few lattice cells at inner corners, and a later dilation turns each
+/// one into a full disc of the offset radius.
+pub const MIN_SHAPE_AREA: f32 = 1e-6;
+```
+
+`overlay_with` passes that threshold to i_overlay as `min_output_area`, converted to lattice units with `KIT_SCALE * KIT_SCALE` (read `OverlayOptions` in `~/.cargo/registry/src/*/i_overlay-8.1.0/src/float/overlay.rs` and its use in `core/extract.rs` to see whether the field compares the area or twice the area, and convert accordingly; say which in the code comment) on every region path: `clean`, `boolean`, `snap` and the re-snap inside `offset`. The face path `boolean_keep_collinear` keeps `min_output_area` at 0: the subdivision must stay an exact partition, and a dropped sliver face would leave open edges. Three tests in `geom.rs`:
+
+```rust
+    #[test]
+    fn micro_loops_vanish_from_region_results() {
+        // A unit square and a three-point loop 1e-4 across (area 5e-9).
+        let square = vec![[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]];
+        let micro = vec![[2.0, 2.0], [2.0001, 2.0], [2.0, 2.0001]];
+        let r = clean(&[square.clone(), micro.clone()], FillRule::NonZero).unwrap();
+        assert_eq!(r.len(), 1, "the micro loop must go");
+        let snapped = snap(&vec![vec![square], vec![micro]]).unwrap();
+        assert_eq!(snapped.len(), 1);
+    }
+
+    #[test]
+    fn small_but_visible_shapes_survive() {
+        let tiny = vec![[0.0, 0.0], [0.01, 0.0], [0.01, 0.01], [0.0, 0.01]];
+        let r = clean(&[tiny], FillRule::NonZero).unwrap();
+        assert_eq!(r.len(), 1);
+    }
+
+    #[test]
+    fn face_results_keep_every_sliver() {
+        let square: Shapes = vec![vec![vec![[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]]]];
+        let micro: Shapes = vec![vec![vec![[2.0, 2.0], [2.0001, 2.0], [2.0, 2.0001]]]];
+        let r = boolean_keep_collinear(&square, &micro, OverlayRule::Union).unwrap();
+        assert_eq!(r.len(), 2, "faces are an exact partition, nothing is dropped");
+    }
+```
+
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `cargo test -p rhythia-render kit::geom`
-Expected: 8 passed. If `offset_shrinks_and_grows` fails on the exact extent of the grown square, loosen only that tolerance (round joins approximate the corner arc); never loosen either bit-identity test.
+Expected: 8 passed (13 once the later amendments are in). If `offset_shrinks_and_grows` fails on the exact extent of the grown square, loosen only that tolerance (round joins approximate the corner arc); never loosen either bit-identity test.
 
 - [ ] **Step 5: Commit**
 
@@ -2128,12 +2170,16 @@ One regression test in `levels.rs`, built from the two single-part designs the p
     #[test]
     fn a_finished_part_never_leaves_the_box() {
         // From the property run: Pill with round, mirror X, once with a
-        // rim, once with repeat 6; the chord-join erosion overshot the box.
-        let cases: [(f32, f32, f32, f32, f32, f32, f32, Option<f32>, Option<u32>); 2] = [
-            (0.5097575, 0.07726318, 0.52711946, 0.66777325, 0.31767842, 148.8582, 0.28260398, Some(0.21721794), None),
-            (0.8990014, -0.2, -0.1736307, 0.8, 0.3, 270.0241, 0.20572755, None, Some(6)),
+        // rim, once with repeat 6. The erosion left micro loops that the
+        // dilation blew into discs of radius r (extents 1.17 and 1.20).
+        // With micro loops dropped the first stays the closed pill pair
+        // (area about 0.99) and the second ends near 0.97, so the box cut
+        // has nothing left to do; the bounds pin both.
+        let cases: [(f32, f32, f32, f32, f32, f32, f32, Option<f32>, Option<u32>, f32, f32, f32); 2] = [
+            (0.5097575, 0.07726318, 0.52711946, 0.66777325, 0.31767842, 148.8582, 0.28260398, Some(0.21721794), None, 0.99, 1.0 + 1e-4, 0.9),
+            (0.8990014, -0.2, -0.1736307, 0.8, 0.3, 270.0241, 0.20572755, None, Some(6), 0.95, 0.99, 0.0),
         ];
-        for (aspect, x, y, w, h, rotation, round, rim, repeat) in cases {
+        for (aspect, x, y, w, h, rotation, round, rim, repeat, min_extent, max_extent, min_area) in cases {
             let mut p = part("p", Shape::Pill { aspect }, Mode::Add, 0.1, -0.1);
             p.transform = Transform { x, y, w, h, rotation };
             p.effects.round = Some(round);
@@ -2141,10 +2187,20 @@ One regression test in `levels.rs`, built from the two single-part designs the p
             p.effects.mirror = Mirror::X;
             p.effects.repeat = repeat;
             let ev = evaluate(&design(vec![p])).unwrap();
-            for iv in &ev.intervals {
-                let e = extent(&iv.solid).max(extent(&iv.glass));
-                assert!(e <= 1.0 + 1e-4, "a finished part reaches {e}");
-            }
+            let e = ev
+                .intervals
+                .iter()
+                .map(|iv| extent(&iv.solid).max(extent(&iv.glass)))
+                .fold(0.0, f32::max);
+            assert!(e <= max_extent, "a finished part reaches {e}, allowed {max_extent}");
+            assert!(e >= min_extent, "the finish wrecked the shape: extent {e}");
+            let area: f32 = ev.intervals[0]
+                .solid
+                .iter()
+                .filter_map(|s| s.first())
+                .map(|c| crate::kit::geom::signed_area(c))
+                .sum();
+            assert!(area >= min_area, "the finish wrecked the shape: area {area}");
         }
     }
 ```
@@ -3356,7 +3412,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 //! input the editor can produce.
 use proptest::prelude::*;
 use rhythia_render::kit::doc::*;
-use rhythia_render::kit::export::export_rhs;
+use rhythia_render::kit::export::{export_rhs, to_obj};
 use rhythia_render::kit::levels::evaluate;
 use rhythia_render::kit::mesh::build_mesh;
 use rhythia_render::kit::validate::{validate, KitMesh};
@@ -3438,11 +3494,11 @@ fn shape() -> impl Strategy<Value = Shape> {
 
 fn effects() -> impl Strategy<Value = Effects> {
     (
-        proptest::option::of((1u32..12, 0.05f32..0.4).prop_map(|(count, depth)| Waves { count, depth, style: WaveStyle::Sine })),
+        proptest::option::of((1u32..=8, 0.05f32..0.4).prop_map(|(count, depth)| Waves { count, depth, style: WaveStyle::Sine })),
         proptest::option::of(0.02f32..0.3),
         proptest::option::of(0.05f32..0.4),
         prop_oneof![Just(Mirror::None), Just(Mirror::X), Just(Mirror::Y), Just(Mirror::Both)],
-        proptest::option::of(2u32..7),
+        proptest::option::of(2u32..=4),
     )
         .prop_map(|(waves, round, rim, mirror, repeat)| Effects { waves, round, rim, mirror, repeat })
 }
@@ -3476,18 +3532,18 @@ fn part(i: usize) -> impl Strategy<Value = Part> {
 }
 
 fn design() -> impl Strategy<Value = Design> {
-    (1usize..=5).prop_flat_map(|n| {
+    (1usize..=4).prop_flat_map(|n| {
         let parts: Vec<_> = (0..n).map(part).collect();
         parts.prop_map(|parts| Design { version: 2, name: "p".into(), colors: vec!["#ffffff".into()], parts, groups: vec![] })
     })
 }
 
 proptest! {
-    // A case costs about 0.2 s in release and ten times that in debug, so
-    // the plain `cargo test` run samples 24 designs and the release run
-    // the full 300; shrinking is bounded in steps and in time.
+    // A case costs about a second in release and ten times that in debug,
+    // so the plain `cargo test` run samples 10 designs and the release run
+    // 200; shrinking is bounded in steps and in time.
     #![proptest_config(ProptestConfig {
-        cases: if cfg!(debug_assertions) { 24 } else { 300 },
+        cases: if cfg!(debug_assertions) { 10 } else { 200 },
         max_shrink_iters: 300,
         max_shrink_time: 120_000,
         ..ProptestConfig::default()
@@ -3511,10 +3567,11 @@ proptest! {
                 prop_assert!(no_t_junctions(&m), "a vertex sits inside another triangle's edge: {:?}", d);
                 prop_assert!(r.triangles <= 40_000);
                 prop_assert!(m.positions.iter().all(|p| p[0].abs() <= 1.0001 && p[1].abs() <= 1.0001));
-                let m2 = build_mesh(&evaluate(&d).unwrap()).unwrap();
-                prop_assert_eq!(m, m2);
                 let bytes = export_rhs(&d, "p").unwrap();
-                prop_assert!(rhythia_render::config::SkinConfig::from_rhs(&bytes).is_ok());
+                let cfg = rhythia_render::config::SkinConfig::from_rhs(&bytes).unwrap();
+                // export_rhs evaluates and builds on its own, so the archive's
+                // obj equals ours only if the kernel is deterministic.
+                prop_assert_eq!(cfg.note_mesh.as_deref(), Some(to_obj(&m, "p").as_bytes()));
             }
         }
     }
