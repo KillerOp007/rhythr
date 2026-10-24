@@ -179,7 +179,11 @@ endorsed by Rhythia or Capo Games.
   Cut to carve into the others, give each part its own Depth band so
   the note gets real relief, and mark parts as Glass to draw them
   translucent like the game does. The canvas shows exactly the outline
-  the export will have. The previews (still and gameplay loop through
+  the export will have, in the design's own units: a part keeps its size
+  while you move it, and the solid square is the note box, which the
+  game scales the whole design to fill, so it follows the largest part.
+  The zoom button fits the design back into view. The previews (still
+  and gameplay loop through
   the real renderer) start hidden; the Previews button or the P key
   shows them, and the choice is remembered. Designs autosave, save as
   `.rhsd` files, and export as `.rhs` packs like the Note Designer.

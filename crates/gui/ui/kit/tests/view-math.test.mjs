@@ -47,10 +47,16 @@ test("corner_handles_follow_the_rotation", () => {
 test("scaling_is_about_the_centre_and_shift_keeps_aspect", () => {
   const r = partRect({ x: 0, y: 0, w: 1, h: 0.5, rotation: 0 }, 1);
   assert.deepEqual(scaleFrom(r, "e", [1.5, 0.1], false), { hw: 1.5, hh: 0.5 });
-  const k = scaleFrom(r, "ne", [2, 0.5], true);
+  const k = scaleFrom(r, "ne", [2, 0.5], true, Infinity);
   near(k.hw, 2);
   near(k.hh, 1);
   assert.equal(scaleFrom(r, "w", [0, 0], false).hw, 0.02, "never collapses");
+  // At the size limit the proportions still hold: the common factor is
+  // capped, not one side while the other keeps growing.
+  const capped = scaleFrom(r, "ne", [2, 0.5], true);
+  near(capped.hw, 1.5);
+  near(capped.hh, 0.75);
+  assert.deepEqual(scaleFrom(r, "e", [9, 0], false), { hw: 1.5, hh: 0.5 });
 });
 
 test("the_rotation_handle_reads_degrees_from_the_top", () => {

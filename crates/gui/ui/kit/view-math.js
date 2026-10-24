@@ -77,20 +77,24 @@ export function handleAt(r, p, tolerance) {
   return null;
 }
 
+export const MAX_HALF = 1.5;
+
 // Scaling about the centre: the pointer's local coordinate sets the half
-// extent on the dragged axis; a corner drags both.
-export function scaleFrom(r, handle, p, keepAspect) {
+// extent on the dragged axis; a corner drags both. With the proportions
+// kept, the size limit caps the common factor, so the shape stops growing
+// as a whole instead of one side stopping while the other goes on.
+export function scaleFrom(r, handle, p, keepAspect, maxHalf = MAX_HALF) {
   const [lx, ly] = toLocal(r, p);
   let hw = r.hw;
   let hh = r.hh;
   if (handle.includes("e") || handle.includes("w")) hw = Math.max(MIN_HALF, Math.abs(lx));
   if (handle.includes("n") || handle.includes("s")) hh = Math.max(MIN_HALF, Math.abs(ly));
   if (keepAspect && r.hw > 0 && r.hh > 0) {
-    const k = Math.max(hw / r.hw, hh / r.hh);
+    const k = Math.min(Math.max(hw / r.hw, hh / r.hh), maxHalf / r.hw, maxHalf / r.hh);
     hw = r.hw * k;
     hh = r.hh * k;
   }
-  return { hw, hh };
+  return { hw: Math.min(hw, maxHalf), hh: Math.min(hh, maxHalf) };
 }
 
 // The rotation handle sits above the top edge; straight up is zero.

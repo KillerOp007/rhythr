@@ -1,9 +1,14 @@
 // The front view: an orthographic Canvas 2D drawing of what the kernel
-// produced (normalised, note units), each part's own outline, and the
-// selected part's handles. The only place geometry is edited.
+// produced, each part's own outline, and the selected part's handles. The
+// only place geometry is edited. Everything here is in design units: the
+// geometry arrives converted (units.js), handles sit on the document's
+// transforms unscaled, and the note box the game scales the design into is
+// an overlay that follows the largest part. Showing the normalised result
+// instead made a moved part shrink and a hidden part's neighbour grow.
 import {
   makeView, unit, toPx, toWorld, zoomAt, partRect, rectCorners, rectContains, handleAt, scaleFrom, angleFrom, HITBOX,
 } from "./view-math.js";
+import { boxExtent } from "./units.js";
 
 const GLASS_ALPHA = 0.57;
 const HANDLE_PX = 7;
@@ -73,15 +78,18 @@ export function createView(canvas, store, hooks) {
     return hatch;
   }
 
+  // The note box in design units: the game scales the design so that this
+  // square becomes the unit box, so it grows with the largest part.
   function box() {
-    const a = toPx(view, size, [-1, 1]);
-    const b = toPx(view, size, [1, -1]);
+    const e = boxExtent(store.state.evaluated);
+    const a = toPx(view, size, [-e, e]);
+    const b = toPx(view, size, [e, -e]);
     ctx.strokeStyle = "rgba(255,255,255,0.35)";
     ctx.lineWidth = 1;
     ctx.setLineDash([]);
     ctx.strokeRect(a[0], a[1], b[0] - a[0], b[1] - a[1]);
-    const ha = toPx(view, size, [-HITBOX, HITBOX]);
-    const hb = toPx(view, size, [HITBOX, -HITBOX]);
+    const ha = toPx(view, size, [-HITBOX * e, HITBOX * e]);
+    const hb = toPx(view, size, [HITBOX * e, -HITBOX * e]);
     ctx.setLineDash([4, 4]);
     ctx.strokeStyle = "rgba(255,255,255,0.18)";
     ctx.strokeRect(ha[0], ha[1], hb[0] - ha[0], hb[1] - ha[1]);
@@ -94,7 +102,11 @@ export function createView(canvas, store, hooks) {
     box();
     const ev = s.evaluated;
     const colour = (s.design.colors && s.design.colors[0]) || "#ffffff";
-    if (ev) {
+    // The last good evaluation is kept through an error so the outlines
+    // stay under the cursor, but its fills are stale (a part hidden since
+    // would still show as solid), so an error shows outlines only.
+    const stale = Boolean(s.evalError);
+    if (ev && !stale) {
       // Outer contours run counterclockwise and holes clockwise, so the
       // nonzero rule cuts the holes without any extra bookkeeping.
       ctx.fillStyle = colour;
@@ -108,14 +120,18 @@ export function createView(canvas, store, hooks) {
       ctx.globalAlpha = GLASS_ALPHA;
       ctx.fill(glass, "nonzero");
       ctx.globalAlpha = 1;
+    }
+    if (ev) {
       for (const part of s.design.parts) {
         const geom = ev.parts.find((g) => g.id === part.id);
         if (!geom || !part.visible) continue;
         const p = path(geom.shapes);
         const sel = part.id === s.selected;
         if (part.mode === "cut") {
-          ctx.fillStyle = hatchPattern();
-          ctx.fill(p, "nonzero");
+          if (!stale) {
+            ctx.fillStyle = hatchPattern();
+            ctx.fill(p, "nonzero");
+          }
           ctx.setLineDash([5, 3]);
           ctx.strokeStyle = sel ? "rgba(255,140,110,0.95)" : "rgba(255,140,110,0.6)";
         } else {
@@ -127,12 +143,14 @@ export function createView(canvas, store, hooks) {
         ctx.setLineDash([]);
       }
     }
+    // A hidden part stays selected (the inspector is where it comes back),
+    // but shows no handles: nothing on the canvas belongs to it.
     const part = store.part();
-    if (part && ev) handles(part, ev.scale);
+    if (part && part.visible) handles(part);
   }
 
-  function handles(part, scale) {
-    const r = partRect(part.transform, scale);
+  function handles(part) {
+    const r = partRect(part.transform, 1);
     const g = rectCorners(r);
     ctx.strokeStyle = "rgba(120,200,255,0.8)";
     ctx.lineWidth = 1;
@@ -147,16 +165,20 @@ export function createView(canvas, store, hooks) {
     ctx.stroke();
     ctx.setLineDash([]);
     if (part.locked) return;
+    // White handles with a dark rim stay visible over a white fill.
     ctx.fillStyle = "#fff";
+    ctx.strokeStyle = "rgba(0,0,0,0.6)";
     for (const c of [...g.corners, ...g.edges]) {
       const [x, y] = toPx(view, size, c);
       ctx.fillRect(x - 3.5, y - 3.5, 7, 7);
+      ctx.strokeRect(x - 3.5, y - 3.5, 7, 7);
     }
     const [tx, ty] = toPx(view, size, g.top);
     const [cx, cy] = toPx(view, size, [r.cx, r.cy]);
     const len = Math.hypot(tx - cx, ty - cy) || 1;
     const rx = tx + ((tx - cx) / len) * ROTATE_PX;
     const ry = ty + ((ty - cy) / len) * ROTATE_PX;
+    ctx.strokeStyle = "rgba(120,200,255,0.8)";
     ctx.beginPath();
     ctx.moveTo(tx, ty);
     ctx.lineTo(rx, ry);
@@ -164,10 +186,12 @@ export function createView(canvas, store, hooks) {
     ctx.beginPath();
     ctx.arc(rx, ry, 5, 0, Math.PI * 2);
     ctx.fill();
+    ctx.strokeStyle = "rgba(0,0,0,0.6)";
+    ctx.stroke();
   }
 
-  function rotateHandleHit(part, scale, mx, my) {
-    const r = partRect(part.transform, scale);
+  function rotateHandleHit(part, mx, my) {
+    const r = partRect(part.transform, 1);
     const g = rectCorners(r);
     const [tx, ty] = toPx(view, size, g.top);
     const [cx, cy] = toPx(view, size, [r.cx, r.cy]);
@@ -180,11 +204,10 @@ export function createView(canvas, store, hooks) {
   function pick(wp) {
     // Top of the list draws on top, so it is picked first.
     const parts = store.state.design.parts;
-    const scale = store.state.evaluated ? store.state.evaluated.scale : 1;
     for (let i = parts.length - 1; i >= 0; i--) {
       const p = parts[i];
       if (!p.visible) continue;
-      if (rectContains(partRect(p.transform, scale), wp)) return p;
+      if (rectContains(partRect(p.transform, 1), wp)) return p;
     }
     return null;
   }
@@ -204,17 +227,16 @@ export function createView(canvas, store, hooks) {
     if (e.button !== 0) return;
     const wp = toWorld(view, size, mx, my);
     const s = store.state;
-    const scale = s.evaluated ? s.evaluated.scale : 1;
     const sel = store.part();
-    if (sel && !sel.locked && s.evaluated) {
-      const r = partRect(sel.transform, scale);
-      if (rotateHandleHit(sel, scale, mx, my)) {
-        gesture = { kind: "rotate", id: sel.id, scale };
+    if (sel && !sel.locked && sel.visible) {
+      const r = partRect(sel.transform, 1);
+      if (rotateHandleHit(sel, mx, my)) {
+        gesture = { kind: "rotate", id: sel.id };
         return;
       }
       const h = handleAt(r, wp, HANDLE_PX / unit(view, size));
       if (h) {
-        gesture = { kind: "scale", id: sel.id, handle: h, r, scale };
+        gesture = { kind: "scale", id: sel.id, handle: h, r };
         return;
       }
     }
@@ -225,7 +247,7 @@ export function createView(canvas, store, hooks) {
     }
     if (hit.id !== s.selected) store.select(hit.id);
     if (!hit.locked) {
-      gesture = { kind: "move", id: hit.id, wp, x: hit.transform.x, y: hit.transform.y, scale };
+      gesture = { kind: "move", id: hit.id, wp, x: hit.transform.x, y: hit.transform.y };
     }
   });
 
@@ -246,14 +268,12 @@ export function createView(canvas, store, hooks) {
       return;
     }
     const wp = toWorld(view, size, mx, my);
-    // The normalisation factor is read once at pointerdown, so the document
-    // delta of a drag stays stable while re-evaluation changes the factor.
-    // The drawn part may still rescale about the origin meanwhile.
-    // Labels carry the part id: undo coalescing merges by label, and a
-    // gesture on one part must never merge into a gesture on another.
+    // Design units throughout: a world delta is a document delta. Labels
+    // carry the part id: undo coalescing merges by label, and a gesture on
+    // one part must never merge into a gesture on another.
     if (gesture.kind === "move") {
-      const dx = (wp[0] - gesture.wp[0]) / gesture.scale;
-      const dy = (wp[1] - gesture.wp[1]) / gesture.scale;
+      const dx = wp[0] - gesture.wp[0];
+      const dy = wp[1] - gesture.wp[1];
       store.updatePart(gesture.id, `move:${gesture.id}`, (p) => {
         p.transform.x = clamp(gesture.x + dx, -1.5, 1.5);
         p.transform.y = clamp(gesture.y + dy, -1.5, 1.5);
@@ -263,11 +283,11 @@ export function createView(canvas, store, hooks) {
       const keep = e.shiftKey && gesture.handle.length === 2;
       const { hw, hh } = scaleFrom(gesture.r, gesture.handle, wp, keep);
       store.updatePart(gesture.id, `scale:${gesture.id}`, (p) => {
-        p.transform.w = clamp(hw / gesture.scale, 0.02, 1.5);
-        p.transform.h = clamp(hh / gesture.scale, 0.02, 1.5);
+        p.transform.w = clamp(hw, 0.02, 1.5);
+        p.transform.h = clamp(hh, 0.02, 1.5);
       });
     } else if (gesture.kind === "rotate") {
-      const r = partRect(part.transform, gesture.scale);
+      const r = partRect(part.transform, 1);
       let a = angleFrom(r, wp);
       if (e.shiftKey) a = Math.round(a / 15) * 15;
       a = ((((a + 180) % 360) + 360) % 360) - 180;
@@ -324,11 +344,14 @@ export function createView(canvas, store, hooks) {
     spaceDown = false;
   });
 
+  // Fits the note box: the design is shown at the size the game gives it,
+  // so a design that grew past the canvas comes back into view and the
+  // default design reads 100%.
   function resetView() {
-    view.z = 1;
+    view.z = clamp(1 / boxExtent(store.state.evaluated), 0.4, 12);
     view.cx = 0;
     view.cy = 0;
-    hooks.onZoom(100);
+    hooks.onZoom(Math.round(view.z * 100));
     draw();
   }
 
