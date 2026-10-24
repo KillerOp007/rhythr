@@ -70,10 +70,10 @@ mod tests {
 
     #[test]
     fn missing_optional_fields_take_defaults() {
-        let json = r#"{"version":2,"name":"x","colors":["#ffffff"],
+        let json = r##"{"version":2,"name":"x","colors":["#ffffff"],
           "parts":[{"id":"a","name":"a","shape":{"kind":"circle"},
           "transform":{"x":0,"y":0,"w":1,"h":1,"rotation":0},
-          "mode":"add","depth":{"front":0.1,"back":-0.1}}]}"#;
+          "mode":"add","depth":{"front":0.1,"back":-0.1}}]}"##;
         let d: Design = serde_json::from_str(json).unwrap();
         let p = &d.parts[0];
         assert!(p.visible);
@@ -380,9 +380,9 @@ mod tests {
     use super::*;
     use crate::kit::doc::*;
 
-    const SLIDERS: &str = r#"{"P":{"shape":"ngon","n":6,"round":0.3,"hollow":true,
+    const SLIDERS: &str = r##"{"P":{"shape":"ngon","n":6,"round":0.3,"hollow":true,
       "thick":0.22,"depth":0.05,"waves":5,"waveDepth":0.25,"waveform":"spike","twist":30},
-      "free":null,"symmetry":4,"mirror":false,"colors":["#ff5d6c","#2fd6d0"],"imported":null}"#;
+      "free":null,"symmetry":4,"mirror":false,"colors":["#ff5d6c","#2fd6d0"],"imported":null}"##;
 
     #[test]
     fn sliders_become_one_polygon_part_with_effects() {
@@ -400,10 +400,10 @@ mod tests {
 
     #[test]
     fn freeform_keeps_symmetry_and_mirror_as_effects() {
-        let json = r#"{"P":{"shape":"circle","n":6,"round":0.3,"hollow":false,"thick":0.22,
+        let json = r##"{"P":{"shape":"circle","n":6,"round":0.3,"hollow":false,"thick":0.22,
           "depth":0.05,"waves":0,"waveDepth":0.25,"waveform":"sine","twist":0},
           "free":[{"x":1,"y":0,"smooth":false},{"x":0.5,"y":0.5,"smooth":true}],
-          "symmetry":5,"mirror":true,"colors":["#ffffff"],"imported":null}"#;
+          "symmetry":5,"mirror":true,"colors":["#ffffff"],"imported":null}"##;
         let d = from_v1(json).unwrap();
         let p = &d.parts[0];
         match &p.shape {
@@ -417,10 +417,10 @@ mod tests {
 
     #[test]
     fn imports_win_and_become_contours() {
-        let json = r#"{"P":{"shape":"circle","n":6,"round":0.3,"hollow":true,"thick":0.2,
+        let json = r##"{"P":{"shape":"circle","n":6,"round":0.3,"hollow":true,"thick":0.2,
           "depth":0.05,"waves":0,"waveDepth":0.25,"waveform":"sine","twist":0},
           "free":[{"x":1,"y":0,"smooth":true}],"symmetry":4,"mirror":false,
-          "colors":["#ffffff"],"imported":[[[-1,-1],[1,-1],[1,1],[-1,1]]]}"#;
+          "colors":["#ffffff"],"imported":[[[-1,-1],[1,-1],[1,1],[-1,1]]]}"##;
         let d = from_v1(json).unwrap();
         match &d.parts[0].shape {
             Shape::Contours { contours, .. } => assert_eq!(contours.len(), 1),
