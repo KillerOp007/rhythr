@@ -311,6 +311,23 @@ fn main() {
         render_png(&dir, "probe6_alpha_d", &obj);
         let _ = writeln!(summary, "probe6_alpha_d: material Glass, d 0.35");
     }
+    // 7. Alpha, done right: the translucent part sits in the ring's HOLE,
+    // over the black background, where any alpha below one must show as a
+    // darker colour. (Probes 5 and 6 put it over an opaque disc of the same
+    // colour, which no alpha can ever make visible.)
+    for (name, material, d) in [
+        ("probe7a_alpha_hole_d", "Glass", 0.35f32),
+        ("probe7b_alpha_hole_name", "Transparent", 1.0f32),
+    ] {
+        let parts = [
+            part("ring", "Material.001", &ring, -0.1, 0.1, 1.0, false),
+            part("inlay", material, &plate, -0.1, 0.1, 0.5, false),
+        ];
+        let obj = obj_text(&parts, true);
+        write_rhs(&dir, name, &obj, &mtl_text(&[("Material.001", 1.0), (material, d)]));
+        render_png(&dir, name, &obj);
+        let _ = writeln!(summary, "{name}: inlay in hole, material {material}, d {d}");
+    }
     print!("{summary}");
     println!("wrote probes to {}", dir.display());
 }
