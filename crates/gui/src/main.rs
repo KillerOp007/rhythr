@@ -18,6 +18,12 @@ use tauri::{Emitter, Manager};
 mod kit_commands;
 mod live;
 
+/// The frontend copy step of `build.rs`, compiled here too so its tests run
+/// with the crate's (build scripts are not test targets).
+#[cfg(test)]
+#[path = "../build_support.rs"]
+mod build_support;
+
 use rhythia_formats::{map::Map, rhr::Replay};
 use rhythia_render::{scene::SceneParams, SkinConfig};
 use rhythia_sim::integrity;
