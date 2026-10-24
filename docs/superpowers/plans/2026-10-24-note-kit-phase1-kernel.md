@@ -1035,12 +1035,12 @@ mod tests {
             .filter(|p| (p[1].abs() - aspect).abs() < 1e-4 && p[0].abs() < 1.0 - aspect - 1e-3)
             .count();
         assert!(on_side >= 40, "only {on_side} points on the flat sides");
-        assert!((extent(&vec![cs[0].clone()]) - 1.0).abs() < 1e-3);
+        assert!((extent(&cs[0]) - 1.0).abs() < 1e-3);
     }
 }
 ```
 
-(`extent` is `crate::kit::geom::extent`; import it in the test module.)
+(`extent` here is the test module's own contour helper defined at its top.)
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
@@ -1090,7 +1090,7 @@ fn ngon_radius(sides: u32, rounding: f32, th: f32, offset: f32) -> f32 {
 /// the rounding blend and the later wave phase untouched.
 fn fit_half_extent(mut c: Contour) -> Contour {
     let m = c.iter().flatten().fold(0.0f32, |m, v| m.max(v.abs()));
-    if !(m > 0.0) || !m.is_finite() {
+    if !(m.is_finite() && m > 0.0) {
         return c;
     }
     for p in &mut c {
