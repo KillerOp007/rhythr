@@ -6,6 +6,7 @@
 
 pub mod doc;
 pub mod geom;
+pub mod levels;
 pub mod migrate;
 pub mod resolve;
 pub mod shapes;
