@@ -194,7 +194,9 @@ fn yes() -> bool {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Shape {
     Circle,
-    Square,
+    /// A square with a side flat at the bottom; rounding blends toward
+    /// the circle exactly as Polygon does.
+    Square { rounding: f32 },
     Polygon { sides: u32, rounding: f32 },
     Star { points: u32, inner: f32 },
     Ring { thickness: f32 },
@@ -401,12 +403,13 @@ mod tests {
     }
 
     #[test]
-    fn a_v1_square_keeps_its_rounding_as_a_turned_four_gon() {
+    fn a_v1_square_keeps_its_rounding() {
         let json = SLIDERS.replace(r#""shape":"ngon""#, r#""shape":"square""#).replace(r#""twist":30"#, r#""twist":0"#);
         let d = from_v1(&json).unwrap();
         let p = &d.parts[0];
-        assert_eq!(p.shape, Shape::Polygon { sides: 4, rounding: 0.3 });
-        assert_eq!(p.transform.rotation, -45.0);
+        assert_eq!(p.shape, Shape::Square { rounding: 0.3 });
+        assert_eq!(p.transform.rotation, 0.0);
+        assert!(!p.transform.rotation.is_sign_negative(), "a zero twist must not serialise as -0.0");
     }
 
     #[test]
@@ -534,19 +537,18 @@ pub fn from_v1(json: &str) -> Result<Design, KitError> {
                 },
             });
         }
-        // v1 applied the rounding slider to squares as well, and drew the
-        // square as a 4-gon turned 45 degrees; the kit's sharp `Square`
-        // would lose that rounding.
-        let kind = s("shape", "circle");
-        let shape = match kind.as_str() {
-            "square" => Shape::Polygon { sides: 4, rounding: f("round", 0.3) },
+        // v1 applied the rounding slider to squares as well; the kit's
+        // Square carries rounding and its own 45 degree turn, so waves keep
+        // the phase v1 gave them (they were evaluated before the turn).
+        let shape = match s("shape", "circle").as_str() {
+            "square" => Shape::Square { rounding: f("round", 0.3) },
             "ngon" => Shape::Polygon { sides: f("n", 6.0) as u32, rounding: f("round", 0.3) },
             _ => Shape::Circle,
         };
-        // v1 sampled its radius at (angle + offset + twist), which turns
-        // the shape by MINUS that angle; the kit rotates counterclockwise.
-        let offset_deg = if kind == "square" { 45.0 } else { 0.0 };
-        (shape, "Shape", -(offset_deg + f("twist", 0.0)))
+        // v1 sampled its radius at (angle + twist), which turns the shape
+        // by MINUS twist; the kit rotates counterclockwise. Written as a
+        // subtraction so a zero twist serialises as 0.0, not -0.0.
+        (shape, "Shape", 0.0 - f("twist", 0.0))
     };
     let depth = f("depth", 0.05).clamp(0.005, 0.5);
     Ok(Design {
@@ -842,7 +844,7 @@ mod tests {
     fn generated_shapes_are_dense_unit_and_ccw() {
         for shape in [
             Shape::Circle,
-            Shape::Square,
+            Shape::Square { rounding: 0.0 },
             Shape::Polygon { sides: 6, rounding: 0.3 },
             Shape::Star { points: 5, inner: 0.45 },
             Shape::Pill { aspect: 0.5 },
@@ -939,7 +941,9 @@ fn ngon_radius(sides: u32, rounding: f32, th: f32, offset: f32) -> f32 {
 pub fn base_contours(shape: &Shape) -> Vec<Contour> {
     match shape {
         Shape::Circle => vec![polar(SAMPLES, |_| 1.0)],
-        Shape::Square => vec![polar(SAMPLES, |th| ngon_radius(4, 0.0, th, PI / 4.0))],
+        Shape::Square { rounding } => {
+            vec![polar(SAMPLES, |th| ngon_radius(4, *rounding, th, PI / 4.0))]
+        }
         Shape::Polygon { sides, rounding } => {
             // Vertex at angle zero, as the v1 editor drew its polygons;
             // only the square is turned so a side sits flat.
@@ -1058,7 +1062,7 @@ mod tests {
 
     #[test]
     fn transform_scales_rotates_and_moves() {
-        let mut p = part(Shape::Square);
+        let mut p = part(Shape::Square { rounding: 0.0 });
         p.transform = Transform { x: 0.5, y: 0.0, w: 0.5, h: 0.25, rotation: 0.0 };
         let r = resolve_part(&p).unwrap();
         let xs: Vec<f32> = r.shapes[0][0].iter().map(|q| q[0]).collect();
@@ -1075,12 +1079,12 @@ mod tests {
 
     #[test]
     fn rim_makes_a_hole_and_round_softens_corners() {
-        let mut p = part(Shape::Square);
+        let mut p = part(Shape::Square { rounding: 0.0 });
         p.effects.rim = Some(0.3);
         let r = resolve_part(&p).unwrap();
         assert_eq!(r.shapes[0].len(), 2, "outer plus hole");
         assert!(signed_area(&r.shapes[0][1]) < 0.0);
-        let mut q = part(Shape::Square);
+        let mut q = part(Shape::Square { rounding: 0.0 });
         q.effects.round = Some(0.3);
         let r = resolve_part(&q).unwrap();
         // The corner at (1,1) is gone: no point further than 1.3 from the
@@ -1354,11 +1358,11 @@ mod tests {
     #[test]
     fn cuts_remove_and_glass_yields_to_solid() {
         let disc = part("d", Shape::Circle, Mode::Add, 0.1, -0.1);
-        let mut bar = part("b", Shape::Square, Mode::Cut, 0.1, -0.1);
+        let mut bar = part("b", Shape::Square { rounding: 0.0 }, Mode::Cut, 0.1, -0.1);
         bar.transform = Transform { w: 1.2, h: 0.2, ..Transform::default() };
         let ev = evaluate(&design(vec![disc.clone(), bar])).unwrap();
         assert_eq!(ev.intervals[0].solid.len(), 2, "the bar splits the disc in two");
-        let mut glass = part("g", Shape::Square, Mode::Add, 0.1, -0.1);
+        let mut glass = part("g", Shape::Square { rounding: 0.0 }, Mode::Add, 0.1, -0.1);
         glass.material = Material::Glass;
         glass.transform = Transform { w: 0.5, h: 0.5, ..Transform::default() };
         let ev = evaluate(&design(vec![disc, glass])).unwrap();
@@ -1370,7 +1374,7 @@ mod tests {
         let base = part("base", Shape::Circle, Mode::Add, 0.1, -0.1);
         let mut small = part("small", Shape::Circle, Mode::Add, 0.1, -0.1);
         small.transform = Transform { x: 0.5, w: 0.4, h: 0.4, ..Transform::default() };
-        let mut cut = part("cut", Shape::Square, Mode::Cut, 0.1, -0.1);
+        let mut cut = part("cut", Shape::Square { rounding: 0.0 }, Mode::Cut, 0.1, -0.1);
         cut.transform = Transform { x: 0.5, w: 0.2, h: 0.2, ..Transform::default() };
         let mut d = design(vec![base, small, cut]);
         d.groups = vec![Group { id: "g".into(), name: "g".into(), parts: vec!["small".into(), "cut".into()], mode: Mode::Add }];
@@ -1398,7 +1402,7 @@ mod tests {
         let only_cut = part("c", Shape::Circle, Mode::Cut, 0.1, -0.1);
         assert_eq!(evaluate(&design(vec![only_cut])).unwrap_err(), KitError::Empty);
         let disc = part("d", Shape::Circle, Mode::Add, 0.1, -0.1);
-        let mut eraser = part("e", Shape::Square, Mode::Cut, 0.1, -0.1);
+        let mut eraser = part("e", Shape::Square { rounding: 0.0 }, Mode::Cut, 0.1, -0.1);
         eraser.transform = Transform { w: 2.0, h: 2.0, ..Transform::default() };
         assert_eq!(evaluate(&design(vec![disc, eraser])).unwrap_err(), KitError::Empty);
     }
@@ -1920,7 +1924,7 @@ mod tests {
         // bar's boundary crosses the disc's region boundary at a level
         // that is not the disc's, which is where T-junctions would arise.
         let disc = part("d", Shape::Circle, Mode::Add, 0.1, -0.3);
-        let mut bar = part("b", Shape::Square, Mode::Cut, 0.1, -0.1);
+        let mut bar = part("b", Shape::Square { rounding: 0.0 }, Mode::Cut, 0.1, -0.1);
         bar.transform = Transform { w: 1.5, h: 0.15, rotation: 20.0, ..Transform::default() };
         let m = mesh_of(vec![disc, bar]);
         validate(&m).unwrap();
@@ -2589,7 +2593,7 @@ use rhythia_render::kit::KitError;
 fn shape() -> impl Strategy<Value = Shape> {
     prop_oneof![
         Just(Shape::Circle),
-        Just(Shape::Square),
+        (0.0f32..1.0).prop_map(|rounding| Shape::Square { rounding }),
         (3u32..10, 0.0f32..1.0).prop_map(|(sides, rounding)| Shape::Polygon { sides, rounding }),
         (3u32..9, 0.2f32..0.9).prop_map(|(points, inner)| Shape::Star { points, inner }),
         (0.1f32..0.8).prop_map(|thickness| Shape::Ring { thickness }),
