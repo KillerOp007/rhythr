@@ -4781,6 +4781,8 @@ async fn open_kit_window(app_handle: tauri::AppHandle) -> Result<(), String> {
         .title("rhythr · Note Kit")
         .inner_size(1380.0, 860.0)
         .min_inner_size(1000.0, 660.0)
+        // The kit window takes no file drops, and HTML5 drag reorder needs the native handler off on Windows.
+        .disable_drag_drop_handler()
         .build();
     if let Ok(w) = &built {
         // The prepared kit skin holds GPU textures; the window going away
