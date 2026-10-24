@@ -315,9 +315,14 @@ fn main() {
     // over the black background, where any alpha below one must show as a
     // darker colour. (Probes 5 and 6 put it over an opaque disc of the same
     // colour, which no alpha can ever make visible.)
+    // 7c/7d separate "the d value is honoured" from "any second material
+    // is translucent": the same neutral name at d 1.0 must be opaque and
+    // at d 0.7 lighter than at 0.35.
     for (name, material, d) in [
         ("probe7a_alpha_hole_d", "Glass", 0.35f32),
         ("probe7b_alpha_hole_name", "Transparent", 1.0f32),
+        ("probe7c_alpha_hole_d1", "Glass", 1.0f32),
+        ("probe7d_alpha_hole_d07", "Glass", 0.7f32),
     ] {
         let parts = [
             part("ring", "Material.001", &ring, -0.1, 0.1, 1.0, false),
