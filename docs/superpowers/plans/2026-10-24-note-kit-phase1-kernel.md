@@ -2222,7 +2222,7 @@ Expected: compile error, `KitMesh` not found.
 //! lets it double as the oracle for the property tests.
 
 use crate::kit::{KitError, MAX_TRIANGLES, Z_MAX, Z_MIN};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::ops::Range;
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -2241,6 +2241,11 @@ pub struct Report {
 }
 
 const BOX_EPS: f32 = 1e-4;
+/// Twice the smallest area a real triangle can have here: two lattice
+/// steps (1/65536 each) span about 2.3e-10, a lattice step times the
+/// smallest level gap (1e-5) about 1.5e-10. Anything below is a fold of
+/// coincident positions, not a face.
+const MIN_AREA2: f32 = 1e-11;
 
 fn invalid(msg: impl Into<String>) -> KitError {
     KitError::Invalid(msg.into())
@@ -2253,7 +2258,8 @@ fn check_range(mesh: &KitMesh, range: &Range<usize>, label: &str) -> Result<(), 
     if range.is_empty() {
         return Ok(());
     }
-    let mut directed: HashMap<(u32, u32), u32> = HashMap::new();
+    // Ordered so the edge named in an error is the same on every run.
+    let mut directed: BTreeMap<(u32, u32), u32> = BTreeMap::new();
     for t in mesh.indices[range.clone()].chunks_exact(3) {
         let (a, b, c) = (t[0], t[1], t[2]);
         if a == b || b == c || a == c {
@@ -2264,7 +2270,7 @@ fn check_range(mesh: &KitMesh, range: &Range<usize>, label: &str) -> Result<(), 
         let v = [pc[0] - pa[0], pc[1] - pa[1], pc[2] - pa[2]];
         let cross = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
         let area2 = (cross[0] * cross[0] + cross[1] * cross[1] + cross[2] * cross[2]).sqrt();
-        if area2 < 1e-9 {
+        if area2 < MIN_AREA2 {
             return Err(invalid(format!("{label}: degenerate triangle {t:?} (zero area)")));
         }
         for (x, y) in [(a, b), (b, c), (c, a)] {
