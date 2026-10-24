@@ -8,22 +8,22 @@ Full license texts are distributed with each crate's source and can be
 read at the repository listed beside it, or fetched with `cargo vendor`
 against this project's Cargo.lock.
 
-593 crates, by license:
-    281  MIT OR Apache-2.0
-    123  MIT
-     58  Apache-2.0 OR MIT
-     22  MIT/Apache-2.0
+634 crates, by license:
+    299  MIT OR Apache-2.0
+    133  MIT
+     64  Apache-2.0 OR MIT
+     26  MIT/Apache-2.0
      20  Zlib OR Apache-2.0 OR MIT
      18  Unicode-3.0
-      8  Apache-2.0
+      9  Apache-2.0
       6  MIT OR Apache-2.0 OR Zlib
       6  Unlicense OR MIT
       5  Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
       5  Apache-2.0/MIT
       5  MPL-2.0
+      4  BSD-3-Clause
       4  ISC
       3  Apache-2.0 OR ISC OR MIT
-      3  BSD-3-Clause
       3  CDLA-Permissive-2.0
       3  Zlib
       2  BSD-2-Clause OR Apache-2.0 OR MIT
@@ -37,6 +37,7 @@ against this project's Cargo.lock.
       1  Apache-2.0 AND ISC
       1  Apache-2.0 AND MIT
       1  Apache-2.0 WITH LLVM-exception
+      1  BSD-2-Clause
       1  BSD-3-Clause AND MIT
       1  BSD-3-Clause/MIT
       1  CC0-1.0 OR MIT-0 OR Apache-2.0
@@ -95,6 +96,10 @@ anyhow 1.0.103
 arbitrary 1.4.2
     license: MIT OR Apache-2.0
     source:  https://github.com/rust-fuzz/arbitrary/
+
+arrayref 0.3.9
+    license: BSD-2-Clause
+    source:  https://github.com/droundy/arrayref
 
 arrayvec 0.7.8
     license: MIT OR Apache-2.0
@@ -172,9 +177,17 @@ bit-set 0.10.0
     license: Apache-2.0 OR MIT
     source:  https://github.com/contain-rs/bit-set
 
+bit-set 0.11.1
+    license: Apache-2.0 OR MIT
+    source:  https://github.com/contain-rs/bit-vec
+
 bit-set 0.8.0
     license: Apache-2.0 OR MIT
     source:  https://github.com/contain-rs/bit-set
+
+bit-vec 0.10.1
+    license: Apache-2.0 OR MIT
+    source:  https://github.com/contain-rs/bit-vec
 
 bit-vec 0.8.0
     license: Apache-2.0 OR MIT
@@ -203,6 +216,14 @@ block2 0.6.2
 blocking 1.6.2
     license: Apache-2.0 OR MIT
     source:  https://github.com/smol-rs/blocking
+
+borsh 1.8.1
+    license: MIT OR Apache-2.0
+    source:  https://github.com/near/borsh-rs
+
+borsh-derive 1.8.1
+    license: Apache-2.0
+    source:  https://github.com/near/borsh-rs
 
 brotli 8.0.4
     license: BSD-3-Clause AND MIT
@@ -288,6 +309,10 @@ cfg_aliases 0.2.1
     license: MIT
     source:  https://github.com/katharostech/cfg_aliases
 
+chacha20 0.10.2
+    license: MIT OR Apache-2.0
+    source:  https://github.com/RustCrypto/stream-ciphers
+
 chrono 0.4.45
     license: MIT OR Apache-2.0
     source:  https://github.com/chronotope/chrono
@@ -344,7 +369,15 @@ core-graphics-types 0.2.0
     license: MIT OR Apache-2.0
     source:  https://github.com/servo/core-foundation-rs
 
+core_detect 1.0.0
+    license: MIT/Apache-2.0
+    source:  https://github.com/thomcc/core_detect
+
 cpufeatures 0.2.17
+    license: MIT OR Apache-2.0
+    source:  https://github.com/RustCrypto/utils
+
+cpufeatures 0.3.1
     license: MIT OR Apache-2.0
     source:  https://github.com/RustCrypto/utils
 
@@ -395,6 +428,10 @@ darling_core 0.23.0
 darling_macro 0.23.0
     license: MIT
     source:  https://github.com/TedDriggs/darling
+
+data-url 0.3.2
+    license: MIT OR Apache-2.0
+    source:  https://github.com/servo/rust-url
 
 dbus 0.9.12
     license: Apache-2.0/MIT
@@ -516,6 +553,10 @@ errno 0.3.14
     license: MIT OR Apache-2.0
     source:  https://github.com/lambda-fairy/rust-errno
 
+euclid 0.22.14
+    license: MIT OR Apache-2.0
+    source:  https://github.com/servo/euclid
+
 event-listener 5.4.1
     license: Apache-2.0 OR MIT
     source:  https://github.com/smol-rs/event-listener
@@ -548,6 +589,10 @@ flate2 1.1.9
     license: MIT OR Apache-2.0
     source:  https://github.com/rust-lang/flate2-rs
 
+float-cmp 0.9.0
+    license: MIT
+    source:  https://github.com/mikedilger/float-cmp
+
 fnv 1.0.7
     license: Apache-2.0 / MIT
     source:  https://github.com/servo/rust-fnv
@@ -559,6 +604,14 @@ foldhash 0.1.5
 foldhash 0.2.0
     license: Zlib
     source:  https://github.com/orlp/foldhash
+
+fontconfig-parser 0.5.8
+    license: MIT
+    source:  https://github.com/Riey/fontconfig-parser
+
+fontdb 0.24.0
+    license: MIT
+    source:  https://github.com/RazrFalcon/fontdb
 
 fontdue 0.9.3
     license: MIT OR Apache-2.0 OR Zlib
@@ -788,6 +841,30 @@ hyper-util 0.1.20
     license: MIT
     source:  https://github.com/hyperium/hyper-util
 
+i_float 4.1.0
+    license: MIT
+    source:  https://github.com/iShape-Rust/iFloat
+
+i_key_sort 0.11.0
+    license: MIT
+    source:  https://github.com/iShape-Rust/iKeySort
+
+i_overlay 8.1.0
+    license: MIT OR Apache-2.0
+    source:  https://github.com/iShape-Rust/iOverlay
+
+i_shape 4.0.0
+    license: MIT
+    source:  https://github.com/iShape-Rust/i_shape
+
+i_tree 0.19.0
+    license: MIT
+    source:  https://github.com/iShape-Rust/iTree
+
+i_triangle 0.47.0
+    license: MIT OR Apache-2.0
+    source:  https://github.com/iShape-Rust/iTriangle
+
 iana-time-zone 0.1.65
     license: MIT OR Apache-2.0
     source:  https://github.com/strawlab/iana-time-zone
@@ -847,6 +924,10 @@ image 0.25.10
 image-webp 0.2.4
     license: MIT OR Apache-2.0
     source:  https://github.com/image-rs/image-webp
+
+imagesize 0.15.0
+    license: MIT
+    source:  https://github.com/Roughsketch/imagesize
 
 indexmap 1.9.3
     license: Apache-2.0 OR MIT
@@ -936,6 +1017,10 @@ khronos_api 3.1.0
     license: Apache-2.0
     source:  https://github.com/brendanzab/gl-rs/
 
+kurbo 0.13.1
+    license: Apache-2.0 OR MIT
+    source:  https://github.com/linebender/kurbo
+
 libappindicator 0.9.0
     license: Apache-2.0 OR MIT
 
@@ -993,6 +1078,10 @@ markup5ever 0.38.0
 memchr 2.8.3
     license: Unlicense OR MIT
     source:  https://github.com/BurntSushi/memchr
+
+memmap2 0.9.11
+    license: MIT OR Apache-2.0
+    source:  https://github.com/RazrFalcon/memmap2-rs
 
 memoffset 0.9.1
     license: MIT
@@ -1210,6 +1299,10 @@ phf_shared 0.13.1
     license: MIT
     source:  https://github.com/rust-phf/rust-phf
 
+pico-args 0.5.0
+    license: MIT
+    source:  https://github.com/RazrFalcon/pico-args
+
 pin-project-lite 0.2.17
     license: Apache-2.0 OR MIT
     source:  https://github.com/taiki-e/pin-project-lite
@@ -1241,6 +1334,10 @@ polling 3.11.0
 pollster 0.4.0
     license: Apache-2.0/MIT
     source:  https://github.com/zesterer/pollster
+
+polycool 0.4.0
+    license: MIT OR Apache-2.0
+    source:  https://github.com/linebender/kurbo
 
 portable-atomic 1.13.1
     license: Apache-2.0 OR MIT
@@ -1294,9 +1391,17 @@ profiling 1.0.18
     license: MIT OR Apache-2.0
     source:  https://github.com/aclysma/profiling
 
+proptest 1.12.0
+    license: MIT OR Apache-2.0
+    source:  https://github.com/proptest-rs/proptest
+
 pxfm 0.1.30
     license: BSD-3-Clause OR Apache-2.0
     source:  https://github.com/awxkee/pxfm
+
+quick-error 1.2.3
+    license: MIT/Apache-2.0
+    source:  http://github.com/tailhook/quick-error
 
 quick-error 2.0.1
     license: MIT/Apache-2.0
@@ -1317,6 +1422,18 @@ r-efi 5.3.0
 r-efi 6.0.0
     license: MIT OR Apache-2.0 OR LGPL-2.1-or-later
     source:  https://github.com/r-efi/r-efi
+
+rand 0.10.3
+    license: MIT OR Apache-2.0
+    source:  https://github.com/rust-random/rand
+
+rand_core 0.10.1
+    license: MIT OR Apache-2.0
+    source:  https://github.com/rust-random/rand_core
+
+rand_xorshift 0.5.0
+    license: MIT OR Apache-2.0
+    source:  https://github.com/rust-random/rngs
 
 range-alloc 0.1.5
     license: MIT OR Apache-2.0
@@ -1374,6 +1491,14 @@ ring 0.17.14
     license: Apache-2.0 AND ISC
     source:  https://github.com/briansmith/ring
 
+roxmltree 0.20.0
+    license: MIT OR Apache-2.0
+    source:  https://github.com/RazrFalcon/roxmltree
+
+roxmltree 0.21.1
+    license: MIT OR Apache-2.0
+    source:  https://github.com/RazrFalcon/roxmltree
+
 rustc-hash 1.1.0
     license: Apache-2.0/MIT
     source:  https://github.com/rust-lang-nursery/rustc-hash
@@ -1417,6 +1542,10 @@ rustls-webpki 0.103.13
 rustversion 1.0.23
     license: MIT OR Apache-2.0
     source:  https://github.com/dtolnay/rustversion
+
+rusty-fork 0.3.1
+    license: MIT/Apache-2.0
+    source:  https://github.com/altsysrq/rusty-fork
 
 same-file 1.0.6
     license: Unlicense/MIT
@@ -1542,6 +1671,10 @@ simdutf8 0.1.5
     license: MIT OR Apache-2.0
     source:  https://github.com/rusticstuff/simdutf8
 
+simplecss 0.2.2
+    license: Apache-2.0 OR MIT
+    source:  https://github.com/linebender/simplecss
+
 siphasher 1.0.3
     license: MIT/Apache-2.0
     source:  https://github.com/jedisct1/rust-siphash
@@ -1586,6 +1719,10 @@ static_assertions 1.1.0
     license: MIT OR Apache-2.0
     source:  https://github.com/nvzqz/static-assertions-rs
 
+strict-num 0.1.1
+    license: MIT
+    source:  https://github.com/RazrFalcon/strict-num
+
 string_cache 0.9.0
     license: MIT OR Apache-2.0
     source:  https://github.com/servo/string-cache
@@ -1602,6 +1739,10 @@ subtle 2.6.1
     license: BSD-3-Clause
     source:  https://github.com/dalek-cryptography/subtle
 
+svgtypes 0.16.1
+    license: Apache-2.0 OR MIT
+    source:  https://github.com/linebender/svgtypes
+
 swift-rs 1.0.7
     license: MIT OR Apache-2.0
     source:  https://github.com/Brendonovich/swift-rs
@@ -1611,6 +1752,10 @@ syn 1.0.109
     source:  https://github.com/dtolnay/syn
 
 syn 2.0.118
+    license: MIT OR Apache-2.0
+    source:  https://github.com/dtolnay/syn
+
+syn 3.0.9
     license: MIT OR Apache-2.0
     source:  https://github.com/dtolnay/syn
 
@@ -1742,6 +1887,10 @@ time-macros 0.2.31
     license: MIT OR Apache-2.0
     source:  https://github.com/time-rs/time
 
+tiny-skia-path 0.12.0
+    license: BSD-3-Clause
+    source:  https://github.com/linebender/tiny-skia/tree/master/path
+
 tinystr 0.8.3
     license: Unicode-3.0
     source:  https://github.com/unicode-org/icu4x
@@ -1850,6 +1999,10 @@ ttf-parser 0.21.1
     license: MIT OR Apache-2.0
     source:  https://github.com/RazrFalcon/ttf-parser
 
+ttf-parser 0.25.1
+    license: MIT OR Apache-2.0
+    source:  https://github.com/harfbuzz/ttf-parser
+
 typeid 1.0.3
     license: MIT OR Apache-2.0
     source:  https://github.com/dtolnay/typeid
@@ -1861,6 +2014,10 @@ typenum 1.20.1
 uds_windows 1.2.1
     license: MIT
     source:  https://github.com/haraldh/rust_uds_windows
+
+unarray 0.1.4
+    license: MIT OR Apache-2.0
+    source:  https://github.com/cameron1024/unarray
 
 unic-char-property 0.9.0
     license: MIT/Apache-2.0
@@ -1910,6 +2067,10 @@ urlpattern 0.3.0
     license: MIT
     source:  https://github.com/denoland/rust-urlpattern
 
+usvg 0.48.1
+    license: Apache-2.0 OR MIT
+    source:  https://github.com/linebender/resvg
+
 utf8_iter 1.0.4
     license: Apache-2.0 OR MIT
     source:  https://github.com/hsivonen/utf8_iter
@@ -1937,6 +2098,10 @@ vswhom 0.1.0
 vswhom-sys 0.1.3
     license: MIT
     source:  https://github.com/nabijaczleweli/vswhom-sys.rs
+
+wait-timeout 0.2.1
+    license: MIT/Apache-2.0
+    source:  https://github.com/alexcrichton/wait-timeout
 
 walkdir 2.5.0
     license: Unlicense/MIT
