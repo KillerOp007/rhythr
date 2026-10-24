@@ -61,3 +61,28 @@ test("previews_on_render_the_still_after_the_delay_and_frames_on_tick", async ()
   assert.equal(h.calls.length, 3, "on resumes with the current design");
   assert.ok(STILL_DELAY_MS > 0);
 });
+
+// The de-duplication of repeated messages lives in mountPreviews; the
+// scheduler must report every failing call and must not hand out an image.
+test("a_failing_invoke_reaches_on_error_once_per_call_and_never_on_frame", async () => {
+  const errors = [];
+  let frames = 0;
+  const sched = createPreviewScheduler({
+    invoke: async () => {
+      throw new Error("no gpu");
+    },
+    setTimer: () => 1,
+    clearTimer: () => {},
+    now: () => 0,
+    onStill: () => frames++,
+    onFrame: () => frames++,
+    onError: (m) => errors.push(m),
+  });
+  sched.setEnabled(true);
+  sched.designChanged({ name: "a" });
+  await sched.tick();
+  await sched.tick();
+  assert.equal(errors.length, 2);
+  assert.equal(errors[0], "Error: no gpu");
+  assert.equal(frames, 0);
+});

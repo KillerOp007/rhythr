@@ -71,14 +71,33 @@ export function createPreviewScheduler(io) {
 }
 
 export function mountPreviews(store, els, invoke) {
+  // A failing frame must not rewrite the panels thirty times a second, and a
+  // recovered preview must not leave its old error on screen. Only the
+  // status text this module wrote is ever cleared.
+  let lastPreviewError = "";
+  function clearPreviewError() {
+    if (!lastPreviewError) return;
+    if (store.state.status.text === lastPreviewError) store.setStatus("");
+    lastPreviewError = "";
+  }
   const sched = createPreviewScheduler({
     invoke,
     setTimer: (fn, ms) => setTimeout(fn, ms),
     clearTimer: (t) => clearTimeout(t),
     now: () => performance.now(),
-    onStill: (url) => (els.still.src = url),
-    onFrame: (url) => (els.loop.src = url),
-    onError: (msg) => store.setStatus(msg, true),
+    onStill: (url) => {
+      els.still.src = url;
+      clearPreviewError();
+    },
+    onFrame: (url) => {
+      els.loop.src = url;
+      clearPreviewError();
+    },
+    onError: (msg) => {
+      if (msg === lastPreviewError) return;
+      lastPreviewError = msg;
+      store.setStatus(msg, true);
+    },
   });
   let saved = false;
   try {
