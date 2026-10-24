@@ -23,6 +23,26 @@ pub fn mtl_text(with_glass: bool) -> String {
     s
 }
 
+/// Longest accepted skin name, in characters.
+const MAX_NAME_CHARS: usize = 64;
+
+/// The name reaches the config JSON, two archive entry paths and the obj's
+/// `o` line unescaped, so only characters that are inert in all of them
+/// pass: a quote, a slash, a newline or `..` would break the archive or
+/// leave the skin folder.
+fn check_name(name: &str) -> Result<(), KitError> {
+    let inert = |c: char| c.is_ascii_alphanumeric() || matches!(c, ' ' | '_' | '-');
+    if name.is_empty() || name.chars().count() > MAX_NAME_CHARS || !name.chars().all(inert) {
+        return Err(KitError::Invalid(format!(
+            "skin name {name:?} must be letters, digits, spaces, _ or -"
+        )));
+    }
+    Ok(())
+}
+
+/// Writes `mesh` as one object named `name`. The name is written
+/// unescaped: callers must pass one that `export_rhs` accepts (ASCII
+/// letters, digits, spaces, `_` and `-`, 1 to 64 characters).
 pub fn to_obj(mesh: &KitMesh, name: &str) -> String {
     let mut s = String::with_capacity(mesh.positions.len() * 36 + mesh.indices.len() * 8);
     s.push_str("# rhythr note kit\nmtllib note.mtl\n");
@@ -42,8 +62,12 @@ pub fn to_obj(mesh: &KitMesh, name: &str) -> String {
     s
 }
 
+/// Bakes `design` into a `.rhs` skin archive named `name`. The name is
+/// checked first and must be 1 to 64 ASCII letters, digits, spaces, `_` or
+/// `-`; anything else is `KitError::Invalid` and nothing is built.
 pub fn export_rhs(design: &Design, name: &str) -> Result<Vec<u8>, KitError> {
     use std::io::Write;
+    check_name(name)?;
     let mesh = build_mesh(&evaluate(design)?)?;
     let obj = to_obj(&mesh, name);
     let colorset: String = design
@@ -142,5 +166,75 @@ mod tests {
         let mut d = Design::default_note();
         d.parts[0].visible = false;
         assert_eq!(export_rhs(&d, "x").unwrap_err(), KitError::Empty);
+    }
+
+    #[test]
+    fn unsafe_names_are_refused() {
+        let long = "x".repeat(65);
+        for bad in ["", "a\"b", "a/b", "a\\b", "a\nb", "..", long.as_str()] {
+            assert!(
+                matches!(export_rhs(&glass_design(), bad), Err(KitError::Invalid(_))),
+                "{bad:?}"
+            );
+        }
+        assert!(export_rhs(&glass_design(), "My Note_2-b").is_ok());
+    }
+
+    #[test]
+    fn the_archive_always_carries_the_mtl_and_names_glass_only_when_present() {
+        let entries = |bytes: &[u8]| -> Vec<(String, String)> {
+            let mut zr = zip::ZipArchive::new(std::io::Cursor::new(bytes.to_vec())).unwrap();
+            (0..zr.len())
+                .map(|i| {
+                    let mut f = zr.by_index(i).unwrap();
+                    let mut s = String::new();
+                    std::io::Read::read_to_string(&mut f, &mut s).unwrap();
+                    (f.name().to_string(), s)
+                })
+                .collect()
+        };
+        let with_glass = entries(&export_rhs(&glass_design(), "g").unwrap());
+        let mtl = with_glass
+            .iter()
+            .find(|(n, _)| n == "noteSkin/note.mtl")
+            .expect("mtl bundled");
+        assert!(mtl.1.contains("newmtl Transparent"));
+        let solid_only = entries(&export_rhs(&Design::default_note(), "s").unwrap());
+        let mtl = solid_only
+            .iter()
+            .find(|(n, _)| n == "noteSkin/note.mtl")
+            .expect("mtl bundled");
+        assert!(!mtl.1.contains("Transparent"));
+        let obj = solid_only
+            .iter()
+            .find(|(n, _)| n == "noteSkin/s.obj")
+            .unwrap();
+        assert!(!obj.1.contains("usemtl Transparent"));
+    }
+
+    #[test]
+    fn sections_carry_their_own_ranges_in_order() {
+        let ev = crate::kit::levels::evaluate(&glass_design()).unwrap();
+        let m = crate::kit::mesh::build_mesh(&ev).unwrap();
+        let obj = to_obj(&m, "note");
+        let solid_at = obj.find("usemtl Material.001\n").unwrap();
+        let glass_at = obj.find("usemtl Transparent\n").unwrap();
+        assert!(solid_at < glass_at);
+        let faces = |s: &str| s.matches("\nf ").count();
+        assert_eq!(faces(&obj[solid_at..glass_at]), m.solid.len() / 3);
+        assert_eq!(faces(&obj[glass_at..]), m.glass.len() / 3);
+    }
+
+    #[test]
+    fn a_glass_only_design_has_one_transparent_section() {
+        // Pinned, not endorsed: the game decides which material counts as
+        // the opaque first one, and Task 12 probes a glass-only note in play.
+        let mut d = Design::default_note();
+        d.parts[0].material = Material::Glass;
+        let ev = crate::kit::levels::evaluate(&d).unwrap();
+        let m = crate::kit::mesh::build_mesh(&ev).unwrap();
+        let obj = to_obj(&m, "note");
+        assert!(!obj.contains("usemtl Material.001"));
+        assert_eq!(obj.matches("usemtl Transparent\n").count(), 1);
     }
 }
