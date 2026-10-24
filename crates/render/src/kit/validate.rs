@@ -33,6 +33,15 @@ fn invalid(msg: impl Into<String>) -> KitError {
     KitError::Invalid(msg.into())
 }
 
+/// Checks one material's index range as a surface of its own.
+///
+/// Precondition: every index has been bounds-checked against the
+/// positions (`validate` does that first). Orientation is checked for
+/// consistency, not outwardness: a closed surface turned inside out
+/// passes here, and `caps_face_outward` in mesh.rs pins outwardness. The
+/// balanced edge rule admits non-manifold contacts (four walls on one
+/// vertical edge where two faces touch at a vertex) and a whole surface
+/// emitted twice; neither occurs in what the kit builds.
 fn check_range(mesh: &KitMesh, range: &Range<usize>, label: &str) -> Result<(), KitError> {
     if range.start > range.end
         || range.end > mesh.indices.len()
@@ -57,15 +66,18 @@ fn check_range(mesh: &KitMesh, range: &Range<usize>, label: &str) -> Result<(), 
             mesh.positions[b as usize],
             mesh.positions[c as usize],
         );
-        let u = [pb[0] - pa[0], pb[1] - pa[1], pb[2] - pa[2]];
-        let v = [pc[0] - pa[0], pc[1] - pa[1], pc[2] - pa[2]];
+        // The differences are exact in f32 for nearby points (Sterbenz);
+        // their products are not, so the cross product runs in f64, where
+        // a sliver of a few lattice cells keeps its true area.
+        let u = [pb[0] - pa[0], pb[1] - pa[1], pb[2] - pa[2]].map(f64::from);
+        let v = [pc[0] - pa[0], pc[1] - pa[1], pc[2] - pa[2]].map(f64::from);
         let cross = [
             u[1] * v[2] - u[2] * v[1],
             u[2] * v[0] - u[0] * v[2],
             u[0] * v[1] - u[1] * v[0],
         ];
         let area2 = (cross[0] * cross[0] + cross[1] * cross[1] + cross[2] * cross[2]).sqrt();
-        if area2 < MIN_AREA2 {
+        if area2 < MIN_AREA2 as f64 {
             return Err(invalid(format!(
                 "{label}: degenerate triangle {t:?} (zero area)"
             )));
@@ -96,6 +108,15 @@ fn check_range(mesh: &KitMesh, range: &Range<usize>, label: &str) -> Result<(), 
     Ok(())
 }
 
+/// The export gate. Checks run in this order and the first failure is
+/// returned: the index count is a multiple of three, there is at least
+/// one triangle, the triangle budget (`KitError::Budget`), the material
+/// ranges cover the index buffer in order, every vertex is finite and
+/// inside the box and the depth range, every index addresses a vertex,
+/// then the solid range and the glass range each as a closed, consistently
+/// oriented surface (`check_range`, solid first). Every failure other than
+/// the budget is `KitError::Invalid`, its message naming the range
+/// ("solid:" or "glass:") where one is at fault.
 pub fn validate(mesh: &KitMesh) -> Result<Report, KitError> {
     let triangles = mesh.indices.len() / 3;
     if !mesh.indices.len().is_multiple_of(3) {
@@ -222,8 +243,42 @@ mod tests {
 
     #[test]
     fn ranges_must_tile_the_index_buffer_in_triangles() {
+        // The ranges cover the buffer in order, so the tiling check is the
+        // one that fails.
         let mut m = cube();
         m.solid = 0..4;
-        assert!(matches!(validate(&m).unwrap_err(), KitError::Invalid(_)));
+        m.glass = 4..36;
+        let e = validate(&m).unwrap_err();
+        assert!(
+            matches!(e, KitError::Invalid(ref s) if s.contains("tile")),
+            "{e}"
+        );
+    }
+
+    #[test]
+    fn an_open_edge_in_the_glass_range_is_reported_as_glass() {
+        // The cube's last triangle moved into the glass range, then
+        // dropped: the solid range has the open edge.
+        let mut m = cube();
+        m.solid = 0..33;
+        m.indices.truncate(33);
+        m.glass = 33..33;
+        let e = validate(&m).unwrap_err();
+        assert!(
+            matches!(e, KitError::Invalid(ref s) if s.contains("solid: open edge")),
+            "{e}"
+        );
+        // The solid is the whole closed cube and the glass a lone triangle:
+        // the open edge is in the glass range and is named as such. The
+        // solid range is checked first, so it has to be closed here.
+        let mut m = cube();
+        m.indices.extend_from_slice(&[3, 4, 7]);
+        m.solid = 0..36;
+        m.glass = 36..39;
+        let e = validate(&m).unwrap_err();
+        assert!(
+            matches!(e, KitError::Invalid(ref s) if s.contains("glass: open edge")),
+            "{e}"
+        );
     }
 }

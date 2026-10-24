@@ -89,7 +89,9 @@ pub fn base_contours(shape: &Shape) -> Vec<Contour> {
             // Tips at radius 1, valleys at `inner`, every edge sampled as
             // a straight segment in Cartesian space: a radius linear in
             // the angle would bow each edge into a spiral arc.
-            let n = (*points).max(2) as usize;
+            // A corrupt document must degrade, never allocate without
+            // bound: u32::MAX points would be 8.6 billion corners.
+            let n = (*points).clamp(2, 64) as usize;
             let inner = inner.clamp(0.05, 0.95);
             let corners: Vec<[f32; 2]> = (0..2 * n)
                 .map(|k| {
@@ -285,6 +287,20 @@ mod tests {
             }
         }
         assert!(between >= 10, "only {between} samples on the first edge");
+    }
+
+    #[test]
+    fn a_corrupt_star_point_count_is_capped() {
+        // Never run this against code without the clamp.
+        let t = std::time::Instant::now();
+        let cs = base_contours(&Shape::Star {
+            points: u32::MAX,
+            inner: 0.5,
+        });
+        assert!(t.elapsed().as_secs_f32() < 0.5, "took {:?}", t.elapsed());
+        assert_eq!(cs.len(), 1);
+        // At most 128 corners, each edge resampled toward 256 in all.
+        assert!(cs[0].len() <= 128 + 256, "{} points", cs[0].len());
     }
 
     #[test]

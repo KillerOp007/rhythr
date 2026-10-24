@@ -13,7 +13,7 @@ use crate::kit::KitError;
 
 /// Caps on stored parameters: a corrupt document degrades, it never
 /// allocates or loops without bound.
-const MAX_REPEAT: u32 = 32;
+pub(crate) const MAX_REPEAT: u32 = 32;
 const MAX_WAVES: u32 = 32;
 const MAX_WAVE_DEPTH: f32 = 0.95;
 const MAX_FINISH: f32 = 0.9;
@@ -152,6 +152,14 @@ pub fn resolve_part(part: &Part) -> Result<ResolvedPart, KitError> {
     }
     apply_transform(&mut contours, &part.transform);
     let copies = symmetry_copies(contours, &part.effects);
+    // The clean is the first heavy step, so a copy set far beyond the
+    // budget is refused before it. The lattice drops collinear points, so
+    // the multiple stays generous and the clean still sees any source that
+    // could pass the cleaned budget.
+    let raw_points: usize = copies.iter().map(|c| c.len()).sum();
+    if raw_points > 8 * MAX_PART_POINTS {
+        return Err(KitError::Complexity(raw_points, copies.len()));
+    }
     let shapes = clean(&copies, FillRule::NonZero)?;
     complexity_check(&shapes)?;
     Ok(ResolvedPart { shapes, ..empty() })
@@ -370,6 +378,28 @@ mod tests {
             label: String::new(),
         });
         assert!(matches!(resolve_part(&p), Err(KitError::Complexity(..))));
+    }
+
+    #[test]
+    fn an_overly_large_copy_set_is_refused_before_clean() {
+        // Eight copies of 40,000 points are 320,000 raw points, far past
+        // eight times the budget: refused before the clean ever runs.
+        // Never run this against code without the pre-check.
+        let huge: Vec<[f32; 2]> = (0..40_000)
+            .map(|i| {
+                let t = i as f32 / 40_000.0 * std::f32::consts::TAU;
+                [t.cos(), t.sin()]
+            })
+            .collect();
+        let mut p = part(Shape::Contours {
+            contours: vec![huge],
+            label: String::new(),
+        });
+        p.effects.repeat = Some(8);
+        let t = std::time::Instant::now();
+        let r = resolve_part(&p);
+        assert!(t.elapsed().as_secs_f32() < 0.5, "took {:?}", t.elapsed());
+        assert_eq!(r, Err(KitError::Complexity(320_000, 8)));
     }
 
     #[test]

@@ -11,7 +11,7 @@
 use crate::kit::geom::{boolean_keep_collinear, is_empty, Contour, OverlayRule, Shapes};
 use crate::kit::levels::Evaluation;
 use crate::kit::validate::{validate, KitMesh};
-use crate::kit::KitError;
+use crate::kit::{KitError, MAX_TRIANGLES};
 use i_triangle::float::unchecked::UncheckedTriangulatable;
 use std::collections::HashMap;
 
@@ -228,6 +228,22 @@ fn emit_material(
 }
 
 pub fn build_mesh(ev: &Evaluation) -> Result<KitMesh, KitError> {
+    // Every boundary edge of an interval's region becomes a wall quad (two
+    // triangles) for that interval, so twice the regions' point count is a
+    // lower bound on the triangles. It is checked before the subdivision,
+    // which is the heavy step: no valid design changes behaviour, because a
+    // mesh over the bound would fail the validator's budget anyway, only
+    // after minutes of work.
+    let bound = 2 * ev
+        .intervals
+        .iter()
+        .flat_map(|iv| iv.solid.iter().chain(&iv.glass))
+        .flatten()
+        .map(|c| c.len())
+        .sum::<usize>();
+    if bound > MAX_TRIANGLES {
+        return Err(KitError::Budget(bound));
+    }
     let mut pool = Pool {
         positions: Vec::new(),
         index: HashMap::new(),
@@ -618,6 +634,43 @@ mod tests {
         let m = mesh_of(vec![a, b]);
         validate(&m).unwrap();
         assert!(no_t_junctions(&m));
+    }
+
+    #[test]
+    fn a_mesh_over_budget_is_refused_before_subdivision() {
+        // One circle of at least 21,000 lattice points walls into at least
+        // 42,000 triangles, past the budget before any cap is counted.
+        // The lattice drops collinear points (21,000 source points keep
+        // 16,200, 28,000 keep 21,459), so the source must sit well above
+        // the bound: 28,000 points. Never run this against code without
+        // the bound.
+        let circle: Contour = (0..28_000)
+            .map(|i| {
+                let t = i as f32 / 28_000.0 * std::f32::consts::TAU;
+                [t.cos(), t.sin()]
+            })
+            .collect();
+        let solid = crate::kit::geom::snap(&vec![vec![circle]]).unwrap();
+        assert_eq!(solid.len(), 1);
+        assert_eq!(solid[0].len(), 1);
+        let points = solid[0][0].len();
+        assert!(points >= 21_000, "the lattice kept only {points} points");
+        let ev = Evaluation {
+            scale: 1.0,
+            levels: vec![-0.1, 0.1],
+            intervals: vec![crate::kit::levels::Interval {
+                z0: -0.1,
+                z1: 0.1,
+                solid,
+                glass: Vec::new(),
+            }],
+            parts: Vec::new(),
+        };
+        let t = std::time::Instant::now();
+        let r = build_mesh(&ev);
+        assert!(t.elapsed().as_secs_f32() < 0.5, "took {:?}", t.elapsed());
+        // The bound itself, not the validator's later count of walls and caps.
+        assert_eq!(r, Err(KitError::Budget(2 * points)));
     }
 
     #[test]

@@ -25,10 +25,45 @@ pub struct Evaluation {
     pub scale: f32,
     pub levels: Vec<f32>,
     pub intervals: Vec<Interval>,
+    /// The visible, non-empty parts, normalised and finished (a finished
+    /// part is cut to the unit box). When `scale > 1` the removers among
+    /// them are clipped to the silhouette square with its two-unit margin,
+    /// not their full outlines.
     pub parts: Vec<ResolvedPart>,
 }
 
 const LEVEL_EPS: f32 = 1e-5;
+
+fn unit_box() -> Shapes {
+    vec![vec![vec![
+        [-1.0, -1.0],
+        [1.0, -1.0],
+        [1.0, 1.0],
+        [-1.0, 1.0],
+    ]]]
+}
+
+/// How far past the box a finished part may reach and still be cut
+/// quietly. Round joins at L/R = 0.2 have a sagitta of r(1 - cos 0.1),
+/// about 0.005 r; two offsets at MAX_FINISH 0.9 give at most 0.009, so
+/// 0.02 is twice the honest overshoot.
+const BOX_SLACK: f32 = 0.02;
+
+/// Cuts a finished part to the unit box. Within the chord tolerance the
+/// overshoot is the offsets' polygon error and is cut quietly; beyond it
+/// a finish ran away, which no design asks for, so it fails loudly.
+fn cut_to_box(shapes: Shapes, id: &str) -> Result<Shapes, KitError> {
+    let e = extent(&shapes);
+    if e > 1.0 + BOX_SLACK {
+        return Err(KitError::Invalid(format!(
+            "part {id} grew beyond the box after rounding: {e}"
+        )));
+    }
+    if e > 1.0 {
+        return boolean(&shapes, &unit_box(), OverlayRule::Intersect);
+    }
+    Ok(shapes)
+}
 
 fn union_all(shapes: &[&Shapes]) -> Result<Shapes, KitError> {
     let mut acc: Shapes = Vec::new();
@@ -186,21 +221,26 @@ pub fn evaluate(design: &Design) -> Result<Evaluation, KitError> {
     // finish is meant never to make a part larger (a rim keeps the outer
     // loop, a rounding pulls convex corners inward), but the offsets are
     // polygons, so the cut below enforces the box.
-    let unit_box: Shapes = vec![vec![vec![
-        [-1.0, -1.0],
-        [1.0, -1.0],
-        [1.0, 1.0],
-        [-1.0, 1.0],
-    ]]];
     for p in &mut parts {
         if p.round.is_some() || p.rim.is_some() {
-            p.shapes = finish_part(&p.shapes, p.round, p.rim)?;
+            let finished = finish_part(&p.shapes, p.round, p.rim)?;
             // The erode step of a finish is a chord polygon, slightly
             // larger than the true erosion, so a rounding can overshoot
-            // the box; the box is a promise, so it is cut.
-            if extent(&p.shapes) > 1.0 {
-                p.shapes = boolean(&p.shapes, &unit_box, OverlayRule::Intersect)?;
-            }
+            // the box; the box is a promise, so it is cut. A part that
+            // adds material starts inside the box, so an overshoot past
+            // the chord tolerance is an error. A remover is only cut, never
+            // refused: clipped to the silhouette square (or never clipped
+            // at all), it legitimately reaches past the box and removes
+            // nothing there.
+            p.shapes = if removes(p) {
+                if extent(&finished) > 1.0 {
+                    boolean(&finished, &unit_box(), OverlayRule::Intersect)?
+                } else {
+                    finished
+                }
+            } else {
+                cut_to_box(finished, &p.id)?
+            };
         }
     }
     parts.retain(|p| !p.shapes.is_empty());
@@ -728,14 +768,37 @@ mod tests {
         assert!((extent(solid) - 1.0).abs() < 1e-4);
     }
 
+    fn square(h: f32) -> Shapes {
+        vec![vec![vec![[-h, -h], [h, -h], [h, h], [-h, h]]]]
+    }
+
+    #[test]
+    fn a_chord_overshoot_is_cut_quietly() {
+        let cut = cut_to_box(square(1.01), "p").unwrap();
+        assert_eq!(cut.len(), 1);
+        assert_eq!(extent(&cut), 1.0);
+        // Inside the box nothing changes.
+        assert_eq!(cut_to_box(square(0.5), "p").unwrap(), square(0.5));
+    }
+
+    #[test]
+    fn a_runaway_finish_is_an_error() {
+        let e = cut_to_box(square(1.2), "p").unwrap_err();
+        assert!(
+            matches!(e, KitError::Invalid(ref s) if s.contains("part p")),
+            "{e}"
+        );
+    }
+
     #[test]
     fn a_finished_part_never_leaves_the_box() {
         // From the property run: Pill with round, mirror X, once with a
         // rim, once with repeat 6. The erosion left micro loops that the
         // dilation blew into discs of radius r (extents 1.17 and 1.20).
-        // With micro loops dropped the first stays the closed pill pair
-        // (area about 0.99) and the second ends near 0.97, so the box cut
-        // has nothing left to do; the bounds pin both.
+        // With micro loops dropped the first falls back to its unfinished
+        // outline (its opening vanishes, outer area 0.909) instead of
+        // staying the closed pill pair, and the second ends near 0.97, so
+        // the box cut has nothing left to do; the bounds pin both.
         #[allow(clippy::type_complexity)]
         let cases: [(
             f32,

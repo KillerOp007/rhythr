@@ -11,15 +11,17 @@ use std::fmt::Write as _;
 
 const MATERIAL: &str = "newmtl {name}\nNs 250.000000\nKa 1.000000 1.000000 1.000000\nKd 1.000000 1.000000 1.000000\nKs 0.000000 0.000000 0.000000\nKe 0.000000 0.000000 0.000000\nNi 1.450000\nd 1.000000\nillum 1\n";
 
-pub fn mtl_text(with_glass: bool) -> String {
+/// The one `.mtl` every kit skin bundles. Both materials are always
+/// declared, glass or not: every skin carries the same `noteSkin/note.mtl`,
+/// so however several skins are imported, no `usemtl Transparent` can be
+/// left without its material.
+pub fn mtl_text() -> String {
     let mut s = String::from("# rhythr note kit\n");
     s.push_str(&MATERIAL.replace("{name}", "Material.001"));
-    if with_glass {
-        s.push('\n');
-        // The game ignores `d` and draws every material after the first
-        // translucent; the name follows its built-in cube.
-        s.push_str(&MATERIAL.replace("{name}", "Transparent"));
-    }
+    s.push('\n');
+    // The game ignores `d` and draws every material after the first
+    // translucent; the name follows its built-in cube.
+    s.push_str(&MATERIAL.replace("{name}", "Transparent"));
     s
 }
 
@@ -91,8 +93,7 @@ pub fn export_rhs(design: &Design, name: &str) -> Result<Vec<u8>, KitError> {
         .map_err(zip_err)?;
     zw.write_all(obj.as_bytes()).map_err(io_err)?;
     zw.start_file("noteSkin/note.mtl", opts).map_err(zip_err)?;
-    zw.write_all(mtl_text(!mesh.glass.is_empty()).as_bytes())
-        .map_err(io_err)?;
+    zw.write_all(mtl_text().as_bytes()).map_err(io_err)?;
     if !colorset.is_empty() {
         zw.start_file(format!("colorSet/{name}.txt"), opts)
             .map_err(zip_err)?;
@@ -145,10 +146,10 @@ mod tests {
 
     #[test]
     fn mtl_names_match_the_game_convention() {
-        let solid_only = mtl_text(false);
-        assert!(solid_only.contains("newmtl Material.001"));
-        assert!(!solid_only.contains("Transparent"));
-        assert!(mtl_text(true).contains("newmtl Transparent"));
+        let mtl = mtl_text();
+        assert!(mtl.contains("newmtl Material.001"));
+        assert!(mtl.contains("newmtl Transparent"));
+        assert!(mtl.find("Material.001") < mtl.find("Transparent"));
     }
 
     #[test]
@@ -181,7 +182,10 @@ mod tests {
     }
 
     #[test]
-    fn the_archive_always_carries_the_mtl_and_names_glass_only_when_present() {
+    fn the_archive_always_carries_both_materials() {
+        // Every kit skin bundles the same noteSkin/note.mtl, so whichever
+        // skin the game imported last, a `usemtl Transparent` finds its
+        // material.
         let entries = |bytes: &[u8]| -> Vec<(String, String)> {
             let mut zr = zip::ZipArchive::new(std::io::Cursor::new(bytes.to_vec())).unwrap();
             (0..zr.len())
@@ -204,7 +208,8 @@ mod tests {
             .iter()
             .find(|(n, _)| n == "noteSkin/note.mtl")
             .expect("mtl bundled");
-        assert!(!mtl.1.contains("Transparent"));
+        assert!(mtl.1.contains("newmtl Material.001"));
+        assert!(mtl.1.contains("newmtl Transparent"));
         let obj = solid_only
             .iter()
             .find(|(n, _)| n == "noteSkin/s.obj")

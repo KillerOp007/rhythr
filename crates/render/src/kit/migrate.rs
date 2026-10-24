@@ -4,7 +4,55 @@
 
 use crate::designer::ControlPoint;
 use crate::kit::doc::*;
+use crate::kit::resolve::MAX_REPEAT;
 use crate::kit::KitError;
+
+/// One stored v1 freeform point, read in f64 as the editor held it.
+#[derive(Clone, Copy, serde::Deserialize)]
+struct V1Point {
+    x: f64,
+    y: f64,
+    #[serde(default = "smooth_default")]
+    smooth: bool,
+}
+
+fn smooth_default() -> bool {
+    true
+}
+
+/// v1's `controlLoop()` (crates/gui/ui/designer.js): the stored points
+/// cover ONE wedge, and the editor expanded them into one closed control
+/// loop before the backend splined it. A sector is the wedge, preceded by
+/// its reflection across the x axis in reverse order when `mirror` is on
+/// (so the loop keeps running counterclockwise); the sector is then turned
+/// by `2 pi s / symmetry` for every `s` below `symmetry`. The maths runs in
+/// f64 as the editor's did, the smooth flags are kept, and consecutive
+/// equal points stay: v1's backend handed the loop to `flatten_controls`
+/// unchanged. Fewer than three points are no loop (v1 returned null).
+fn control_loop(free: &[V1Point], symmetry: u32, mirror: bool) -> Option<Vec<ControlPoint>> {
+    let sector: Vec<V1Point> = if mirror {
+        free.iter()
+            .rev()
+            .map(|p| V1Point { y: -p.y, ..*p })
+            .chain(free.iter().copied())
+            .collect()
+    } else {
+        free.to_vec()
+    };
+    let mut ctrl = Vec::with_capacity(sector.len() * symmetry as usize);
+    for s in 0..symmetry {
+        let a = s as f64 * std::f64::consts::PI * 2.0 / symmetry as f64;
+        let (ca, sa) = (a.cos(), a.sin());
+        for p in &sector {
+            ctrl.push(ControlPoint {
+                x: (p.x * ca - p.y * sa) as f32,
+                y: (p.x * sa + p.y * ca) as f32,
+                smooth: p.smooth,
+            });
+        }
+    }
+    (ctrl.len() >= 3).then_some(ctrl)
+}
 
 pub fn from_v1(json: &str) -> Result<Design, KitError> {
     let v: serde_json::Value =
@@ -23,7 +71,15 @@ pub fn from_v1(json: &str) -> Result<Design, KitError> {
         .get("colors")
         .and_then(|c| serde_json::from_value(c.clone()).ok())
         .unwrap_or_else(|| vec!["#ffffff".into()]);
-    let symmetry = v.get("symmetry").and_then(|x| x.as_u64()).unwrap_or(1) as u32;
+    // v1 read `Number(d.symmetry) || 4`: a missing or zero symmetry is
+    // four. Its selector offered at most 12; the cap keeps a corrupt
+    // document from expanding the loop without bound.
+    let symmetry = v
+        .get("symmetry")
+        .and_then(|x| x.as_u64())
+        .filter(|n| *n > 0)
+        .unwrap_or(4)
+        .min(MAX_REPEAT as u64) as u32;
     let mirror = v.get("mirror").and_then(|x| x.as_bool()).unwrap_or(false);
     let hollow = p.get("hollow").and_then(|x| x.as_bool()).unwrap_or(false);
 
@@ -35,7 +91,7 @@ pub fn from_v1(json: &str) -> Result<Design, KitError> {
         .get("imported")
         .filter(|x| x.is_array())
         .and_then(|x| serde_json::from_value(x.clone()).ok());
-    let free: Option<Vec<ControlPoint>> = v
+    let free: Option<Vec<V1Point>> = v
         .get("free")
         .filter(|x| x.is_array())
         .and_then(|x| serde_json::from_value(x.clone()).ok());
@@ -52,13 +108,9 @@ pub fn from_v1(json: &str) -> Result<Design, KitError> {
             "Import",
             0.0,
         )
-    } else if let Some(control) = free.filter(|c| c.len() >= 2) {
-        if symmetry > 1 {
-            effects.repeat = Some(symmetry);
-        }
-        if mirror {
-            effects.mirror = Mirror::X;
-        }
+    } else if let Some(control) = free.and_then(|f| control_loop(&f, symmetry, mirror)) {
+        // The symmetry and the mirror live in the expanded loop itself, so
+        // the part carries no repeat and no mirror effect.
         (Shape::Points { control }, "Freeform", 0.0)
     } else {
         let waves = f("waves", 0.0) as u32;
@@ -192,21 +244,79 @@ mod tests {
         assert_eq!(from_v1(&json).unwrap().parts[0].transform.rotation, 0.0);
     }
 
-    #[test]
-    fn freeform_keeps_symmetry_and_mirror_as_effects() {
-        let json = r##"{"P":{"shape":"circle","n":6,"round":0.3,"hollow":false,"thick":0.22,
-          "depth":0.05,"waves":0,"waveDepth":0.25,"waveform":"sine","twist":0},
-          "free":[{"x":1,"y":0,"smooth":false},{"x":0.5,"y":0.5,"smooth":true}],
-          "symmetry":5,"mirror":true,"colors":["#ffffff"],"imported":null}"##;
-        let d = from_v1(json).unwrap();
-        let p = &d.parts[0];
-        match &p.shape {
-            Shape::Points { control } => assert_eq!(control.len(), 2),
+    /// A two-point wedge, smooth then corner, as v1 stored it.
+    const WEDGE: &str = r##"{"P":{"shape":"circle","n":6,"round":0.3,"hollow":false,"thick":0.22,
+      "depth":0.05,"waves":0,"waveDepth":0.25,"waveform":"sine","twist":0},
+      "free":[{"x":0.2,"y":0.0,"smooth":true},{"x":0.3,"y":0.3,"smooth":false}],
+      "symmetry":4,"mirror":false,"colors":["#ffffff"],"imported":null}"##;
+
+    fn control_of(d: &Design) -> &[ControlPoint] {
+        match &d.parts[0].shape {
+            Shape::Points { control } => control,
             other => panic!("expected points, got {other:?}"),
         }
-        assert_eq!(p.effects.repeat, Some(5));
-        assert_eq!(p.effects.mirror, Mirror::X);
+    }
+
+    fn near(p: &ControlPoint, x: f32, y: f32) -> bool {
+        (p.x - x).abs() < 1e-5 && (p.y - y).abs() < 1e-5
+    }
+
+    #[test]
+    fn freeform_symmetry_expands_to_one_loop() {
+        // v1's editor expanded the wedge through the symmetry into ONE
+        // control loop before the backend splined it.
+        let d = from_v1(WEDGE).unwrap();
+        let c = control_of(&d);
+        assert_eq!(c.len(), 8, "{c:?}");
+        // The second rotation (90 degrees) of both wedge points.
+        assert!(near(&c[2], 0.0, 0.2), "{:?}", c[2]);
+        assert!(near(&c[3], -0.3, 0.3), "{:?}", c[3]);
+        assert!(c[2].smooth && !c[3].smooth, "smooth flags are kept");
+        let p = &d.parts[0];
+        assert_eq!(p.effects.repeat, None);
+        assert_eq!(p.effects.mirror, Mirror::None);
         assert_eq!(p.effects.rim, None);
+        // A missing symmetry is v1's default of four.
+        let json = WEDGE.replace(r#""symmetry":4,"#, "");
+        assert_eq!(control_of(&from_v1(&json).unwrap()).len(), 8);
+        // Two points without symmetry are no loop: v1 fell back to the
+        // sliders, and so does the migration.
+        let json = WEDGE.replace(r#""symmetry":4"#, r#""symmetry":1"#);
+        assert_eq!(from_v1(&json).unwrap().parts[0].shape, Shape::Circle);
+    }
+
+    #[test]
+    fn freeform_mirror_reflects_and_reverses() {
+        let json = WEDGE.replace(r#""mirror":false"#, r#""mirror":true"#);
+        let d = from_v1(&json).unwrap();
+        let c = control_of(&d);
+        assert_eq!(c.len(), 16, "{c:?}");
+        // The sector: the wedge's reflection in reverse order, then the
+        // wedge itself, so the loop keeps running counterclockwise.
+        assert!(near(&c[0], 0.3, -0.3) && !c[0].smooth, "{:?}", c[0]);
+        assert!(near(&c[1], 0.2, 0.0) && c[1].smooth, "{:?}", c[1]);
+        assert!(near(&c[2], 0.2, 0.0) && c[2].smooth, "{:?}", c[2]);
+        assert!(near(&c[3], 0.3, 0.3) && !c[3].smooth, "{:?}", c[3]);
+        // Then the rotated copies: the sector turned by 90 degrees.
+        assert!(near(&c[4], 0.3, 0.3), "{:?}", c[4]);
+        assert!(near(&c[7], -0.3, 0.3), "{:?}", c[7]);
+        let p = &d.parts[0];
+        assert_eq!(p.effects.repeat, None);
+        assert_eq!(p.effects.mirror, Mirror::None);
+    }
+
+    #[test]
+    fn migrated_freeform_evaluates_to_one_contour() {
+        // Stored as the wedge alone with repeat and mirror effects, a
+        // four-fold design became four disjoint quarter blobs, and a
+        // two-point wedge like this one no shape at all (KitError::Empty).
+        let ev = crate::kit::levels::evaluate(&from_v1(WEDGE).unwrap());
+        assert!(!matches!(ev, Err(KitError::Empty)), "{ev:?}");
+        let ev = ev.unwrap();
+        assert_eq!(ev.intervals.len(), 1);
+        let solid = &ev.intervals[0].solid;
+        assert_eq!(solid.len(), 1, "one shape, not four blobs");
+        assert_eq!(solid[0].len(), 1, "one contour, no holes");
     }
 
     #[test]
