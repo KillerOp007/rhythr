@@ -184,12 +184,12 @@ endorsed by Rhythia or Capo Games.
   broken or missing mesh falls back to the regular note look rather than
   failing the render: notably, rhythr does not care when a skin's `.mtl`
   file was not bundled, which the game itself currently crashes on.
-- **Importing a skin into the game**: copy the `.rhs` file to a folder on
-  one of your own drives (Desktop and Downloads both work) and import it
-  from there. The game refuses to read a skin from a network path such as
-  a UNC share (`\\server\share\skin.rhs`) and answers "File path is
-  unsafe", so a skin that sits on a shared folder or a NAS has to be
-  copied to a local disk first. Nothing is wrong with the file itself.
+- **Importing a skin into the game**: copy the `.rhs` file to any folder
+  on a local drive, such as a subfolder of your user folder on C:, and
+  import it from there. The game refuses to read a skin from a network
+  path such as a UNC share (`\\server\share\skin.rhs`) and answers "File
+  path is unsafe", so a skin that sits on a shared folder or a NAS has to
+  be copied to a local disk first. Nothing is wrong with the file itself.
 - **Verified badge**: every replay is integrity-checked. The hits,
   misses and accuracy are re-derived from the raw inputs and compared
   against the file's header. "inconsistent (possibly modified)" means

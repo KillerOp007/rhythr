@@ -31,12 +31,18 @@ const MAX_NAME_CHARS: usize = 64;
 /// The name reaches the config JSON, two archive entry paths and the obj's
 /// `o` line unescaped, so only characters that are inert in all of them
 /// pass: a quote, a slash, a newline or `..` would break the archive or
-/// leave the skin folder.
+/// leave the skin folder. A space at either end does not survive
+/// everywhere (Windows drops a trailing space from file names, obj readers
+/// trim the `o` line), and a blank name names nothing.
 fn check_name(name: &str) -> Result<(), KitError> {
     let inert = |c: char| c.is_ascii_alphanumeric() || matches!(c, ' ' | '_' | '-');
-    if name.is_empty() || name.chars().count() > MAX_NAME_CHARS || !name.chars().all(inert) {
+    if name.trim().is_empty()
+        || name.trim() != name
+        || name.chars().count() > MAX_NAME_CHARS
+        || !name.chars().all(inert)
+    {
         return Err(KitError::Invalid(format!(
-            "skin name {name:?} must be letters, digits, spaces, _ or -"
+            "skin name {name:?} must be letters, digits, spaces, _ or -, with no space at either end"
         )));
     }
     Ok(())
@@ -44,7 +50,8 @@ fn check_name(name: &str) -> Result<(), KitError> {
 
 /// Writes `mesh` as one object named `name`. The name is written
 /// unescaped: callers must pass one that `export_rhs` accepts (ASCII
-/// letters, digits, spaces, `_` and `-`, 1 to 64 characters).
+/// letters, digits, spaces, `_` and `-`, 1 to 64 characters, no space at
+/// either end).
 pub fn to_obj(mesh: &KitMesh, name: &str) -> String {
     let mut s = String::with_capacity(mesh.positions.len() * 36 + mesh.indices.len() * 8);
     s.push_str("# rhythr note kit\nmtllib note.mtl\n");
@@ -66,7 +73,8 @@ pub fn to_obj(mesh: &KitMesh, name: &str) -> String {
 
 /// Bakes `design` into a `.rhs` skin archive named `name`. The name is
 /// checked first and must be 1 to 64 ASCII letters, digits, spaces, `_` or
-/// `-`; anything else is `KitError::Invalid` and nothing is built.
+/// `-`, with no space at either end; anything else is `KitError::Invalid`
+/// and nothing is built.
 pub fn export_rhs(design: &Design, name: &str) -> Result<Vec<u8>, KitError> {
     use std::io::Write;
     check_name(name)?;
@@ -172,7 +180,18 @@ mod tests {
     #[test]
     fn unsafe_names_are_refused() {
         let long = "x".repeat(65);
-        for bad in ["", "a\"b", "a/b", "a\\b", "a\nb", "..", long.as_str()] {
+        for bad in [
+            "",
+            " ",
+            " a",
+            "a ",
+            "a\"b",
+            "a/b",
+            "a\\b",
+            "a\nb",
+            "..",
+            long.as_str(),
+        ] {
             assert!(
                 matches!(export_rhs(&glass_design(), bad), Err(KitError::Invalid(_))),
                 "{bad:?}"

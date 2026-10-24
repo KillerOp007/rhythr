@@ -1,8 +1,10 @@
 //! Fixed-scale, fixed-origin wrappers around i_overlay. Every operation
 //! snaps to ONE integer lattice (cell 1/65536, origin at the note's
 //! centre, spanning plus and minus KIT_RANGE), so a region derived twice
-//! from the same inputs is bit-identical, and contours shared between
-//! neighbouring operations line up vertex for vertex. i_overlay's own
+//! from the same inputs is bit-identical. Contours shared between
+//! neighbouring results line up vertex for vertex where every vertex is
+//! kept, which is `boolean_keep_collinear` (the mesh faces); the region
+//! paths drop collinear points and micro loops. i_overlay's own
 //! fixed-scale entry points fix the cell size but centre the lattice on
 //! each call's bounding box, which is why the adapter is built here.
 
@@ -25,10 +27,14 @@ pub type Shapes = Vec<Vec<Contour>>;
 /// editor allows, while 64 * 65536 stays far inside the i32 engine.
 pub const KIT_RANGE: f32 = 64.0;
 
-/// Smallest area a region result keeps, in note units squared: a square
-/// of side 0.001 on a note two units wide. Offsets leave micro loops of a
-/// few lattice cells at inner corners, and a later dilation turns each
-/// one into a full disc of the offset radius.
+/// Smallest area a region result keeps: a square of side 0.001 on a note
+/// two units wide. Offsets leave micro loops of a few lattice cells at
+/// inner corners, and a later dilation turns each one into a full disc of
+/// the offset radius. The threshold is in whatever units the call runs in:
+/// design units in `resolve_part`'s clean and the remover clip, note units
+/// after normalisation. A design smaller than about 0.03 in extent before
+/// normalisation therefore loses detail; Phase 2 keeps transforms in the
+/// editor's ranges.
 pub const MIN_SHAPE_AREA: f32 = 1e-6;
 
 /// Signed area, positive for counterclockwise. Summed in f64 relative to
@@ -403,6 +409,17 @@ mod tests {
         assert_eq!(r.len(), 1, "the micro loop must go");
         let snapped = snap(&vec![vec![square], vec![micro]]).unwrap();
         assert_eq!(snapped.len(), 1);
+    }
+
+    #[test]
+    fn the_area_threshold_is_an_area_not_twice_one() {
+        // Side 0.0009 is area 8.1e-7, below MIN_SHAPE_AREA, but twice it
+        // is above; side 0.0011 is area 1.21e-6, above, but half of it is
+        // below. Only a comparison of the area itself drops the first and
+        // keeps the second.
+        let sq = |s: f32| vec![[0.0, 0.0], [s, 0.0], [s, s], [0.0, s]];
+        assert!(is_empty(&clean(&[sq(0.0009)], FillRule::NonZero).unwrap()));
+        assert_eq!(clean(&[sq(0.0011)], FillRule::NonZero).unwrap().len(), 1);
     }
 
     #[test]

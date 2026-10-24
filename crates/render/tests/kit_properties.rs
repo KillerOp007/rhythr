@@ -154,20 +154,51 @@ fn part(i: usize) -> impl Strategy<Value = Part> {
 fn design() -> impl Strategy<Value = Design> {
     (1usize..=4).prop_flat_map(|n| {
         let parts: Vec<_> = (0..n).map(part).collect();
-        parts.prop_map(|parts| Design {
-            version: 2,
-            name: "p".into(),
-            colors: vec!["#ffffff".into()],
-            parts,
-            groups: vec![],
+        // With two parts or more, one design in four puts two distinct
+        // parts into one group of either mode, so the group fold meets the
+        // same random geometry as the plain combine.
+        let group = if n >= 2 {
+            proptest::option::weighted(
+                0.25,
+                (
+                    0..n,
+                    0..n - 1,
+                    prop_oneof![Just(Mode::Add), Just(Mode::Cut)],
+                ),
+            )
+            .boxed()
+        } else {
+            Just(None::<(usize, usize, Mode)>).boxed()
+        };
+        (parts, group).prop_map(|(parts, group)| {
+            let groups = group
+                .map(|(a, b, mode)| {
+                    // The second index skips the first, so they differ.
+                    let b = if b >= a { b + 1 } else { b };
+                    vec![Group {
+                        id: "g".into(),
+                        name: "g".into(),
+                        parts: vec![parts[a].id.clone(), parts[b].id.clone()],
+                        mode,
+                    }]
+                })
+                .unwrap_or_default();
+            Design {
+                version: 2,
+                name: "p".into(),
+                colors: vec!["#ffffff".into()],
+                parts,
+                groups,
+            }
         })
     })
 }
 
 proptest! {
-    // A case costs about a second in release and ten times that in debug,
-    // so the plain `cargo test` run samples 10 designs and the release run
-    // 200; shrinking is bounded in steps and in time.
+    // A case costs about a second in release and several times that in
+    // debug (the ratio depends on the sampled designs), so the plain
+    // `cargo test` run samples 10 designs and the release run 200;
+    // shrinking is bounded in steps and in time.
     #![proptest_config(ProptestConfig {
         cases: if cfg!(debug_assertions) { 10 } else { 200 },
         max_shrink_iters: 300,

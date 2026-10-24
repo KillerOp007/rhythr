@@ -1163,9 +1163,11 @@ impl Renderer {
                 },
             ],
         });
-        // A mesh note skin: parsed leniently (mtllib/usemtl are ignored,
-        // which is deliberate: the game itself crashes on an export whose
-        // .mtl was not bundled, and this renderer must not inherit that).
+        // A mesh note skin, parsed leniently: a missing .mtl is tolerated
+        // (deliberately: the game itself crashes on an export whose .mtl
+        // was not bundled, and this renderer must not inherit that), and
+        // the `usemtl` order sets the glass alpha (the first material is
+        // opaque, every later one is drawn at GLASS_ALPHA).
         let note_mesh = config.note_mesh.as_deref().and_then(|bytes| {
             let src = std::str::from_utf8(bytes).ok()?;
             let mut m = Mesh::from_obj_str(src).ok()?;
