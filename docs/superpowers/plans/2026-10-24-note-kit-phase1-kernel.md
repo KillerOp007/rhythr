@@ -1390,6 +1390,8 @@ mod tests {
 Run: `cargo test -p rhythia-render kit::resolve`
 Expected: compile error, `resolve_part` not found.
 
+Never run `corrupt_parameters_are_capped_not_fatal` against code without the caps: with `repeat = u32::MAX` the uncapped copy loop tries to build four billion contours and took a shared machine to 9.9 GB of RAM before it was killed. Write that one test after the caps exist and say so in the report; the other tests may be run red.
+
 - [ ] **Step 3: Implement resolution**
 
 `crates/render/src/kit/resolve.rs`:
