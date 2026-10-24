@@ -76,14 +76,13 @@ Design {
 Part {
   id, name, visible, locked,
   shape: Circle
-       | Square
+       | Square { rounding }     // a side sits flat at the bottom
        | Polygon { sides, rounding }
        | Star { points, inner }
        | Ring { thickness }
        | Pill { aspect }
-       | Glyph { char }
-       | Svg { contours }        // imported, oriented, unit-scaled
-       | Points { control: [{x, y, smooth}] },   // freeform
+       | Contours { contours, label }   // an SVG or glyph import, resolved by the editor, stored as oriented unit-scaled contours; the kernel never touches fonts or files
+       | Points { control: [{x, y, smooth}] },   // freeform, one closed loop
   transform: { x, y, w, h, rotation },   // x, y, w, h in note-box units, rotation in degrees
   mode: Add | Cut,
   depth: { front, back },        // z band; front > back; front toward the player
@@ -106,9 +105,12 @@ Rules
   normalises the resolved silhouette to the unit box; the editor shows
   the cap and the true hit area exactly as v2 does.
 - A v1 design (the current .rhsd and autosave) loads as one Add part:
-  slider shapes become a Polygon or Circle part with the same effects,
-  freeform becomes Points with the same symmetry, imports become Svg or
-  Glyph. Nothing anyone saved is lost.
+  slider shapes become a Polygon, Square or Circle part with the same
+  effects, freeform becomes Points holding the loop v1 built from the
+  wedge (reflection when mirrored, then rotated symmetry times, as v1's
+  controlLoop did; no repeat or mirror effect is set, because repeat
+  makes separate closed copies and v1 splined one loop), imports become
+  Contours. Nothing anyone saved is lost.
 
 ## 4. Geometry kernel (Rust, crates/render/src/kit/)
 
@@ -121,12 +123,21 @@ pipeline keeps working until the editor switches over.
 
 1. Source shape to a unit-box outline (parametric generators, spline
    flattening, or imported contours).
-2. Effects in fixed order: waves, round (offset out then in), rim
-   (region minus its erosion).
+2. Waves, in the part's own space.
 3. Transform: scale by w and h, rotate, translate.
 4. Symmetry: mirror produces reflected copies, repeat produces rotated
    copies; all copies are separate contours of the same part.
-5. Clean with the nonzero rule into oriented contours.
+5. Clean with the nonzero rule into oriented contours, under a
+   complexity budget per part (points and contours) so a corrupt file
+   degrades instead of running away.
+6. Round (closing then opening) and rim (region minus its erosion) are a
+   finish in note units: the level evaluation applies them after the
+   whole design is normalised to the box and before the level set, on
+   the merged region of the part, never deleting a part (a region too
+   thin to erode keeps its outline). A finish never makes a part larger;
+   a chord-sized overshoot is cut to the box, anything larger is an
+   error. Region results drop shapes below a visible area, because the
+   erosion leaves micro loops that a later dilation would blow up.
 
 4.2 Level evaluation: `evaluate(design) -> Evaluation`
 
@@ -134,28 +145,48 @@ pipeline keeps working until the editor switches over.
    sorted ascending. Intervals are consecutive pairs.
 2. Per interval, per material, the solid region:
    `solid(i) = union(Add parts covering i) minus union(Cut parts covering i)`,
-   with groups folded first (cuts in a group apply to that group's adds,
-   then the group's result is one Add or Cut contribution). Glass is a
-   second region per interval: `glass(i) = union(glass adds) minus
-   union(all cuts) minus solid(i)`; opaque wins where they overlap.
-3. All overlay operations run through one fixed-scale integer adapter
-   (i_overlay's fixed-scale API) so identical input polygons produce
+   with groups folded first (cuts in a group apply to that group's adds;
+   an Add-mode group contributes its solid adds and its glass adds as two
+   contributions of their own material, a Cut-mode group one cut of all
+   its adds; a part id in more than one group is a document error).
+   Glass is a second region per interval: `glass(i) = union(glass adds)
+   minus union(all cuts) minus solid(i)`; opaque wins where they overlap.
+3. Before the level set, the design is normalised: the silhouette is the
+   largest extent over the parts that add material (loose Add parts and
+   Add members of Add-mode groups; cuts and the members of Cut-mode
+   groups only remove and never set the size), every part is scaled by
+   1/extent and re-snapped to the lattice, removers are clipped to a
+   square three times the silhouette before scaling so a scaled-up cut
+   cannot leave the lattice range, and then the finish of 4.1 step 6
+   runs.
+4. All overlay operations run through one fixed-origin integer lattice
+   (i_overlay with a shared adapter: cell 1/65536, origin fixed, never
+   recentred on the input) so identical input polygons produce
    bit-identical output vertices across operations. This is what makes
-   ring sharing exact.
+   face sharing exact.
 
 4.3 Mesh emission: `mesh(evaluation) -> KitMesh`
 
-- Walls: for each interval and material, each contour of the region
-  extrudes to a wall strip between the interval's z values. Outer
-  contours run counterclockwise, holes clockwise, so the strip code is
-  the same for both and facing follows from traversal.
-- Caps at each level z: front-facing cap = region below z minus region
-  above z; back-facing cap = region above minus region below.
-  Triangulated with i_triangle, lifted to z, back caps reversed.
-- Ring sharing: the contours of a level are computed once and
-  referenced by the caps on both sides and by the walls above and
-  below. No contour is re-simplified between uses, so T-junctions
-  cannot occur.
+- Faces of constant membership: per material, the plane is subdivided
+  into faces that belong to the same set of intervals (start with the
+  union of all interval regions, split every face by each region into
+  the part inside and the part outside, carrying a membership mask).
+  These overlays keep collinear vertices, so neighbouring faces share
+  their seam edge for edge; the region paths elsewhere may drop
+  collinear points and micro loops, the face path never does.
+- Caps: each face is triangulated once (i_triangle, unchecked, with its
+  indices mapped back to the face's own points) and lifted to every
+  level where its membership changes: material below and not above is a
+  front cap (counterclockwise seen from the player), above and not below
+  a back cap (reversed).
+- Walls: every face edge whose neighbour across the edge is not a member
+  of an interval gets a wall quad for that interval; outer contours run
+  counterclockwise and holes clockwise, so the face is always on the
+  left and the wall faces outward.
+- Sharing: every vertex is interned by its float bits in one pool, so a
+  cap edge and a wall edge on the same seam at the same level are the
+  same two indices and T-junctions cannot occur between faces that share
+  a seam. A material has at most 64 intervals.
 - Materials: the mesh carries index ranges per material (Solid first,
   Glass second). The exporter writes one `o`, `usemtl Material.001`
   for solid and `usemtl Transparent` for glass, matching the built-in
@@ -168,11 +199,15 @@ pipeline keeps working until the editor switches over.
 
 Deterministic, dependency-free, runs on every export and in every test:
 
-- every edge is shared by exactly two triangles with opposite
-  orientation (closed, consistently oriented surface), per material
-  range and for the whole mesh;
-- no degenerate triangles (area below 1e-9 in unit terms), no NaN or
-  infinite coordinates;
+- every directed edge is balanced by its reverse (used n times one
+  way, n times the other: closed and consistently oriented, per
+  material range), which admits non-manifold contacts such as two faces
+  touching at a vertex at the same depth, and does not by itself detect
+  a surface emitted twice or two coincident opposite walls (the
+  property test's T-junction oracle covers those);
+- no degenerate triangles (coincident positions under distinct indices;
+  the threshold sits below the smallest lattice-sized triangle), no NaN
+  or infinite coordinates;
 - x and y within the unit box (1.0 plus 1e-4), z within [-2.0, 0.5];
 - triangle count within budget.
 
@@ -250,23 +285,33 @@ Never boolean, union, mesh, vertex, modifier, manifold.
 ## 6. Export
 
 `kit_export` writes `config`, `noteSkin/<name>.obj` (one object, two
-`usemtl` sections at most), `noteSkin/note.mtl` (Material.001 and
-Transparent, the latter only when glass is present), and
-`colorSet/<name>.txt`, exactly the layout the game accepts today. The
-design file (.rhsd, version 2) is the editable source; the .rhs is
-baked output.
+`usemtl` sections at most, solid first), `noteSkin/note.mtl`
+(Material.001 and Transparent, always both, so every kit skin bundles an
+identical mtl and importing several skins cannot leave a material
+undefined), and `colorSet/<name>.txt`, exactly the layout the game
+accepts today. The skin name is validated first: letters, digits,
+spaces, `_` and `-`, 1 to 64 characters, no leading or trailing space,
+because it reaches the config JSON, two archive paths and the obj's `o`
+line. The design file (.rhsd, version 2) is the editable source; the
+.rhs is baked output.
 
 ## 7. Testing
 
 - Kernel unit tests for every shape source, effect, symmetry, depth
   evaluation and the validator itself (a hand-broken mesh must fail).
-- Property tests (proptest): random designs of 1 to 8 parts with random
-  modes, bands, effects and materials; every mesh must pass the
-  validator, stay in the box, be deterministic across two runs, and
-  stay under budget.
+- Property tests (proptest): random designs of 1 to 4 parts with random
+  modes, bands, effects (repeat up to 4, waves up to 8, the cost ruling
+  of Phase 1), materials and groups, half of the transforms on a 0.1
+  grid so seams run flush; every design evaluates to a clean Empty or
+  Budget, or to a mesh that passes the validator, has no T-junction
+  within a material (an exact oracle on the lattice), stays in the box,
+  is deterministic (the archive's obj equals a second build) and loads
+  back as a skin. 10 cases in a debug run, 200 in release.
 - Golden images: ten reference designs rendered through the real
-  renderer, compared pixel-exact in CI, so a kernel change that moves
-  a pixel is noticed.
+  renderer, compared in CI with a per-platform reference or a tolerance,
+  because f32 trigonometry differs by an ulp between the MSVC and glibc
+  runtimes and about one vertex in sixty snaps to a neighbouring lattice
+  cell on the other platform (invisible, but not pixel-exact).
 - Headless UI checks (the v2 scenario harness): undo across parts,
   reorder, group fold, cut badge, point edit, document roundtrip,
   v1 document migration.
