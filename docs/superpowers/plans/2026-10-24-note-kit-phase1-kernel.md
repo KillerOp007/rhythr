@@ -1957,7 +1957,7 @@ Add `pub mod levels;` to `kit/mod.rs`.
 1. Group materials. An Add-mode group folds per material: with `cuts = union(the group's Cut members)`, it contributes `subtract(union(its solid Add members), cuts)` as Add/Solid and `subtract(union(its glass Add members), cuts)` as Add/Glass (an empty contribution is skipped). A Cut-mode group contributes `subtract(union(all its Add members), cuts)` as one Cut. The rule "glass only when every member is glass" is wrong: a cut defaults to Solid and would turn a glass lens opaque. Glass stays glass and loses to solid only where the two overlap (spec 4.2 step 2).
 2. Groups are validated before anything is resolved: a part id listed in more than one group is `KitError::Doc(format!("part {id} is in more than one group"))`.
 3. The silhouette is the largest `extent` over the parts that add material: loose Add parts and Add members of Add-mode groups. Cut parts and every member of a Cut-mode group only remove and never count. The union of the adds is not built: the extent of a union equals the largest extent of its inputs.
-4. When `scale > 1.0`, every remover (a loose Cut part, a Cut member of an Add-mode group, every member of a Cut-mode group) is intersected with the silhouette square `vec![vec![vec![[-m, -m], [m, -m], [m, m], [-m, m]]]]` via `boolean(.., OverlayRule::Intersect)` BEFORE scaling: outside the square it removes nothing, and without the clip a scale above 1 pushes a cut past `KIT_RANGE` and a valid design fails with `KitError::Scale`.
+4. When `scale > 1.0`, every remover (a loose Cut part, a Cut member of an Add-mode group, every member of a Cut-mode group) is intersected with the square `let r = 3.0 * m; vec![vec![vec![[-r, -r], [r, -r], [r, r], [-r, r]]]]` via `boolean(.., OverlayRule::Intersect)` BEFORE scaling: outside the square it removes nothing, and without the clip a scale above 1 pushes a cut past `KIT_RANGE` and a valid design fails with `KitError::Scale`. The square is the silhouette plus a margin of two note units (three times `m`, which scales to half-extent 3.0, far inside `KIT_RANGE`): the finish runs on the clipped outline after scaling, and a rim or rounding reaches at most `MAX_FINISH = 0.9` from the outline, so with the margin the clip edge can never carve a band along the box.
 5. After scaling (only when `scale != 1.0`) every part is re-snapped to the lattice with a new helper in `geom.rs`, so single-contributor intervals sit on the same grid as overlay results:
 
 ```rust
@@ -2082,12 +2082,31 @@ with one test in `geom.rs`:
         assert_eq!(ev.intervals[0].solid[0].len(), 1);
         assert_eq!(ev.intervals[1].solid[0].len(), 2);
     }
+
+    #[test]
+    fn a_rimmed_cut_beyond_the_note_removes_nothing_when_scaled_up() {
+        // The plate has half-extent 0.5, so the scale is 2. The cut is a
+        // disc of radius 2 in note units with a rim of 0.2: a ring at
+        // 1.8..2.0, outside the box. Clipping the cut to the box itself
+        // would run the rim along the plate's edge and carve a band.
+        let mut plate = part("plate", Shape::Square { rounding: 0.0 }, Mode::Add, 0.1, -0.1);
+        plate.transform = Transform { w: 0.5, h: 0.5, ..Transform::default() };
+        let mut cut = part("cut", Shape::Circle, Mode::Cut, 0.1, -0.1);
+        cut.transform = Transform { w: 1.0, h: 1.0, ..Transform::default() };
+        cut.effects.rim = Some(0.2);
+        let ev = evaluate(&design(vec![plate, cut])).unwrap();
+        assert!((ev.scale - 2.0).abs() < 1e-3);
+        let solid = &ev.intervals[0].solid;
+        assert_eq!(solid.len(), 1);
+        assert_eq!(solid[0].len(), 1, "no band carved along the edge");
+        assert!((extent(solid) - 1.0).abs() < 1e-4);
+    }
 ```
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `cargo test -p rhythia-render kit::levels` and `cargo test -p rhythia-render kit::geom`
-Expected: 15 passed in levels, 9 passed in geom.
+Expected: 16 passed in levels, 9 passed in geom.
 
 - [ ] **Step 5: Commit**
 
