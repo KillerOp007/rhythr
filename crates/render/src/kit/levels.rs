@@ -4,10 +4,11 @@
 //! as a second region that yields to solid wherever both overlap.
 
 use crate::kit::doc::*;
-use crate::kit::geom::{boolean, extent, is_empty, OverlayRule, Shapes};
+use crate::kit::geom::{boolean, extent, is_empty, snap, OverlayRule, Shapes};
 use crate::kit::resolve::{finish_part, resolve_part, ResolvedPart};
 use crate::kit::{KitError, Z_MAX, Z_MIN};
 use std::borrow::Cow;
+use std::collections::HashSet;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Interval {
@@ -66,6 +67,36 @@ fn covers(p: &ResolvedPart, z0: f32, z1: f32) -> bool {
     p.depth.back < zm && zm < p.depth.front
 }
 
+/// The regions of the parts with this mode (and material, when given).
+fn gather<'a>(
+    parts: &[&'a ResolvedPart],
+    mode: Mode,
+    material: Option<Material>,
+) -> Vec<&'a Shapes> {
+    parts
+        .iter()
+        .filter(|p| p.mode == mode && material.is_none_or(|m| p.material == m))
+        .map(|p| &p.shapes)
+        .collect()
+}
+
+/// A part belongs to at most one group: its cuts would otherwise fold
+/// into two groups at once and mean two things.
+fn check_groups(groups: &[Group]) -> Result<(), KitError> {
+    let mut claimed: HashSet<&str> = HashSet::new();
+    for g in groups {
+        let mut own: HashSet<&str> = HashSet::new();
+        for id in &g.parts {
+            if own.insert(id.as_str()) && !claimed.insert(id.as_str()) {
+                return Err(KitError::Doc(format!(
+                    "part {id} is in more than one group"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 pub fn evaluate(design: &Design) -> Result<Evaluation, KitError> {
     for p in design.parts.iter().filter(|p| p.visible) {
         // Written as a binding so a NaN depth (which compares false both
@@ -84,6 +115,22 @@ pub fn evaluate(design: &Design) -> Result<Evaluation, KitError> {
             )));
         }
     }
+    check_groups(&design.groups)?;
+    let in_group: HashSet<&str> = design
+        .groups
+        .iter()
+        .flat_map(|g| g.parts.iter().map(String::as_str))
+        .collect();
+    let in_cut_group: HashSet<&str> = design
+        .groups
+        .iter()
+        .filter(|g| g.mode == Mode::Cut)
+        .flat_map(|g| g.parts.iter().map(String::as_str))
+        .collect();
+    // A remover only takes material away: a Cut part, or any member of a
+    // Cut-mode group.
+    let removes = |p: &ResolvedPart| p.mode == Mode::Cut || in_cut_group.contains(p.id.as_str());
+
     let mut parts: Vec<ResolvedPart> = design
         .parts
         .iter()
@@ -92,18 +139,28 @@ pub fn evaluate(design: &Design) -> Result<Evaluation, KitError> {
         .collect::<Result<_, _>>()?;
     parts.retain(|p| !p.shapes.is_empty());
 
-    // Normalise the silhouette (union of every add) to the unit box.
-    let adds: Vec<&Shapes> = parts
+    // The silhouette is what the adds cover; removers never count. The
+    // extent of a union is the largest extent of its inputs, so no union
+    // is needed to find it.
+    let m = parts
         .iter()
-        .filter(|p| p.mode == Mode::Add)
-        .map(|p| &p.shapes)
-        .collect();
-    let silhouette = union_all(&adds)?;
-    let m = extent(&silhouette);
+        .filter(|p| !removes(p))
+        .map(|p| extent(&p.shapes))
+        .fold(0.0f32, f32::max);
     if m < 1e-6 {
         return Err(KitError::Empty);
     }
     let scale = if (m - 1.0).abs() > 1e-4 { 1.0 / m } else { 1.0 };
+    if scale > 1.0 {
+        // Scaling up would push a remover that reaches far past the
+        // silhouette beyond the lattice range, failing a valid design.
+        // Outside the silhouette square a remover takes nothing away, so
+        // it is clipped to the square first.
+        let square: Shapes = vec![vec![vec![[-m, -m], [m, -m], [m, m], [-m, m]]]];
+        for p in parts.iter_mut().filter(|p| removes(p)) {
+            p.shapes = boolean(&p.shapes, &square, OverlayRule::Intersect)?;
+        }
+    }
     if scale != 1.0 {
         for p in &mut parts {
             for s in &mut p.shapes {
@@ -114,11 +171,16 @@ pub fn evaluate(design: &Design) -> Result<Evaluation, KitError> {
                     }
                 }
             }
+            // The multiply leaves the lattice; an interval with a single
+            // contributor never meets an overlay, so snap it here to keep
+            // every region on the same grid.
+            p.shapes = snap(&p.shapes)?;
         }
     }
-    // Rounding and rims are note-unit finishes, so they run on the
-    // normalised, merged regions (the v1 editor normalised first too); a
-    // finish never changes the outer extent, so the scale stays exact.
+    // Rounding and rims are note-unit finishes, so they run on each part's
+    // normalised, merged region (the v1 editor normalised first too). A
+    // finish never makes a part larger (a rim keeps the outer loop, a
+    // rounding pulls convex corners inward), so the box is never exceeded.
     for p in &mut parts {
         if p.round.is_some() || p.rim.is_some() {
             p.shapes = finish_part(&p.shapes, p.round, p.rim)?;
@@ -126,22 +188,16 @@ pub fn evaluate(design: &Design) -> Result<Evaluation, KitError> {
     }
     parts.retain(|p| !p.shapes.is_empty());
 
-    // Level set.
+    // Level set. NaN depths are rejected above, so the order is total.
     let mut levels: Vec<f32> = parts
         .iter()
         .flat_map(|p| [p.depth.back, p.depth.front])
         .collect();
-    levels.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    levels.sort_by(f32::total_cmp);
     levels.dedup_by(|a, b| (*a - *b).abs() < LEVEL_EPS);
 
-    let in_group: std::collections::HashMap<&str, &Group> = design
-        .groups
-        .iter()
-        .flat_map(|g| g.parts.iter().map(move |id| (id.as_str(), g)))
-        .collect();
-
     let mut intervals = Vec::with_capacity(levels.len().saturating_sub(1));
-    let mut any_solid = false;
+    let mut any_region = false;
     for w in levels.windows(2) {
         let (z0, z1) = (w[0], w[1]);
         let covering: Vec<&ResolvedPart> = parts.iter().filter(|p| covers(p, z0, z1)).collect();
@@ -156,31 +212,31 @@ pub fn evaluate(design: &Design) -> Result<Evaluation, KitError> {
             if members.is_empty() {
                 continue;
             }
-            let adds: Vec<&Shapes> = members
-                .iter()
-                .filter(|p| p.mode == Mode::Add)
-                .map(|p| &p.shapes)
-                .collect();
-            let cuts: Vec<&Shapes> = members
-                .iter()
-                .filter(|p| p.mode == Mode::Cut)
-                .map(|p| &p.shapes)
-                .collect();
-            let folded = subtract(&union_all(&adds)?, &union_all(&cuts)?)?;
-            let material = if members.iter().all(|p| p.material == Material::Glass) {
-                Material::Glass
-            } else {
-                Material::Solid
+            // The group's own cuts bite its own adds, material by material
+            // (a cut defaults to solid and must not turn glass opaque). An
+            // Add-mode group then adds both results; a Cut-mode group
+            // removes the union of its adds, whatever their material.
+            let cuts = union_all(&gather(&members, Mode::Cut, None))?;
+            let kinds: &[Option<Material>] = match g.mode {
+                Mode::Add => &[Some(Material::Solid), Some(Material::Glass)],
+                Mode::Cut => &[None],
             };
-            contributions.push(Contribution {
-                mode: g.mode,
-                material,
-                shapes: Cow::Owned(folded),
-            });
+            for material in kinds {
+                let adds = union_all(&gather(&members, Mode::Add, *material))?;
+                let folded = subtract(&adds, &cuts)?;
+                if is_empty(&folded) {
+                    continue;
+                }
+                contributions.push(Contribution {
+                    mode: g.mode,
+                    material: material.unwrap_or(Material::Solid),
+                    shapes: Cow::Owned(folded),
+                });
+            }
         }
         for p in covering
             .iter()
-            .filter(|p| !in_group.contains_key(p.id.as_str()))
+            .filter(|p| !in_group.contains(p.id.as_str()))
         {
             contributions.push(Contribution {
                 mode: p.mode,
@@ -201,7 +257,7 @@ pub fn evaluate(design: &Design) -> Result<Evaluation, KitError> {
             &subtract(&union_all(&pick(Mode::Add, Some(Material::Glass)))?, &cuts)?,
             &solid,
         )?;
-        any_solid |= !is_empty(&solid) || !is_empty(&glass);
+        any_region |= !is_empty(&solid) || !is_empty(&glass);
         intervals.push(Interval {
             z0,
             z1,
@@ -209,7 +265,7 @@ pub fn evaluate(design: &Design) -> Result<Evaluation, KitError> {
             glass,
         });
     }
-    if !any_solid {
+    if !any_region {
         return Err(KitError::Empty);
     }
     Ok(Evaluation {
@@ -444,5 +500,181 @@ mod tests {
             .fold(0.0f32, f32::max);
         assert!((hole - 0.7).abs() < 1e-3, "hole extent {hole}");
         assert!((extent(solid) - 1.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn glass_keeps_its_material_inside_a_group() {
+        let mut lens = part("lens", Shape::Circle, Mode::Add, 0.1, -0.1);
+        lens.material = Material::Glass;
+        let mut hole = part(
+            "hole",
+            Shape::Square { rounding: 0.0 },
+            Mode::Cut,
+            0.1,
+            -0.1,
+        );
+        hole.transform = Transform {
+            w: 0.5,
+            h: 0.5,
+            ..Transform::default()
+        };
+        let mut d = design(vec![lens, hole]);
+        d.groups = vec![Group {
+            id: "g".into(),
+            name: "g".into(),
+            parts: vec!["lens".into(), "hole".into()],
+            mode: Mode::Add,
+        }];
+        let ev = evaluate(&d).unwrap();
+        // The cut defaults to Solid, which must not turn the lens solid.
+        assert!(is_empty(&ev.intervals[0].solid));
+        assert_eq!(ev.intervals[0].glass.len(), 1);
+        assert_eq!(ev.intervals[0].glass[0].len(), 2, "the lens keeps its hole");
+    }
+
+    #[test]
+    fn a_cut_group_removes_the_union_of_its_adds() {
+        let plate = part(
+            "plate",
+            Shape::Square { rounding: 0.0 },
+            Mode::Add,
+            0.1,
+            -0.1,
+        );
+        let mut a = part("a", Shape::Circle, Mode::Add, 0.1, -0.1);
+        a.transform = Transform {
+            x: -0.5,
+            w: 0.3,
+            h: 0.3,
+            ..Transform::default()
+        };
+        let mut b = part("b", Shape::Circle, Mode::Add, 0.1, -0.1);
+        b.transform = Transform {
+            x: 0.9,
+            w: 0.3,
+            h: 0.3,
+            ..Transform::default()
+        };
+        let mut d = design(vec![plate, a, b]);
+        d.groups = vec![Group {
+            id: "g".into(),
+            name: "g".into(),
+            parts: vec!["a".into(), "b".into()],
+            mode: Mode::Cut,
+        }];
+        let ev = evaluate(&d).unwrap();
+        // One hole inside, one bite at the edge; the discs add nothing.
+        assert_eq!(ev.intervals[0].solid.len(), 1);
+        assert_eq!(ev.intervals[0].solid[0].len(), 2);
+        // The discs do not count toward the silhouette: the plate stays the box.
+        assert!((ev.scale - 1.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn a_part_in_two_groups_is_a_doc_error() {
+        let base = part("base", Shape::Circle, Mode::Add, 0.1, -0.1);
+        let mut d = design(vec![base]);
+        d.groups = vec![
+            Group {
+                id: "g1".into(),
+                name: "g1".into(),
+                parts: vec!["base".into()],
+                mode: Mode::Add,
+            },
+            Group {
+                id: "g2".into(),
+                name: "g2".into(),
+                parts: vec!["base".into()],
+                mode: Mode::Cut,
+            },
+        ];
+        assert!(matches!(evaluate(&d), Err(KitError::Doc(_))));
+    }
+
+    #[test]
+    fn a_far_cut_does_not_fail_a_small_note() {
+        // The disc has half-extent 0.01, so the scale is 100; the cut's far
+        // edge would land at 100, past KIT_RANGE, without the clip.
+        let mut disc = part("disc", Shape::Circle, Mode::Add, 0.1, -0.1);
+        disc.transform = Transform {
+            w: 0.01,
+            h: 0.01,
+            ..Transform::default()
+        };
+        let mut cut = part("cut", Shape::Square { rounding: 0.0 }, Mode::Cut, 0.1, -0.1);
+        cut.transform = Transform {
+            x: 0.5,
+            w: 0.5,
+            h: 0.5,
+            ..Transform::default()
+        };
+        let ev = evaluate(&design(vec![disc, cut])).unwrap();
+        assert!((ev.scale - 100.0).abs() < 0.1);
+        let solid = &ev.intervals[0].solid;
+        assert_eq!(solid.len(), 1);
+        // The cut covers x >= 0: the left half-disc remains and reaches -1.
+        assert!(solid[0][0].iter().all(|p| p[0] <= 1e-3));
+        assert!((extent(solid) - 1.0).abs() < 2e-3);
+    }
+
+    #[test]
+    fn glass_survives_where_it_does_not_overlap_solid() {
+        let mut solid = part(
+            "solid",
+            Shape::Square { rounding: 0.0 },
+            Mode::Add,
+            0.1,
+            -0.1,
+        );
+        solid.transform = Transform {
+            x: -0.5,
+            w: 0.5,
+            h: 0.5,
+            ..Transform::default()
+        };
+        let mut glass = part(
+            "glass",
+            Shape::Square { rounding: 0.0 },
+            Mode::Add,
+            0.1,
+            -0.1,
+        );
+        glass.material = Material::Glass;
+        glass.transform = Transform {
+            x: 0.5,
+            w: 0.5,
+            h: 0.5,
+            ..Transform::default()
+        };
+        let ev = evaluate(&design(vec![solid, glass])).unwrap();
+        let iv = &ev.intervals[0];
+        // Side by side, both survive and together fill the box.
+        assert_eq!(iv.solid.len(), 1);
+        assert_eq!(iv.glass.len(), 1);
+        assert!(iv.solid[0][0].iter().all(|p| p[0] <= 1e-4));
+        assert!(iv.glass[0][0].iter().all(|p| p[0] >= -1e-4));
+        assert!((extent(&iv.glass) - 1.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn a_cut_stays_inside_its_band() {
+        let plate = part(
+            "plate",
+            Shape::Square { rounding: 0.0 },
+            Mode::Add,
+            0.1,
+            -0.3,
+        );
+        let mut hole = part("hole", Shape::Circle, Mode::Cut, 0.1, -0.1);
+        hole.transform = Transform {
+            w: 0.4,
+            h: 0.4,
+            ..Transform::default()
+        };
+        let ev = evaluate(&design(vec![plate, hole])).unwrap();
+        assert_eq!(ev.levels.len(), 3);
+        // Lower band: the plate is whole. Upper band: the plate has the hole.
+        assert_eq!(ev.intervals[0].solid[0].len(), 1);
+        assert_eq!(ev.intervals[1].solid[0].len(), 2);
     }
 }

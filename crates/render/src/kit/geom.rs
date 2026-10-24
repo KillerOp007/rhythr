@@ -117,6 +117,16 @@ pub fn clean(contours: &[Contour], rule: FillRule) -> Result<Shapes, KitError> {
     overlay(&vec![raw], &Vec::new(), OverlayRule::Subject, rule)
 }
 
+/// Passes a region through the shared lattice once more, so coordinates
+/// produced outside i_overlay (a scale, a hand-written contour) sit on
+/// the same grid as every overlay result.
+pub fn snap(shapes: &Shapes) -> Result<Shapes, KitError> {
+    if shapes.is_empty() {
+        return Ok(Vec::new());
+    }
+    overlay(shapes, &Vec::new(), OverlayRule::Subject, FillRule::NonZero)
+}
+
 /// Boolean of two clean regions (nonzero: both are already consistent).
 pub fn boolean(a: &Shapes, b: &Shapes, rule: OverlayRule) -> Result<Shapes, KitError> {
     if a.is_empty() && b.is_empty() {
@@ -300,5 +310,18 @@ mod tests {
         ));
         let a = clean(&[square(1.0)], FillRule::NonZero).unwrap();
         assert!(matches!(offset(&a, f32::NAN), Err(KitError::Scale(_))));
+    }
+
+    #[test]
+    fn snap_puts_every_coordinate_on_the_lattice() {
+        let tri: Shapes = vec![vec![vec![[0.1, 0.2], [0.3, 0.2], [0.3, 0.7]]]];
+        let snapped = snap(&tri).unwrap();
+        assert_eq!(snapped[0][0].len(), 3);
+        for p in snapped.iter().flatten().flatten() {
+            for v in p {
+                let k = v * KIT_SCALE;
+                assert!((k - k.round()).abs() < 1e-2, "{v} is off the lattice");
+            }
+        }
     }
 }
