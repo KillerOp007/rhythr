@@ -69,8 +69,14 @@ pub fn from_v1(json: &str) -> Result<Design, KitError> {
                 },
             });
         }
+        // v1 applied the rounding slider to squares as well, and drew the
+        // square as a 4-gon turned 45 degrees; the kit's sharp `Square`
+        // would lose that rounding.
         let shape = match s("shape", "circle").as_str() {
-            "square" => Shape::Square,
+            "square" => Shape::Polygon {
+                sides: 4,
+                rounding: f("round", 0.3),
+            },
             "ngon" => Shape::Polygon {
                 sides: f("n", 6.0) as u32,
                 rounding: f("round", 0.3),
@@ -79,6 +85,14 @@ pub fn from_v1(json: &str) -> Result<Design, KitError> {
         };
         (shape, "Shape")
     };
+    // v1 sampled its radius at (angle + offset + twist), which turns the
+    // shape by MINUS that angle; the kit rotates counterclockwise by plus.
+    let offset_deg = if s("shape", "circle") == "square" {
+        45.0
+    } else {
+        0.0
+    };
+    let rotation = -(offset_deg + f("twist", 0.0));
     let depth = f("depth", 0.05).clamp(0.005, 0.5);
     Ok(Design {
         version: 2,
@@ -91,7 +105,7 @@ pub fn from_v1(json: &str) -> Result<Design, KitError> {
             locked: false,
             shape,
             transform: Transform {
-                rotation: f("twist", 0.0),
+                rotation,
                 ..Transform::default()
             },
             mode: Mode::Add,
@@ -137,7 +151,9 @@ mod tests {
                 style: WaveStyle::Spike
             })
         );
-        assert_eq!(p.transform.rotation, 30.0);
+        // v1 sampled the radius at angle + twist, which turns the shape
+        // clockwise; the kit rotates counterclockwise, hence the sign.
+        assert_eq!(p.transform.rotation, -30.0);
         assert_eq!(
             p.depth,
             Depth {
@@ -145,6 +161,23 @@ mod tests {
                 back: -0.05
             }
         );
+    }
+
+    #[test]
+    fn a_v1_square_keeps_its_rounding_as_a_turned_four_gon() {
+        let json = SLIDERS
+            .replace(r#""shape":"ngon""#, r#""shape":"square""#)
+            .replace(r#""twist":30"#, r#""twist":0"#);
+        let d = from_v1(&json).unwrap();
+        let p = &d.parts[0];
+        assert_eq!(
+            p.shape,
+            Shape::Polygon {
+                sides: 4,
+                rounding: 0.3
+            }
+        );
+        assert_eq!(p.transform.rotation, -45.0);
     }
 
     #[test]
