@@ -28,6 +28,7 @@ version = "3"
 [dev-dependencies]
 tempfile = "3"
 serde_json.workspace = true
+proptest = "1"
 # Writing synthetic .rhs test packs needs the zip writer (the runtime dep is
 # deflate-decode only).
 zip = { version = "2", default-features = false, features = ["deflate"] }

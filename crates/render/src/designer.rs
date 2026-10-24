@@ -35,7 +35,7 @@ use i_triangle::float::triangulatable::Triangulatable;
 /// One control point of the editor's freeform loop. Smooth points get
 /// spline tangents (the curve flows through them); corners break the
 /// tangent so the outline can kink exactly there.
-#[derive(Debug, Clone, Copy, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct ControlPoint {
     pub x: f32,
     pub y: f32,
