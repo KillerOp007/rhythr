@@ -5,6 +5,7 @@
 //! lets caps and walls share rings without ever drifting apart.
 
 pub mod doc;
+pub mod geom;
 pub mod migrate;
 
 pub use doc::*;
