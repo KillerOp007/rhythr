@@ -153,10 +153,14 @@ pub fn evaluate(design: &Design) -> Result<Evaluation, KitError> {
     let scale = if (m - 1.0).abs() > 1e-4 { 1.0 / m } else { 1.0 };
     if scale > 1.0 {
         // Scaling up would push a remover that reaches far past the
-        // silhouette beyond the lattice range, failing a valid design.
-        // Outside the silhouette square a remover takes nothing away, so
-        // it is clipped to the square first.
-        let square: Shapes = vec![vec![vec![[-m, -m], [m, -m], [m, m], [-m, m]]]];
+        // silhouette beyond the lattice range, failing a valid design, so
+        // it is clipped first. The square is the silhouette plus a margin
+        // of two note units (it scales to half-extent 3.0, far inside the
+        // range): the finish runs on the clipped outline after scaling and
+        // reaches at most MAX_FINISH (0.9) from it, so with the margin the
+        // clip edge can never carve a band along the box.
+        let r = 3.0 * m;
+        let square: Shapes = vec![vec![vec![[-r, -r], [r, -r], [r, r], [-r, r]]]];
         for p in parts.iter_mut().filter(|p| removes(p)) {
             p.shapes = boolean(&p.shapes, &square, OverlayRule::Intersect)?;
         }
@@ -676,5 +680,38 @@ mod tests {
         // Lower band: the plate is whole. Upper band: the plate has the hole.
         assert_eq!(ev.intervals[0].solid[0].len(), 1);
         assert_eq!(ev.intervals[1].solid[0].len(), 2);
+    }
+
+    #[test]
+    fn a_rimmed_cut_beyond_the_note_removes_nothing_when_scaled_up() {
+        // The plate has half-extent 0.5, so the scale is 2. The cut is a
+        // disc of radius 2 in note units with a rim of 0.2: a ring at
+        // 1.8..2.0, outside the box. Clipping the cut to the box itself
+        // would run the rim along the plate's edge and carve a band.
+        let mut plate = part(
+            "plate",
+            Shape::Square { rounding: 0.0 },
+            Mode::Add,
+            0.1,
+            -0.1,
+        );
+        plate.transform = Transform {
+            w: 0.5,
+            h: 0.5,
+            ..Transform::default()
+        };
+        let mut cut = part("cut", Shape::Circle, Mode::Cut, 0.1, -0.1);
+        cut.transform = Transform {
+            w: 1.0,
+            h: 1.0,
+            ..Transform::default()
+        };
+        cut.effects.rim = Some(0.2);
+        let ev = evaluate(&design(vec![plate, cut])).unwrap();
+        assert!((ev.scale - 2.0).abs() < 1e-3);
+        let solid = &ev.intervals[0].solid;
+        assert_eq!(solid.len(), 1);
+        assert_eq!(solid[0].len(), 1, "no band carved along the edge");
+        assert!((extent(solid) - 1.0).abs() < 1e-4);
     }
 }
