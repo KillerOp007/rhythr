@@ -1,7 +1,10 @@
 // crates/gui/ui/kit/render.js
-// Panels are rewritten from state on every change. Nothing in the DOM
-// is a source of truth; a focused input keeps its own text until it
-// commits, everything else is replaced.
+// A panel is rebuilt only when its structure changes (parts added, removed or
+// reordered, another part or shape kind selected, a colour added or removed)
+// and is patched in place otherwise. A rebuild between mousedown and mouseup
+// detaches the button under the pointer and the click never lands. Nothing in
+// the DOM is a source of truth: a field the user is typing in keeps its text
+// until it commits, every other widget is rewritten from state.
 import { DEPTH_MIN, DEPTH_MAX, SHAPES } from "./store.js";
 
 export const MIN_BAND = 0.05;
@@ -9,6 +12,10 @@ export const MIN_BAND = 0.05;
 export function fmt(v, step) {
   const d = step >= 1 ? 0 : Math.max(0, Math.ceil(-Math.log10(step)));
   return Number(v).toFixed(d);
+}
+
+export function roundToStep(v, step) {
+  return Number(fmt(v, step));
 }
 
 export function clampDepth(front, back, which, value) {
@@ -46,22 +53,17 @@ const KIND_LABELS = { circle: "Disc", square: "Square", polygon: "Polygon", star
 
 const $ = (id) => document.getElementById(id);
 
-// Live widgets of the current inspector build, so a skipped rebuild can still
-// refresh the fields that did not have focus (a depth edit moves the other end).
-let numberFields = [];
-let depthBand = null;
-// What each panel was last built from. A render whose state shows the same
-// thing leaves the DOM alone: an evaluate result must not replace the slider
-// being dragged or the row being dragged.
-let partsSig = null;
-let inspectorSig = null;
+// What each panel was built for, and the handles to patch it with.
+let partsKey = null;
+let partRows = [];
+let inspectorKey = null;
 let inspectorId = null;
-let colorsSig = null;
-// True while a slider's own input event is being committed: its value is
-// already on screen, and rebuilding would end the drag under the pointer.
-let sliderCommit = false;
-// Drag sources live outside the panels: a render between dragstart and drop
-// (an evaluate result) replaces the rows but not the drag in progress.
+let inspectorWidgets = []; // each: (part) => void, rewrites its widget from state
+let kindSelect = null;
+let colorsKey = null;
+let colorRows = [];
+// Drag sources live outside the panels: a part drag survives the reorder
+// rebuild that its own drop causes.
 let dragPartId = null;
 let dragColorIdx = -1;
 
@@ -77,83 +79,123 @@ function el(tag, attrs = {}, children = []) {
   return e;
 }
 
-function slider(label, value, min, max, step, onInput) {
-  const val = el("span", { class: "val", text: fmt(value, step) });
-  const range = el("input", { type: "range", min, max, step, value });
+function setText(node, text) {
+  if (node.textContent !== text) node.textContent = text;
+}
+
+// Every text-like field remembers what it last showed. A field whose text
+// differs from that is mid-edit and keeps its text; otherwise it follows state.
+function setShown(input, text) {
+  if (input.value !== text) input.value = text;
+  input.dataset.shown = text;
+}
+function showText(input, text) {
+  if (document.activeElement === input && input.value !== input.dataset.shown) return;
+  setShown(input, text);
+}
+
+function slider(p, label, read, min, max, step, onInput) {
+  const val = el("span", { class: "val", text: fmt(read(p), step) });
+  const range = el("input", { type: "range", min, max, step, value: read(p) });
   range.addEventListener("input", () => {
-    val.textContent = fmt(range.value, step);
-    sliderCommit = true;
-    try {
-      onInput(Number(range.value));
-    } finally {
-      sliderCommit = false;
-    }
+    setText(val, fmt(range.value, step));
+    onInput(Number(range.value));
+  });
+  inspectorWidgets.push((q) => {
+    if (Number(range.value) !== read(q)) range.value = read(q);
+    setText(val, fmt(read(q), step));
   });
   return el("div", { class: "kt-field" }, [el("label", { text: label }), range, val]);
 }
 
-// read(part) is the value the field shows; after a commit the field shows
-// what the state kept (clamped, or untouched when the text was unusable).
+// read(part) is the value the field shows. A commit rounds to the field's
+// step, and changes nothing when the text is untouched, unusable or equal to
+// the state; afterwards the field shows what the state kept.
 function number(store, id, label, read, min, max, step, onCommit) {
-  const input = el("input", { type: "number", min, max, step, value: fmt(read(store.part(id)), step) });
-  const show = () => {
-    const q = store.part(id);
-    if (q) input.value = fmt(read(q), step);
-  };
+  const input = el("input", { type: "number", min, max, step });
+  setShown(input, fmt(read(store.part(id)), step));
   const commit = () => {
     const q = store.part(id);
-    const v = Number(input.value);
-    if (q && input.value.trim() !== "" && Number.isFinite(v)) {
-      const next = Math.max(min, Math.min(max, v));
-      if (Math.abs(next - read(q)) > 1e-9) onCommit(next);
+    if (q && input.value !== input.dataset.shown && input.value.trim() !== "") {
+      const v = Number(input.value);
+      if (Number.isFinite(v)) {
+        const next = roundToStep(Math.max(min, Math.min(max, v)), step);
+        if (Math.abs(next - read(q)) > 1e-9) onCommit(next);
+      }
     }
-    show();
+    const now = store.part(id);
+    if (now) setShown(input, fmt(read(now), step));
   };
   input.addEventListener("change", commit);
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter") commit();
   });
-  numberFields.push({ input, read, step });
+  inspectorWidgets.push((q) => showText(input, fmt(read(q), step)));
   return el("div", { class: "kt-field" }, [el("label", { text: label }), input]);
 }
 
-function segmented(label, options, current, onPick) {
-  const seg = el("div", { class: "kt-seg" }, options.map(([v, text]) =>
-    el("button", { class: `btn small${v === current ? " on" : ""}`, text, onclick: () => onPick(v) })));
-  return el("div", { class: "kt-field" }, [el("label", { text: label }), seg]);
+function segmented(p, label, options, read, onPick) {
+  const buttons = options.map(([v, text]) => [v, el("button", { class: "btn small", text, onclick: () => onPick(v) })]);
+  const mark = (q) => {
+    for (const [v, b] of buttons) b.classList.toggle("on", read(q) === v);
+  };
+  mark(p);
+  inspectorWidgets.push(mark);
+  return el("div", { class: "kt-field" }, [el("label", { text: label }), el("div", { class: "kt-seg" }, buttons.map(([, b]) => b))]);
+}
+
+function buildParts(store, root) {
+  root.replaceChildren();
+  partRows = [];
+  for (const { id } of store.state.design.parts) {
+    const row = el("div", { class: "kt-part", draggable: "true" });
+    const eye = el("button", { class: "btn small ghost",
+      onclick: (e) => { e.stopPropagation(); store.updatePart(id, "visible", (x) => (x.visible = !x.visible)); } });
+    const lock = el("button", { class: "btn small ghost",
+      onclick: (e) => { e.stopPropagation(); store.updatePart(id, "lock", (x) => (x.locked = !x.locked)); } });
+    const name = el("span", { class: "name" });
+    const mode = el("span", { class: "badge" });
+    const material = el("span", { class: "badge" });
+    row.append(eye, lock, name, mode, material);
+    row.addEventListener("click", () => store.select(id));
+    row.addEventListener("dragstart", (e) => { dragPartId = id; row.classList.add("dragging"); e.dataTransfer.effectAllowed = "move"; });
+    row.addEventListener("dragend", () => { dragPartId = null; row.classList.remove("dragging"); });
+    row.addEventListener("dragover", (e) => e.preventDefault());
+    row.addEventListener("drop", (e) => {
+      e.preventDefault();
+      if (!dragPartId || dragPartId === id) return;
+      const to = store.state.design.parts.findIndex((x) => x.id === id);
+      const from = dragPartId;
+      dragPartId = null;
+      store.movePart(from, to);
+    });
+    root.append(row);
+    partRows.push({ id, row, eye, lock, name, mode, material });
+  }
 }
 
 function renderParts(store) {
   const s = store.state;
   const root = $("kt-parts");
-  const sig = JSON.stringify([s.selected, s.design.parts.map((p) => [p.id, p.name, p.visible, p.locked, p.mode, p.material])]);
-  if (sig === partsSig) return;
-  partsSig = sig;
-  root.replaceChildren();
-  for (const p of s.design.parts) {
-    const row = el("div", { class: `kt-part${p.id === s.selected ? " selected" : ""}${p.visible ? "" : " hidden-part"}`, draggable: "true" });
-    row.append(
-      el("button", { class: "btn small ghost", title: p.visible ? "Hide" : "Show", text: p.visible ? "👁" : "◌",
-        onclick: (e) => { e.stopPropagation(); store.updatePart(p.id, "visible", (x) => (x.visible = !x.visible)); } }),
-      el("button", { class: "btn small ghost", title: p.locked ? "Unlock" : "Lock", text: p.locked ? "🔒" : "🔓",
-        onclick: (e) => { e.stopPropagation(); store.updatePart(p.id, "lock", (x) => (x.locked = !x.locked)); } }),
-      el("span", { class: "name", text: p.name }),
-      el("span", { class: `badge${p.mode === "cut" ? " cut" : ""}`, text: p.mode === "cut" ? "Cut" : "Add" }),
-      el("span", { class: `badge${p.material === "glass" ? " glass" : ""}`, text: p.material === "glass" ? "Glass" : "Solid" }),
-    );
-    row.addEventListener("click", () => store.select(p.id));
-    row.addEventListener("dragstart", (e) => { dragPartId = p.id; row.classList.add("dragging"); e.dataTransfer.effectAllowed = "move"; });
-    row.addEventListener("dragend", () => { dragPartId = null; row.classList.remove("dragging"); });
-    row.addEventListener("dragover", (e) => e.preventDefault());
-    row.addEventListener("drop", (e) => {
-      e.preventDefault();
-      if (!dragPartId || dragPartId === p.id) return;
-      const to = s.design.parts.findIndex((x) => x.id === p.id);
-      const id = dragPartId;
-      dragPartId = null;
-      store.movePart(id, to);
-    });
-    root.append(row);
+  const key = s.design.parts.map((p) => p.id).join(",");
+  if (key !== partsKey) {
+    partsKey = key;
+    buildParts(store, root);
+  }
+  for (const r of partRows) {
+    const p = store.part(r.id);
+    if (!p) continue;
+    r.row.classList.toggle("selected", p.id === s.selected);
+    r.row.classList.toggle("hidden-part", !p.visible);
+    setText(r.eye, p.visible ? "👁" : "◌");
+    r.eye.setAttribute("title", p.visible ? "Hide" : "Show");
+    setText(r.lock, p.locked ? "🔒" : "🔓");
+    r.lock.setAttribute("title", p.locked ? "Unlock" : "Lock");
+    setText(r.name, p.name);
+    r.mode.classList.toggle("cut", p.mode === "cut");
+    setText(r.mode, p.mode === "cut" ? "Cut" : "Add");
+    r.material.classList.toggle("glass", p.material === "glass");
+    setText(r.material, p.material === "glass" ? "Glass" : "Solid");
   }
 }
 
@@ -164,70 +206,67 @@ function placeDepthBand(band, depth) {
   band.style.right = `${100 - at(depth.front)}%`;
 }
 
-function renderInspector(store) {
-  const body = $("kt-inspector-body");
-  const p = store.part();
-  const sig = p ? JSON.stringify(p) : "";
-  if (sig === inspectorSig) return;
-  if (sliderCommit) {
-    inspectorSig = sig;
-    return;
-  }
-  const focused = document.activeElement;
-  const typing = focused && body.contains(focused) && focused.tagName === "INPUT" && focused.type !== "range";
-  if (typing && p && inspectorId === p.id) {
-    // The typed text stays; the other fields and the depth bar follow the state.
-    for (const f of numberFields) if (f.input !== focused) f.input.value = fmt(f.read(p), f.step);
-    if (depthBand) placeDepthBand(depthBand, p.depth);
-    inspectorSig = sig;
-    return;
-  }
-  inspectorSig = sig;
-  inspectorId = p ? p.id : null;
-  body.replaceChildren();
-  numberFields = [];
-  depthBand = null;
-  if (!p) {
-    body.append(el("div", { class: "hint", text: "Select a part, or add one from the toolbar." }));
-    return;
-  }
+function buildInspector(store, body, p) {
   const id = p.id;
   const up = (label, patch) => store.updatePart(id, label, patch);
+  const get = () => store.part(id);
   body.append(el("h2", { text: "Part" }));
-  const name = el("input", { type: "text", value: p.name });
+
+  const name = el("input", { type: "text" });
+  setShown(name, p.name);
   name.addEventListener("change", () => {
     const next = name.value.trim();
-    if (next && next !== store.part(id)?.name) up("name", (x) => (x.name = next));
-    name.value = store.part(id)?.name ?? name.value;
+    if (next && next !== get()?.name) up("name", (x) => (x.name = next));
+    const now = get();
+    if (now) setShown(name, now.name);
   });
+  inspectorWidgets.push((q) => showText(name, q.name));
   body.append(el("div", { class: "kt-field" }, [el("label", { text: "Name" }), name]));
+
   const kind = p.shape.kind;
-  const kindSelect = el("select", {});
+  kindSelect = el("select", { "data-role": "kind" });
   for (const k of Object.keys(SHAPES)) kindSelect.append(el("option", { value: k, text: KIND_LABELS[k], selected: k === kind ? "" : null }));
   if (!(kind in SHAPES)) kindSelect.append(el("option", { value: kind, text: KIND_LABELS[kind] || kind, selected: "" }));
-  kindSelect.addEventListener("change", () => up("shape", (x) => (x.shape = SHAPES[kindSelect.value]())));
-  body.append(el("div", { class: "kt-field" }, [el("label", { text: "Shape" }), kindSelect]));
+  const picker = kindSelect;
+  picker.addEventListener("change", () => {
+    if (picker.value !== kind) up("shape", (x) => (x.shape = SHAPES[picker.value]()));
+  });
+  body.append(el("div", { class: "kt-field" }, [el("label", { text: "Shape" }), picker]));
   for (const [key, label, min, max, step] of shapeFields(kind)) {
-    body.append(slider(label, p.shape[key], min, max, step, (v) => up(`shape.${key}:${id}`, (x) => (x.shape[key] = v))));
+    body.append(slider(p, label, (q) => q.shape[key], min, max, step, (v) => up(`shape.${key}:${id}`, (x) => (x.shape[key] = v))));
   }
-  body.append(segmented("Mode", [["add", "Add"], ["cut", "Cut"]], p.mode, (v) => up("mode", (x) => (x.mode = v))));
-  body.append(segmented("Material", [["solid", "Solid"], ["glass", "Glass"]], p.material, (v) => up("material", (x) => (x.material = v))));
+
+  const pick = (key, label) => (v) => {
+    if (get()?.[key] !== v) up(label, (x) => (x[key] = v));
+  };
+  body.append(segmented(p, "Mode", [["add", "Add"], ["cut", "Cut"]], (q) => q.mode, pick("mode", "mode")));
+  body.append(segmented(p, "Material", [["solid", "Solid"], ["glass", "Glass"]], (q) => q.material, pick("material", "material")));
+
   body.append(el("h2", { text: "Position and size" }));
-  const t = p.transform;
-  body.append(number(store, id, "X", (q) => q.transform.x, -1.5, 1.5, 0.01, (v) => up(`x:${id}`, (x) => (x.transform.x = v))));
-  body.append(number(store, id, "Y", (q) => q.transform.y, -1.5, 1.5, 0.01, (v) => up(`y:${id}`, (x) => (x.transform.y = v))));
-  body.append(number(store, id, "Width", (q) => q.transform.w, 0.02, 1.5, 0.01, (v) => up(`w:${id}`, (x) => (x.transform.w = v))));
-  body.append(number(store, id, "Height", (q) => q.transform.h, 0.02, 1.5, 0.01, (v) => up(`h:${id}`, (x) => (x.transform.h = v))));
-  body.append(slider("Rotation", t.rotation, -180, 180, 1, (v) => up(`rotation:${id}`, (x) => (x.transform.rotation = v))));
+  const field = (label, read, min, max, write) => number(store, id, label, read, min, max, 0.01, (v) => up(`${write}:${id}`, (x) => (x.transform[write] = v)));
+  body.append(field("X", (q) => q.transform.x, -1.5, 1.5, "x"));
+  body.append(field("Y", (q) => q.transform.y, -1.5, 1.5, "y"));
+  body.append(field("Width", (q) => q.transform.w, 0.02, 1.5, "w"));
+  body.append(field("Height", (q) => q.transform.h, 0.02, 1.5, "h"));
+  body.append(slider(p, "Rotation", (q) => q.transform.rotation, -180, 180, 1, (v) => up(`rotation:${id}`, (x) => (x.transform.rotation = v))));
+
   body.append(el("h2", { text: "Depth" }));
   const bar = el("div", { id: "kt-depth-bar" });
-  depthBand = el("div", { class: "band" });
-  placeDepthBand(depthBand, p.depth);
-  bar.append(depthBand);
-  bar.append(el("div", { class: "zero", style: `left:${((0 - DEPTH_MIN) / (DEPTH_MAX - DEPTH_MIN)) * 100}%` }));
+  const band = el("div", { class: "band" });
+  bar.append(band, el("div", { class: "zero", style: `left:${((0 - DEPTH_MIN) / (DEPTH_MAX - DEPTH_MIN)) * 100}%` }));
+  placeDepthBand(band, p.depth);
+  inspectorWidgets.push((q) => placeDepthBand(band, q.depth));
   body.append(bar);
-  body.append(number(store, id, "Front", (q) => q.depth.front, DEPTH_MIN, DEPTH_MAX, 0.05, (v) => up(`depth:${id}`, (x) => (x.depth = clampDepth(x.depth.front, x.depth.back, "front", v)))));
-  body.append(number(store, id, "Back", (q) => q.depth.back, DEPTH_MIN, DEPTH_MAX, 0.05, (v) => up(`depth:${id}`, (x) => (x.depth = clampDepth(x.depth.front, x.depth.back, "back", v)))));
+  // Front and Back push each other apart; an edit the clamp turns into the
+  // current depth changes nothing.
+  const depth = (which) => (v) => {
+    const q = get();
+    if (!q) return;
+    const next = clampDepth(q.depth.front, q.depth.back, which, v);
+    if (next.front !== q.depth.front || next.back !== q.depth.back) up(`depth:${id}`, (x) => (x.depth = next));
+  };
+  body.append(number(store, id, "Front", (q) => q.depth.front, DEPTH_MIN, DEPTH_MAX, 0.05, depth("front")));
+  body.append(number(store, id, "Back", (q) => q.depth.back, DEPTH_MIN, DEPTH_MAX, 0.05, depth("back")));
   body.append(el("div", { class: "hint", text: "Front faces the player. The game's own disc spans 0.1 to -0.1." }));
   body.append(el("div", { class: "kt-field" }, [
     el("button", { class: "btn small ghost", text: "Duplicate", onclick: () => store.duplicatePart(id) }),
@@ -235,38 +274,57 @@ function renderInspector(store) {
   ]));
 }
 
-function renderColors(store) {
-  const s = store.state;
-  const root = $("kt-colors");
-  const colors = s.design.colors;
-  const sig = colors.join(",");
-  if (sig === colorsSig) return;
-  colorsSig = sig;
-  const focused = document.activeElement;
-  if (focused && root.contains(focused) && focused.tagName === "INPUT" && root.children.length === colors.length) {
-    // A picker being dragged or a hex being typed must survive the commit it
-    // caused: the other rows follow the state, the focused input stays.
-    colors.forEach((hex, i) => {
-      for (const input of root.children[i].querySelectorAll("input")) if (input !== focused) input.value = hex;
-    });
+function renderInspector(store) {
+  const body = $("kt-inspector-body");
+  const p = store.part();
+  const key = p ? `${p.id}|${p.shape.kind}` : "";
+  if (key === inspectorKey) {
+    if (p) for (const sync of inspectorWidgets) sync(p);
     return;
   }
+  // The shape select rebuilds the panel it sits in; keyboard users stay on it.
+  const focused = document.activeElement;
+  const kindHadFocus = !!focused && !!focused.dataset && focused.dataset.role === "kind" && !!p && p.id === inspectorId;
+  inspectorKey = key;
+  inspectorId = p ? p.id : null;
+  inspectorWidgets = [];
+  kindSelect = null;
+  body.replaceChildren();
+  if (!p) {
+    body.append(el("div", { class: "hint", text: "Select a part, or add one from the toolbar." }));
+    return;
+  }
+  buildInspector(store, body, p);
+  if (kindHadFocus && kindSelect) kindSelect.focus();
+}
+
+function buildColors(store, root) {
+  const s = store.state;
   root.replaceChildren();
-  colors.forEach((hex, i) => {
+  colorRows = [];
+  const count = s.design.colors.length;
+  for (let i = 0; i < count; i++) {
     const row = el("div", { class: "kt-color-row", draggable: "true" });
-    const pick = el("input", { type: "color", value: hex });
-    const text = el("input", { type: "text", class: "hex", value: hex });
+    const pick = el("input", { type: "color" });
+    const text = el("input", { type: "text", class: "hex" });
     const set = (v) => {
-      if (/^#[0-9a-fA-F]{6}$/.test(v)) store.commit(`color:${i}`, (d) => (d.colors[i] = v.toLowerCase()));
-      text.value = s.design.colors[i] ?? text.value;
+      const cur = s.design.colors[i];
+      if (/^#[0-9a-fA-F]{6}$/.test(v) && cur !== undefined && v.toLowerCase() !== cur.toLowerCase()) {
+        store.commit(`color:${i}`, (d) => (d.colors[i] = v.toLowerCase()));
+      }
     };
     pick.addEventListener("input", () => set(pick.value));
-    text.addEventListener("change", () => set(text.value.trim()));
+    text.addEventListener("change", () => {
+      set(text.value.trim());
+      const now = s.design.colors[i];
+      if (now !== undefined) setShown(text, now);
+    });
     row.append(
       el("span", { class: "grip", text: "⋮⋮", title: "Drag to reorder: the notes play the colors in this order" }),
       pick,
       text,
-      el("button", { class: "btn small ghost", text: "×", title: "Remove color",
+      // The last colour cannot go: a note needs one.
+      el("button", { class: "btn small ghost", text: "×", title: "Remove color", disabled: count <= 1 ? "" : null,
         onclick: () => { if (s.design.colors.length > 1) store.commit("color-remove", (d) => d.colors.splice(i, 1)); } }),
     );
     row.addEventListener("dragstart", () => { dragColorIdx = i; row.classList.add("dragging"); });
@@ -280,6 +338,21 @@ function renderColors(store) {
       store.commit("color-reorder", (d) => { const [c] = d.colors.splice(from, 1); d.colors.splice(i, 0, c); });
     });
     root.append(row);
+    colorRows.push({ pick, text });
+  }
+}
+
+function renderColors(store) {
+  const colors = store.state.design.colors;
+  const key = String(colors.length);
+  if (key !== colorsKey) {
+    colorsKey = key;
+    buildColors(store, $("kt-colors"));
+  }
+  colors.forEach((hex, i) => {
+    const r = colorRows[i];
+    if (r.pick.value.toLowerCase() !== hex.toLowerCase()) r.pick.value = hex;
+    showText(r.text, hex);
   });
 }
 

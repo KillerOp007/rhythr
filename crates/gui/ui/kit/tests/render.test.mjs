@@ -1,12 +1,19 @@
 // crates/gui/ui/kit/tests/render.test.mjs
 import test from "node:test";
 import assert from "node:assert/strict";
-import { fmt, clampDepth, shapeFields } from "../render.js";
+import { fmt, roundToStep, clampDepth, shapeFields } from "../render.js";
 
 test("numbers_show_as_many_decimals_as_their_step", () => {
   assert.equal(fmt(0.123456, 0.01), "0.12");
   assert.equal(fmt(6, 1), "6");
   assert.equal(fmt(-0.5, 0.05), "-0.50");
+});
+
+test("typed_values_round_to_their_field_step", () => {
+  assert.equal(roundToStep(0.123456, 0.01), 0.12);
+  assert.equal(roundToStep(6.4, 1), 6);
+  assert.equal(roundToStep(-0.5004, 0.05), -0.5);
+  assert.equal(roundToStep(0.5, 0.01), 0.5);
 });
 
 test("depth_keeps_front_above_back_inside_the_range", () => {
