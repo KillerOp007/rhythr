@@ -16,7 +16,7 @@
 import {
   makeView, unit, toPx, toWorld, zoomAt, partRect, rectCorners, rectContains, handleAt, scaleFrom, angleFrom, HITBOX,
   unitToWorld, worldToUnit, nearestPoint, nearestSegment, snapUnit, depthShade,
-  snapValue, snapPosition, snapSize, snapAngle, SNAP_PX,
+  snapValue, snapPosition, snapSize, snapAngle, snapTolerance,
 } from "./view-math.js";
 import { loopsOf } from "./store.js";
 
@@ -385,10 +385,11 @@ export function createView(canvas, store, hooks) {
       return;
     }
     const wp = toWorld(view, size, mx, my);
-    // Snapping pulls within a pixel radius, measured in world units here;
-    // Shift keeps its own meanings (proportions, 15 degree steps, the grid
-    // in point editing) whether snapping is on or off.
-    const tol = SNAP_PX / unit(view, size);
+    // Snapping pulls within a pixel radius, measured in world units here
+    // and capped so a free band stays between the grid lines; Shift keeps
+    // its own meanings (proportions, 15 degree steps, the grid in point
+    // editing) whether snapping is on or off.
+    const tol = snapTolerance(unit(view, size));
     const snapping = Boolean(store.state.ui.snap);
     // Design units throughout: a world delta is a document delta. Labels
     // carry the part id: undo coalescing merges by label, and a gesture on

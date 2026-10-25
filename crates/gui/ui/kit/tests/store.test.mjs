@@ -326,3 +326,60 @@ test("list_rows_put_a_group_header_after_its_top_member_and_fold_hides_members",
   ]);
   assert.deepEqual(listRows(d, ["g1"]).map((r) => `${r.kind}:${r.id}`), ["part:p1", "group:g1", "part:p4"]);
 });
+
+test("reordering_moves_membership_with_the_drop_target", () => {
+  // g1 holds p1 and p2 at the bottom; a part dropped inside the block joins,
+  // a member dropped outside leaves, and the block stays contiguous.
+  const s = createStore(fourParts());
+  s.createGroup("p1");
+  s.addToGroup("p2", "g1");
+  s.movePart("p3", 1);
+  assert.deepEqual(s.state.design.parts.map((p) => p.id), ["p1", "p3", "p2", "p4"]);
+  assert.deepEqual(s.groupOf("p3").parts, ["p1", "p2", "p3"]);
+  s.movePart("p2", 3);
+  assert.deepEqual(s.state.design.parts.map((p) => p.id), ["p1", "p3", "p4", "p2"]);
+  assert.equal(s.groupOf("p2"), null, "dropped on an outsider, the member leaves");
+  assert.deepEqual(s.state.design.groups[0].parts, ["p1", "p3"]);
+  const rows = listRows(s.state.design, []);
+  const block = rows.filter((r) => r.kind === "part" && r.group === "g1").map((r) => r.id);
+  assert.deepEqual(block, ["p1", "p3"]);
+});
+
+test("a_duplicate_of_a_member_joins_its_group_next_to_it", () => {
+  const s = createStore(fourParts());
+  s.createGroup("p1");
+  s.addToGroup("p2", "g1");
+  const copy = s.duplicatePart("p1");
+  assert.deepEqual(s.state.design.parts.map((p) => p.id), ["p1", copy, "p2", "p3", "p4"]);
+  assert.deepEqual(s.groupOf(copy).id, "g1");
+  assert.deepEqual(s.state.design.groups[0].parts, ["p1", "p2", copy]);
+});
+
+test("joining_the_own_group_records_nothing", () => {
+  const s = createStore(fourParts());
+  s.createGroup("p1");
+  s.state.dirty = false;
+  const steps = s.state.undo.length;
+  s.addToGroup("p1", "g1");
+  assert.equal(s.state.undo.length, steps, "no undo step for a no-op");
+  assert.equal(s.state.dirty, false);
+  s.addToGroup("p9", "g1");
+  s.addToGroup("p2", "nope");
+  assert.equal(s.state.undo.length, steps);
+});
+
+test("selecting_another_part_or_a_group_ends_point_editing", () => {
+  const s = createStore(pointsDesign());
+  s.setPointEdit("p2");
+  s.select("p2");
+  assert.equal(s.state.ui.pointEdit, "p2", "re-selecting the edited part keeps editing");
+  s.select("p1");
+  assert.equal(s.state.ui.pointEdit, null);
+  s.setPointEdit("p2");
+  s.createGroup("p1");
+  assert.equal(s.state.ui.pointEdit, null, "a new group takes the selection");
+  s.setPointEdit("p2");
+  s.selectGroup("g1");
+  assert.equal(s.state.ui.pointEdit, null);
+  assert.equal(s.state.ui.pointSel, null);
+});

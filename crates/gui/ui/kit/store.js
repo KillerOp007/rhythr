@@ -200,14 +200,24 @@ export function createStore(design, opts = {}) {
     endGesture() {
       s.last = noLast();
     },
+    // Point editing belongs to the part being edited: choosing another part
+    // or a group ends it, so the canvas and the inspector never disagree.
     select(id) {
       s.selected = id;
       s.selectedGroup = null;
+      if (s.ui.pointEdit && s.ui.pointEdit !== id) {
+        s.ui.pointEdit = null;
+        s.ui.pointSel = null;
+      }
       emit();
     },
     selectGroup(id) {
       s.selectedGroup = id;
-      if (id) s.selected = null;
+      if (id) {
+        s.selected = null;
+        s.ui.pointEdit = null;
+        s.ui.pointSel = null;
+      }
       emit();
     },
     nextGroupId() {
@@ -231,20 +241,23 @@ export function createStore(design, opts = {}) {
         d.groups.push({ id, name: String(name || "").trim() || `Group ${n}`, parts: [partId], mode: "add" });
         s.selectedGroup = id;
         s.selected = null;
+        s.ui.pointEdit = null;
+        s.ui.pointSel = null;
       });
       return id;
     },
+    // A part already in the group, an unknown part or an unknown group is
+    // nothing to do: checked before the commit, so no undo step and no
+    // dirty flag come from a drop on the part's own header.
     addToGroup(partId, groupId) {
+      const g = s.design.groups.find((x) => x.id === groupId);
+      if (!g || !s.design.parts.some((p) => p.id === partId) || g.parts.includes(partId)) return;
       api.commit("group-add", (d) => {
-        const g = d.groups.find((x) => x.id === groupId);
-        if (!g || !d.parts.some((p) => p.id === partId) || g.parts.includes(partId)) return;
         leaveGroup(d, partId);
-        // Leaving may have dissolved the target when the part was its only
-        // member; nothing to join then.
-        const again = d.groups.find((x) => x.id === groupId);
-        if (!again) return;
-        again.parts.push(partId);
-        placeNextToGroup(d, partId, again);
+        const target = d.groups.find((x) => x.id === groupId);
+        if (!target) return;
+        target.parts.push(partId);
+        placeNextToGroup(d, partId, target);
       });
     },
     removeFromGroup(partId) {
@@ -408,6 +421,10 @@ export function createStore(design, opts = {}) {
         copy.name = `${src.name} copy`;
         const i = d.parts.findIndex((p) => p.id === id);
         d.parts.splice(i + 1, 0, copy);
+        // The copy sits right above its source, so it joins the same group
+        // and the block stays contiguous.
+        const g = d.groups.find((x) => x.parts.includes(id));
+        if (g) g.parts.push(nid);
         s.selected = nid;
       });
       return nid;
@@ -418,12 +435,22 @@ export function createStore(design, opts = {}) {
         if (p) patch(p);
       });
     },
+    // A row dropped on another row lands next to it and takes that row's
+    // group (none, when the target is in none), so a group's block stays
+    // contiguous whatever is dragged where.
     movePart(id, to) {
       api.commit("reorder", (d) => {
         const from = d.parts.findIndex((p) => p.id === id);
         if (from < 0) return;
+        const target = d.parts[Math.max(0, Math.min(d.parts.length - 1, to))];
         const [p] = d.parts.splice(from, 1);
         d.parts.splice(Math.max(0, Math.min(d.parts.length, to)), 0, p);
+        const was = d.groups.find((g) => g.parts.includes(id)) || null;
+        const next = target && target.id !== id ? d.groups.find((g) => g.parts.includes(target.id)) || null : was;
+        if (next === was) return;
+        leaveGroup(d, id);
+        const again = next && d.groups.find((g) => g.id === next.id);
+        if (again) again.parts.push(id);
       });
     },
     load(next, path = null) {

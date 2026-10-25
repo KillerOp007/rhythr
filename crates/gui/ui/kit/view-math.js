@@ -162,6 +162,12 @@ export function snapUnit(q, step) {
 // fought. Results carry three decimals like every other edit.
 export const SNAP_GRID = 0.05;
 export const SNAP_PX = 6;
+// The radius in world units for a view whose unit is `unit` pixels, capped
+// below half the grid so a free band stays between the lines at every
+// zoom; zoomed in, the pixel radius rules.
+export function snapTolerance(unit, px = SNAP_PX, grid = SNAP_GRID) {
+  return Math.min(px / (unit || 1), grid * 0.4);
+}
 export function snapValue(v, tol, anchors = [], grid = SNAP_GRID) {
   let best = v;
   let bd = Infinity;

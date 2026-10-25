@@ -122,3 +122,12 @@ test("snapping_only_pulls_within_the_radius", () => {
   assert.equal(snapAngle(40, 3), 40);
   assert.equal(snapAngle(-178.5, 3), -180);
 });
+
+test("the_snap_radius_never_swallows_the_grid", async () => {
+  const { snapTolerance, SNAP_GRID } = await import("../view-math.js");
+  // At the default zoom 6 px would be 0.0335 of a 0.05 grid: capped so a
+  // free band remains between the lines; zoomed in, the pixel radius rules.
+  assert.equal(snapTolerance(179), SNAP_GRID * 0.4);
+  near(snapTolerance(600), 0.01);
+  assert.ok(snapTolerance(0) > 0 && snapTolerance(0) <= SNAP_GRID * 0.4);
+});

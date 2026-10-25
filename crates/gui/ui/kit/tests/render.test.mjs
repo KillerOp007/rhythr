@@ -53,3 +53,16 @@ test("every_shape_kind_lists_its_own_fields", () => {
   assert.equal(shapeFields("star")[1][0], "inner");
   assert.deepEqual(shapeFields("contours"), []);
 });
+
+test("the_parts_list_key_follows_membership_and_the_group_options_follow_names", async () => {
+  const { listKey, groupOptionsKey } = await import("../render.js");
+  const d = { parts: [{ id: "p1" }, { id: "p2" }], groups: [{ id: "g1", name: "G", parts: ["p1", "p2"], mode: "add" }] };
+  const before = listKey(d, []);
+  d.groups[0].parts = ["p2"];
+  assert.notEqual(listKey(d, []), before, "a part leaving its group rebuilds the list");
+  assert.notEqual(listKey(d, ["g1"]), listKey(d, []), "folding rebuilds");
+  const k1 = groupOptionsKey(d, "g1");
+  d.groups[0].name = "Holes";
+  assert.notEqual(groupOptionsKey(d, "g1"), k1, "a renamed group refreshes the options");
+  assert.notEqual(groupOptionsKey(d, null), groupOptionsKey(d, "g1"), "the current group is part of the key");
+});

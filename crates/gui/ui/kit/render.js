@@ -64,6 +64,18 @@ export function repeatFromField(v) {
   return Math.min(REPEAT_MAX, n);
 }
 
+// What the parts list was built for: the rows, their order, the folds and
+// each part's group (a part leaving its group loses its indent).
+export function listKey(design, folded) {
+  return listRows(design, folded).map((r) => `${r.kind}:${r.id}:${r.folded ? 1 : 0}:${r.group || ""}`).join(",");
+}
+
+// What the Group dropdown shows: the groups by id and name, and the current
+// one. Rebuilt only when this changes, never under an open dropdown.
+export function groupOptionsKey(design, currentId) {
+  return `${design.groups.map((g) => `${g.id}:${g.name}`).join("|")}|${currentId || ""}`;
+}
+
 // What the inspector was built for: the part, its shape kind and which
 // chips are on (a chip switching on adds its fields, so it rebuilds).
 export function inspectorKeyFor(p) {
@@ -187,6 +199,8 @@ function groupRow(store, id) {
     if (!dragPartId) return;
     const from = dragPartId;
     dragPartId = null;
+    // A member dropped on its own header is already where it belongs.
+    if (store.groupOf(from)?.id === id) return;
     store.addToGroup(from, id);
   });
   partRows.push({ kind: "group", id, row, fold, name, mode, count });
@@ -232,8 +246,8 @@ function buildParts(store, root) {
 function renderParts(store) {
   const s = store.state;
   const root = $("kt-parts");
-  // Structure: which rows exist and in what order, folded groups included.
-  const key = listRows(s.design, s.ui.folded).map((r) => `${r.kind}:${r.id}:${r.folded ? 1 : 0}`).join(",");
+  // Structure: which rows exist and in what order, folds and membership included.
+  const key = listKey(s.design, s.ui.folded);
   if (key !== partsKey) {
     partsKey = key;
     buildParts(store, root);
@@ -339,8 +353,13 @@ function buildInspector(store, body, p, actions) {
   body.append(segmented(p, "Material", [["solid", "Solid"], ["glass", "Glass"]], (q) => q.material, pick("material", "material")));
   // Group membership: none, an existing group, or a new one from this part.
   const groupSel = el("select", { "data-role": "group" });
+  let groupsShown = null;
   const fillGroups = (q) => {
     const current = store.groupOf(q.id);
+    const key = groupOptionsKey(store.state.design, current ? current.id : null);
+    // An open dropdown is left alone: a rebuild under the pointer closes it.
+    if (key === groupsShown || document.activeElement === groupSel) return;
+    groupsShown = key;
     groupSel.replaceChildren(el("option", { value: "none", text: "None" }));
     for (const g of store.state.design.groups) groupSel.append(el("option", { value: g.id, text: g.name }));
     groupSel.append(el("option", { value: "new", text: "New group" }));
@@ -349,6 +368,8 @@ function buildInspector(store, body, p, actions) {
   fillGroups(p);
   groupSel.addEventListener("change", () => {
     const v = groupSel.value;
+    // The choice is made: the dropdown may be rebuilt on the next render.
+    groupSel.blur();
     if (v === "new") store.createGroup(id);
     else if (v === "none") store.removeFromGroup(id);
     else store.addToGroup(id, v);
