@@ -18,6 +18,8 @@ const DISCRETE = new Set([
   "visible", "lock", "mode", "material", "shape", "name",
   "color-add", "color-remove", "color-reorder",
   "point-add", "point-remove", "point-smooth",
+  "group", "group-add", "group-remove", "ungroup", "group-mode", "group-name",
+  "effect-waves", "effect-round", "effect-rim", "mirror", "repeat",
 ]);
 
 // A Points shape holds its first loop in `control` and the rest in `loops`;
@@ -30,6 +32,46 @@ export function loopsOf(shape) {
 function setLoops(shape, loops) {
   shape.control = loops[0] || [];
   shape.loops = loops.slice(1);
+}
+
+// A part leaves whatever group holds it; a group left empty goes with it.
+function leaveGroup(d, id) {
+  for (const g of d.groups) g.parts = g.parts.filter((x) => x !== id);
+  d.groups = d.groups.filter((g) => g.parts.length > 0);
+}
+
+// Members stay contiguous in the parts array: a joining part moves to sit
+// directly above the group's topmost member, so the list shows the group
+// in one block whatever order the parts had.
+function placeNextToGroup(d, id, g) {
+  const idx = d.parts.findIndex((p) => p.id === id);
+  const others = g.parts.filter((x) => x !== id).map((x) => d.parts.findIndex((p) => p.id === x)).filter((i) => i >= 0);
+  if (idx < 0 || !others.length) return;
+  const top = Math.max(...others);
+  const [p] = d.parts.splice(idx, 1);
+  // After the removal the old top member sits one lower when it was above
+  // the moved part; either way the part lands directly above it.
+  d.parts.splice(idx < top ? top : top + 1, 0, p);
+}
+
+// The parts list in DOM order (the list is column-reverse, so the last row
+// draws at the top): parts bottom to top, a group's header after its
+// topmost member, members hidden while the group is folded.
+export function listRows(design, folded = []) {
+  const groupOf = (id) => design.groups.find((g) => g.parts.includes(id)) || null;
+  const top = new Map();
+  design.parts.forEach((p, i) => {
+    const g = groupOf(p.id);
+    if (g) top.set(g.id, i);
+  });
+  const rows = [];
+  design.parts.forEach((p, i) => {
+    const g = groupOf(p.id);
+    const isFolded = Boolean(g) && folded.includes(g.id);
+    if (!isFolded) rows.push({ kind: "part", id: p.id, group: g ? g.id : null });
+    if (g && top.get(g.id) === i) rows.push({ kind: "group", id: g.id, name: g.name, mode: g.mode, folded: isFolded, count: g.parts.length });
+  });
+  return rows;
 }
 
 export const SHAPES = {
@@ -67,14 +109,18 @@ export function createStore(design, opts = {}) {
   const s = {
     design,
     selected: topId(design),
+    // A selected group (its header row) excludes a selected part.
+    selectedGroup: null,
     path: null,
     dirty: false,
     undo: [],
     redo: [],
     last: { label: null, at: -Infinity },
     // pointEdit: the id of the Points part whose points are being edited, or
-    // null; pointSel: the selected point as { loop, index }, or null.
-    ui: { previews: false, turntable: false, pointEdit: null, pointSel: null },
+    // null; pointSel: the selected point as { loop, index }, or null; folded:
+    // the group ids whose members the list hides (never in the document);
+    // snap: whether moves, sizes, turns and points pull to the grid.
+    ui: { previews: false, turntable: false, pointEdit: null, pointSel: null, folded: [], snap: true },
     // The last good evaluation stays on screen through an error, so the
     // handles never vanish under the cursor.
     evaluated: null,
@@ -88,6 +134,8 @@ export function createStore(design, opts = {}) {
   const noLast = () => ({ label: null, at: -Infinity });
   function fixSelection() {
     if (s.selected && !s.design.parts.some((p) => p.id === s.selected)) s.selected = topId(s.design);
+    if (s.selectedGroup && !s.design.groups.some((g) => g.id === s.selectedGroup)) s.selectedGroup = null;
+    s.ui.folded = s.ui.folded.filter((id) => s.design.groups.some((g) => g.id === id));
     // Point editing follows its part: gone (undo, remove) or no longer a
     // Points shape, and the mode ends; a selected point past the loop's end
     // (undo of an insert) is dropped.
@@ -154,6 +202,68 @@ export function createStore(design, opts = {}) {
     },
     select(id) {
       s.selected = id;
+      s.selectedGroup = null;
+      emit();
+    },
+    selectGroup(id) {
+      s.selectedGroup = id;
+      if (id) s.selected = null;
+      emit();
+    },
+    nextGroupId() {
+      const ids = new Set(s.design.groups.map((g) => g.id));
+      let n = 1;
+      while (ids.has(`g${n}`)) n++;
+      return `g${n}`;
+    },
+    groupOf(id) {
+      return s.design.groups.find((g) => g.parts.includes(id)) || null;
+    },
+    // A new group holds one part and is selected, so it can be named and
+    // given its mode at once; more parts join from their inspector or by
+    // a drop on the group's row.
+    createGroup(partId, name) {
+      const id = api.nextGroupId();
+      const n = Number(id.slice(1));
+      api.commit("group", (d) => {
+        if (!d.parts.some((p) => p.id === partId)) return;
+        leaveGroup(d, partId);
+        d.groups.push({ id, name: String(name || "").trim() || `Group ${n}`, parts: [partId], mode: "add" });
+        s.selectedGroup = id;
+        s.selected = null;
+      });
+      return id;
+    },
+    addToGroup(partId, groupId) {
+      api.commit("group-add", (d) => {
+        const g = d.groups.find((x) => x.id === groupId);
+        if (!g || !d.parts.some((p) => p.id === partId) || g.parts.includes(partId)) return;
+        leaveGroup(d, partId);
+        // Leaving may have dissolved the target when the part was its only
+        // member; nothing to join then.
+        const again = d.groups.find((x) => x.id === groupId);
+        if (!again) return;
+        again.parts.push(partId);
+        placeNextToGroup(d, partId, again);
+      });
+    },
+    removeFromGroup(partId) {
+      api.commit("group-remove", (d) => leaveGroup(d, partId));
+    },
+    ungroup(groupId) {
+      api.commit("ungroup", (d) => {
+        d.groups = d.groups.filter((g) => g.id !== groupId);
+      });
+    },
+    updateGroup(groupId, label, patch) {
+      api.commit(label, (d) => {
+        const g = d.groups.find((x) => x.id === groupId);
+        if (g) patch(g);
+      });
+    },
+    // Folding is editor state: no commit, no undo step, no evaluate.
+    toggleFold(groupId) {
+      s.ui.folded = s.ui.folded.includes(groupId) ? s.ui.folded.filter((x) => x !== groupId) : [...s.ui.folded, groupId];
       emit();
     },
     part(id = s.selected) {
@@ -285,7 +395,7 @@ export function createStore(design, opts = {}) {
     removePart(id) {
       api.commit("remove", (d) => {
         d.parts = d.parts.filter((p) => p.id !== id);
-        for (const g of d.groups) g.parts = g.parts.filter((x) => x !== id);
+        leaveGroup(d, id);
       });
     },
     duplicatePart(id) {
