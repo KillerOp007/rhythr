@@ -1,7 +1,22 @@
 // crates/gui/ui/kit/tests/render.test.mjs
 import test from "node:test";
 import assert from "node:assert/strict";
-import { fmt, roundToStep, clampDepth, shapeFields, pointSummary } from "../render.js";
+import { fmt, roundToStep, clampDepth, shapeFields, pointSummary, EFFECT_DEFAULTS, repeatFromField, inspectorKeyFor } from "../render.js";
+
+test("chips_toggle_discretely_and_repeat_below_two_is_off", () => {
+  assert.deepEqual(EFFECT_DEFAULTS.waves, { count: 6, depth: 0.15, style: "sine" });
+  assert.equal(EFFECT_DEFAULTS.round, 0.1);
+  assert.equal(EFFECT_DEFAULTS.rim, 0.15);
+  assert.equal(repeatFromField("0"), null);
+  assert.equal(repeatFromField("1"), null);
+  assert.equal(repeatFromField(""), null);
+  assert.equal(repeatFromField("4.7"), 5);
+  assert.equal(repeatFromField("40"), 12);
+  const p = { id: "p1", shape: { kind: "circle" }, effects: { waves: null, round: 0.1, rim: null, mirror: "none", repeat: null } };
+  assert.equal(inspectorKeyFor(p), "p1|circle|0|1|0");
+  p.effects.waves = EFFECT_DEFAULTS.waves;
+  assert.equal(inspectorKeyFor(p), "p1|circle|1|1|0", "a chip switching on rebuilds the inspector");
+});
 
 test("a_points_shape_is_summed_up_in_points_and_loops", () => {
   const pt = { x: 0, y: 0, smooth: true };

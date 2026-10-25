@@ -33,6 +33,10 @@
 .kt-part.dragging { opacity: 0.4; }
 .kt-part .name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kt-part .depth { font-size: var(--fs-sm); color: var(--muted); font-variant-numeric: tabular-nums; min-width: 2.4rem; text-align: right; }
+.kt-part.kt-group { background: var(--accent-soft); font-weight: 600; cursor: pointer; }
+.kt-part.member { margin-left: 1.2rem; }
+.kt-part .count { font-size: var(--fs-sm); color: var(--muted); font-weight: 400; }
+.kt-part .fold { width: 1.6rem; padding: 0; opacity: 1; }
 .kt-part .badge { font-size: var(--fs-sm); padding: 0 0.3rem; border-radius: var(--radius-sm); border: 1px solid var(--border); color: var(--muted); }
 .kt-part .badge.cut { color: var(--danger); border-color: var(--danger); }
 .kt-part .badge.glass { color: var(--accent); border-color: var(--accent); }

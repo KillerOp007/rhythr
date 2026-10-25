@@ -5,7 +5,7 @@
 // detaches the button under the pointer and the click never lands. Nothing in
 // the DOM is a source of truth: a field the user is typing in keeps its text
 // until it commits, every other widget is rewritten from state.
-import { DEPTH_MIN, DEPTH_MAX, SHAPES, loopsOf } from "./store.js";
+import { DEPTH_MIN, DEPTH_MAX, SHAPES, loopsOf, listRows } from "./store.js";
 
 export const MIN_BAND = 0.05;
 
@@ -52,6 +52,24 @@ export function shapeFields(kind) {
 const KIND_LABELS = { circle: "Disc", square: "Square", polygon: "Polygon", star: "Star", ring: "Ring", pill: "Pill", contours: "Outline (imported)", points: "Outline (points)" };
 
 export const POINT_HELP = "Drag a point, click the outline to add one, double-click a point to switch smooth and corner, right-click or Delete removes it, Esc or a click elsewhere finishes.";
+
+export const EFFECT_DEFAULTS = { waves: { count: 6, depth: 0.15, style: "sine" }, round: 0.1, rim: 0.15 };
+export const REPEAT_MAX = 12;
+
+// The Repeat field: below two copies there is nothing to repeat, so the
+// effect is off (null); the kernel caps far higher, the editor at twelve.
+export function repeatFromField(v) {
+  const n = Math.round(Number(v));
+  if (!Number.isFinite(n) || n < 2) return null;
+  return Math.min(REPEAT_MAX, n);
+}
+
+// What the inspector was built for: the part, its shape kind and which
+// chips are on (a chip switching on adds its fields, so it rebuilds).
+export function inspectorKeyFor(p) {
+  const e = p.effects || {};
+  return `${p.id}|${p.shape.kind}|${e.waves ? 1 : 0}|${e.round != null ? 1 : 0}|${e.rim != null ? 1 : 0}`;
+}
 
 // "12 points in 2 loops": what the inspector says about a Points shape.
 export function pointSummary(shape) {
@@ -153,11 +171,38 @@ function segmented(p, label, options, read, onPick) {
   return el("div", { class: "kt-field" }, [el("label", { text: label }), el("div", { class: "kt-seg" }, buttons.map(([, b]) => b))]);
 }
 
+// A group's header row: selects the group, folds its members, and takes a
+// dropped part row into the group.
+function groupRow(store, id) {
+  const row = el("div", { class: "kt-part kt-group" });
+  const fold = el("button", { class: "btn small ghost fold", onclick: (e) => { e.stopPropagation(); store.toggleFold(id); } });
+  const name = el("span", { class: "name" });
+  const mode = el("span", { class: "badge" });
+  const count = el("span", { class: "count" });
+  row.append(fold, name, mode, count);
+  row.addEventListener("click", () => store.selectGroup(id));
+  row.addEventListener("dragover", (e) => e.preventDefault());
+  row.addEventListener("drop", (e) => {
+    e.preventDefault();
+    if (!dragPartId) return;
+    const from = dragPartId;
+    dragPartId = null;
+    store.addToGroup(from, id);
+  });
+  partRows.push({ kind: "group", id, row, fold, name, mode, count });
+  return row;
+}
+
 function buildParts(store, root) {
   root.replaceChildren();
   partRows = [];
-  for (const { id } of store.state.design.parts) {
-    const row = el("div", { class: "kt-part", draggable: "true" });
+  for (const item of listRows(store.state.design, store.state.ui.folded)) {
+    if (item.kind === "group") {
+      root.append(groupRow(store, item.id));
+      continue;
+    }
+    const id = item.id;
+    const row = el("div", { class: `kt-part${item.group ? " member" : ""}`, draggable: "true" });
     const eye = el("button", { class: "btn small ghost",
       onclick: (e) => { e.stopPropagation(); store.updatePart(id, "visible", (x) => (x.visible = !x.visible)); } });
     const lock = el("button", { class: "btn small ghost",
@@ -180,19 +225,33 @@ function buildParts(store, root) {
       store.movePart(from, to);
     });
     root.append(row);
-    partRows.push({ id, row, eye, lock, name, depth, mode, material });
+    partRows.push({ kind: "part", id, row, eye, lock, name, depth, mode, material });
   }
 }
 
 function renderParts(store) {
   const s = store.state;
   const root = $("kt-parts");
-  const key = s.design.parts.map((p) => p.id).join(",");
+  // Structure: which rows exist and in what order, folded groups included.
+  const key = listRows(s.design, s.ui.folded).map((r) => `${r.kind}:${r.id}:${r.folded ? 1 : 0}`).join(",");
   if (key !== partsKey) {
     partsKey = key;
     buildParts(store, root);
   }
   for (const r of partRows) {
+    if (r.kind === "group") {
+      const g = s.design.groups.find((x) => x.id === r.id);
+      if (!g) continue;
+      const folded = s.ui.folded.includes(g.id);
+      r.row.classList.toggle("selected", g.id === s.selectedGroup);
+      setText(r.fold, folded ? "▸" : "▾");
+      r.fold.setAttribute("title", folded ? "Show the group's parts" : "Hide the group's parts");
+      setText(r.name, g.name);
+      r.mode.classList.toggle("cut", g.mode === "cut");
+      setText(r.mode, g.mode === "cut" ? "Cut" : "Add");
+      setText(r.count, `${g.parts.length} part${g.parts.length === 1 ? "" : "s"}`);
+      continue;
+    }
     const p = store.part(r.id);
     if (!p) continue;
     r.row.classList.toggle("selected", p.id === s.selected);
@@ -278,6 +337,24 @@ function buildInspector(store, body, p, actions) {
   };
   body.append(segmented(p, "Mode", [["add", "Add"], ["cut", "Cut"]], (q) => q.mode, pick("mode", "mode")));
   body.append(segmented(p, "Material", [["solid", "Solid"], ["glass", "Glass"]], (q) => q.material, pick("material", "material")));
+  // Group membership: none, an existing group, or a new one from this part.
+  const groupSel = el("select", { "data-role": "group" });
+  const fillGroups = (q) => {
+    const current = store.groupOf(q.id);
+    groupSel.replaceChildren(el("option", { value: "none", text: "None" }));
+    for (const g of store.state.design.groups) groupSel.append(el("option", { value: g.id, text: g.name }));
+    groupSel.append(el("option", { value: "new", text: "New group" }));
+    groupSel.value = current ? current.id : "none";
+  };
+  fillGroups(p);
+  groupSel.addEventListener("change", () => {
+    const v = groupSel.value;
+    if (v === "new") store.createGroup(id);
+    else if (v === "none") store.removeFromGroup(id);
+    else store.addToGroup(id, v);
+  });
+  inspectorWidgets.push(fillGroups);
+  body.append(el("div", { class: "kt-field" }, [el("label", { text: "Group" }), groupSel]));
 
   body.append(el("h2", { text: "Position and size" }));
   const field = (label, read, min, max, write) => number(store, id, label, read, min, max, 0.01, (v) => up(`${write}:${id}`, (x) => (x.transform[write] = v)));
@@ -305,18 +382,105 @@ function buildInspector(store, body, p, actions) {
   body.append(number(store, id, "Front", (q) => q.depth.front, DEPTH_MIN, DEPTH_MAX, 0.05, depth("front")));
   body.append(number(store, id, "Back", (q) => q.depth.back, DEPTH_MIN, DEPTH_MAX, 0.05, depth("back")));
   body.append(el("div", { class: "hint", text: "Front faces the player. The game's own disc spans 0.1 to -0.1." }));
+
+  body.append(el("h2", { text: "Effects" }));
+  // A chip: one button that switches the effect on (with its defaults) or
+  // off; its fields follow while it is on. Switching rebuilds the panel
+  // (the key carries the chip states), which is fine inside a click.
+  const chip = (key, label, fields) => {
+    const on = get()?.effects[key] != null;
+    const btn = el("button", { class: `btn small${on ? " on" : ""}`, text: on ? "On" : "Off", "data-role": `chip-${key}`,
+      onclick: () => up(`effect-${key}`, (x) => (x.effects[key] = x.effects[key] == null ? JSON.parse(JSON.stringify(EFFECT_DEFAULTS[key])) : null)) });
+    body.append(el("div", { class: "kt-field" }, [el("label", { text: label }), btn]));
+    if (on) for (const f of fields) body.append(f);
+  };
+  chip("waves", "Waves", [
+    slider(p, "Count", (q) => q.effects.waves?.count ?? 6, 2, 16, 1, (v) => up(`waves.count:${id}`, (x) => { if (x.effects.waves) x.effects.waves.count = v; })),
+    slider(p, "Depth", (q) => q.effects.waves?.depth ?? 0.15, 0.02, 0.6, 0.01, (v) => up(`waves.depth:${id}`, (x) => { if (x.effects.waves) x.effects.waves.depth = v; })),
+    segmented(p, "Style", [["sine", "Sine"], ["spike", "Spike"], ["pulse", "Pulse"]], (q) => q.effects.waves?.style ?? "sine",
+      (v) => { if (get()?.effects.waves?.style !== v) up(`waves.style:${id}`, (x) => { if (x.effects.waves) x.effects.waves.style = v; }); }),
+  ]);
+  chip("round", "Round", [slider(p, "Radius", (q) => q.effects.round ?? 0.1, 0.01, 0.5, 0.01, (v) => up(`round:${id}`, (x) => (x.effects.round = v)))]);
+  chip("rim", "Rim", [slider(p, "Thickness", (q) => q.effects.rim ?? 0.15, 0.02, 0.5, 0.01, (v) => up(`rim:${id}`, (x) => (x.effects.rim = v)))]);
+  body.append(el("div", { class: "hint", text: "Waves run inward from the part's edge, so a wavy part keeps its size. Round softens corners, Rim keeps only the outline band." }));
+
+  body.append(el("h2", { text: "Symmetry" }));
+  body.append(segmented(p, "Mirror", [["none", "None"], ["x", "X"], ["y", "Y"], ["both", "Both"]], (q) => q.effects.mirror,
+    (v) => { if (get()?.effects.mirror !== v) up("mirror", (x) => (x.effects.mirror = v)); }));
+  const repeat = el("input", { type: "number", min: 0, max: REPEAT_MAX, step: 1, "data-role": "repeat" });
+  const repeatText = (q) => (q.effects.repeat == null ? "0" : String(q.effects.repeat));
+  setShown(repeat, repeatText(p));
+  const commitRepeat = () => {
+    const q = get();
+    if (!q) return;
+    const next = repeatFromField(repeat.value);
+    if (next !== q.effects.repeat) up("repeat", (x) => (x.effects.repeat = next));
+    const now = get();
+    if (now) setShown(repeat, repeatText(now));
+  };
+  repeat.addEventListener("change", commitRepeat);
+  repeat.addEventListener("keydown", (e) => { if (e.key === "Enter") commitRepeat(); });
+  inspectorWidgets.push((q) => showText(repeat, repeatText(q)));
+  body.append(el("div", { class: "kt-field" }, [el("label", { text: "Repeat" }), repeat]));
+  body.append(el("div", { class: "hint", text: "Mirror reflects the part across the note's axes; Repeat turns copies around the centre (2 to 12, 0 is off). Copies that overlap merge." }));
+
   body.append(el("div", { class: "kt-field" }, [
     el("button", { class: "btn small ghost", text: "Duplicate", onclick: () => store.duplicatePart(id) }),
     el("button", { class: "btn small ghost", text: "Remove", onclick: () => store.removePart(id) }),
   ]));
 }
 
+// The inspector of a selected group: name, mode, its parts, Ungroup.
+function buildGroupInspector(store, body, g) {
+  const id = g.id;
+  const get = () => store.state.design.groups.find((x) => x.id === id);
+  body.append(el("h2", { text: "Group" }));
+  const name = el("input", { type: "text", "data-role": "group-name" });
+  setShown(name, g.name);
+  name.addEventListener("change", () => {
+    const next = name.value.trim();
+    if (next && next !== get()?.name) store.updateGroup(id, "group-name", (x) => (x.name = next));
+    const now = get();
+    if (now) setShown(name, now.name);
+  });
+  inspectorWidgets.push(() => {
+    const now = get();
+    if (now) showText(name, now.name);
+  });
+  body.append(el("div", { class: "kt-field" }, [el("label", { text: "Name" }), name]));
+  const modeButtons = [["add", "Add"], ["cut", "Cut"]].map(([v, text]) => [v, el("button", { class: "btn small", text,
+    onclick: () => { if (get()?.mode !== v) store.updateGroup(id, "group-mode", (x) => (x.mode = v)); } })]);
+  const mark = () => {
+    const now = get();
+    for (const [v, b] of modeButtons) b.classList.toggle("on", now?.mode === v);
+  };
+  mark();
+  inspectorWidgets.push(mark);
+  body.append(el("div", { class: "kt-field" }, [el("label", { text: "Mode" }), el("div", { class: "kt-seg" }, modeButtons.map(([, b]) => b))]));
+  body.append(el("div", { class: "hint", text: "A Cut part inside the group carves only this group's Add parts. A Cut group carves everything outside it with the shape of its Add parts." }));
+  body.append(el("h2", { text: "Parts" }));
+  for (const pid of g.parts) {
+    const p = store.part(pid);
+    if (!p) continue;
+    body.append(el("div", { class: "kt-field" }, [
+      el("label", { text: p.name }),
+      el("button", { class: "btn small ghost", text: "Select", onclick: () => store.select(pid) }),
+      el("button", { class: "btn small ghost", text: "Leave group", "data-role": "leave", onclick: () => store.removeFromGroup(pid) }),
+    ]));
+  }
+  body.append(el("div", { class: "kt-field" }, [el("button", { class: "btn small ghost", text: "Ungroup", "data-role": "ungroup", onclick: () => store.ungroup(id) })]));
+}
+
 function renderInspector(store, actions) {
   const body = $("kt-inspector-body");
-  const p = store.part();
-  const key = p ? `${p.id}|${p.shape.kind}` : "";
+  const s = store.state;
+  const g = s.selectedGroup ? s.design.groups.find((x) => x.id === s.selectedGroup) : null;
+  const p = g ? null : store.part();
+  // A group's key carries its members, so joins and leaves rebuild its list.
+  const key = g ? `g|${g.id}|${g.parts.join(",")}` : p ? inspectorKeyFor(p) : "";
   if (key === inspectorKey) {
-    if (p) for (const sync of inspectorWidgets) sync(p);
+    const subject = p || g;
+    if (subject) for (const sync of inspectorWidgets) sync(subject);
     return;
   }
   // The shape select rebuilds the panel it sits in; keyboard users stay on it.
@@ -327,6 +491,10 @@ function renderInspector(store, actions) {
   inspectorWidgets = [];
   kindSelect = null;
   body.replaceChildren();
+  if (g) {
+    buildGroupInspector(store, body, g);
+    return;
+  }
   if (!p) {
     body.append(el("div", { class: "hint", text: "Select a part, or add one from the toolbar." }));
     return;
