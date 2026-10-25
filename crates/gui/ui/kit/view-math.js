@@ -156,6 +156,38 @@ export function snapUnit(q, step) {
   return [Math.round(q[0] / step) * step, Math.round(q[1] / step) * step];
 }
 
+// Snapping: a value is pulled to the nearest grid line or anchor when that
+// lies within `tol` (world units, the pixel radius over the view's unit);
+// anything farther passes through, so a deliberate placement is never
+// fought. Results carry three decimals like every other edit.
+export const SNAP_GRID = 0.05;
+export const SNAP_PX = 6;
+export function snapValue(v, tol, anchors = [], grid = SNAP_GRID) {
+  let best = v;
+  let bd = Infinity;
+  for (const c of [Math.round(v / grid) * grid, ...anchors]) {
+    const d = Math.abs(v - c);
+    if (d <= tol && d < bd) {
+      bd = d;
+      best = c;
+    }
+  }
+  // Plus zero: a value rounded to the grid from below would be minus zero.
+  return Math.round(best * 1000) / 1000 + 0;
+}
+// A part's centre: the grid plus the box centre and edges.
+export function snapPosition(x, y, tol) {
+  return [snapValue(x, tol, [-1, 0, 1]), snapValue(y, tol, [-1, 0, 1])];
+}
+// Half extents: the grid plus half the box and the full box.
+export function snapSize(hw, hh, tol) {
+  return [snapValue(hw, tol, [0.5, 1]), snapValue(hh, tol, [0.5, 1])];
+}
+export function snapAngle(deg, tolDeg = 3) {
+  const s = Math.round(deg / 15) * 15;
+  return Math.abs(deg - s) <= tolDeg ? s : deg;
+}
+
 // What the front view fills a depth band with: the highest band keeps the
 // note colour, lower bands fade toward dark (or toward light, for a dark
 // colour) by how far they lie below the top, so a raised or recessed part

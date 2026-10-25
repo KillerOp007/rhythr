@@ -16,6 +16,7 @@
 import {
   makeView, unit, toPx, toWorld, zoomAt, partRect, rectCorners, rectContains, handleAt, scaleFrom, angleFrom, HITBOX,
   unitToWorld, worldToUnit, nearestPoint, nearestSegment, snapUnit, depthShade,
+  snapValue, snapPosition, snapSize, snapAngle, SNAP_PX,
 } from "./view-math.js";
 import { loopsOf } from "./store.js";
 
@@ -155,12 +156,17 @@ export function createView(canvas, store, hooks) {
       ctx.globalAlpha = 1;
     }
     if (ev) {
+      // A member of a Cut group removes material like a Cut part and draws
+      // like one; a selected group lights up every member's outline.
+      const cutGroups = new Set(s.design.groups.filter((g) => g.mode === "cut").flatMap((g) => g.parts));
+      const selectedGroup = s.selectedGroup ? s.design.groups.find((g) => g.id === s.selectedGroup) : null;
+      const groupSel = selectedGroup ? new Set(selectedGroup.parts) : null;
       for (const part of s.design.parts) {
         const geom = ev.parts.find((g) => g.id === part.id);
         if (!geom || !part.visible) continue;
         const p = path(geom.shapes);
-        const sel = part.id === s.selected;
-        if (part.mode === "cut") {
+        const sel = part.id === s.selected || (groupSel !== null && groupSel.has(part.id));
+        if (part.mode === "cut" || cutGroups.has(part.id)) {
           if (!stale) {
             ctx.fillStyle = hatchPattern();
             ctx.fill(p, "nonzero");
@@ -379,27 +385,38 @@ export function createView(canvas, store, hooks) {
       return;
     }
     const wp = toWorld(view, size, mx, my);
+    // Snapping pulls within a pixel radius, measured in world units here;
+    // Shift keeps its own meanings (proportions, 15 degree steps, the grid
+    // in point editing) whether snapping is on or off.
+    const tol = SNAP_PX / unit(view, size);
+    const snapping = Boolean(store.state.ui.snap);
     // Design units throughout: a world delta is a document delta. Labels
     // carry the part id: undo coalescing merges by label, and a gesture on
     // one part must never merge into a gesture on another.
     if (gesture.kind === "point") {
       // Into the part's own frame, so the point lands under the pointer on
-      // a turned or stretched part too; Shift snaps to a grid of that frame.
+      // a turned or stretched part too; the snap radius moves into that
+      // frame with it.
       const r = partRect(part.transform, 1);
       let q = worldToUnit(r, wp);
       if (e.shiftKey) q = snapUnit(q, POINT_SNAP);
+      else if (snapping) q = [snapValue(q[0], tol / (r.hw || 1), [], POINT_SNAP), snapValue(q[1], tol / (r.hh || 1), [], POINT_SNAP)];
       store.movePoint(gesture.id, gesture.loop, gesture.index, round3(clamp(q[0], -4, 4)), round3(clamp(q[1], -4, 4)));
     } else if (gesture.kind === "move") {
       const dx = wp[0] - gesture.wp[0];
       const dy = wp[1] - gesture.wp[1];
+      let nx = gesture.x + dx;
+      let ny = gesture.y + dy;
+      if (snapping) [nx, ny] = snapPosition(nx, ny, tol);
       store.updatePart(gesture.id, `move:${gesture.id}`, (p) => {
-        p.transform.x = clamp(gesture.x + dx, -1.5, 1.5);
-        p.transform.y = clamp(gesture.y + dy, -1.5, 1.5);
+        p.transform.x = clamp(nx, -1.5, 1.5);
+        p.transform.y = clamp(ny, -1.5, 1.5);
       });
     } else if (gesture.kind === "scale") {
       // Shift keeps the proportions on corners only; an edge handle moves one axis.
       const keep = e.shiftKey && gesture.handle.length === 2;
-      const { hw, hh } = scaleFrom(gesture.r, gesture.handle, wp, keep);
+      let { hw, hh } = scaleFrom(gesture.r, gesture.handle, wp, keep);
+      if (snapping && !keep) [hw, hh] = snapSize(hw, hh, tol);
       store.updatePart(gesture.id, `scale:${gesture.id}`, (p) => {
         p.transform.w = clamp(hw, 0.02, 1.5);
         p.transform.h = clamp(hh, 0.02, 1.5);
@@ -408,6 +425,7 @@ export function createView(canvas, store, hooks) {
       const r = partRect(part.transform, 1);
       let a = angleFrom(r, wp);
       if (e.shiftKey) a = Math.round(a / 15) * 15;
+      else if (snapping) a = snapAngle(a, 3);
       a = ((((a + 180) % 360) + 360) % 360) - 180;
       store.updatePart(gesture.id, `rotate:${gesture.id}`, (p) => (p.transform.rotation = Math.round(a * 10) / 10));
     }

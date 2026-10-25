@@ -42,6 +42,8 @@
 #kt-canvas-box { flex: 1 1 60%; min-height: 0; position: relative; }
 #kt-canvas { position: absolute; inset: 0; width: 100%; height: 100%; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); cursor: default; touch-action: none; }
 #kt-view-reset { position: absolute; top: 8px; right: 8px; z-index: 2; opacity: 0.75; }
+#kt-snap { position: absolute; top: 8px; right: 72px; z-index: 2; opacity: 0.75; }
+#kt-snap.on { outline: 2px solid var(--accent); }
 #kt-canvas-hint { flex: 0 0 auto; }
 #kt-splitter { flex: 0 0 8px; margin: -2px 0; cursor: ns-resize; border-radius: 4px; background: transparent; touch-action: none; }
 #kt-splitter:hover { background: var(--accent-soft); }

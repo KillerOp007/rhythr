@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   makeView, toPx, toWorld, zoomAt, partRect, rectCorners, rectContains, handleAt, scaleFrom, angleFrom,
   unitToWorld, worldToUnit, nearestPoint, nearestSegment, snapUnit, depthShade,
+  snapValue, snapPosition, snapSize, snapAngle,
 } from "../view-math.js";
 
 const size = { w: 800, h: 600 };
@@ -107,4 +108,17 @@ test("the_rotation_handle_reads_degrees_from_the_top", () => {
   const r = partRect({ x: 0, y: 0, w: 1, h: 1, rotation: 0 }, 1);
   near(angleFrom(r, [0, 2]), 0);
   near(angleFrom(r, [-2, 0]), 90);
+});
+
+test("snapping_only_pulls_within_the_radius", () => {
+  // Within 0.02 of a grid line: pulled; farther: left alone.
+  assert.equal(snapValue(0.512, 0.02), 0.5);
+  assert.equal(snapValue(0.525, 0.02), 0.525, "halfway between two lines, farther than the radius from both");
+  // The box edge wins over the grid when it is nearer.
+  assert.deepEqual(snapPosition(0.99, -0.012, 0.02), [1, 0]);
+  assert.deepEqual(snapPosition(0.74, 0.3, 0.005), [0.74, 0.3]);
+  assert.deepEqual(snapSize(0.49, 1.004, 0.02), [0.5, 1]);
+  assert.equal(snapAngle(44, 3), 45);
+  assert.equal(snapAngle(40, 3), 40);
+  assert.equal(snapAngle(-178.5, 3), -180);
 });

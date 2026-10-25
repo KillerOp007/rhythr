@@ -90,6 +90,19 @@ async function boot() {
     onDoubleClick: (part) => (part.shape.kind === "points" ? actions.editPoints(part.id, true) : actions.toPoints(part.id)),
   });
   $("kt-view-reset").addEventListener("click", view.resetView);
+  // Snapping is remembered; the button mirrors the state.
+  const SNAP_KEY = "rhythr.kit.snap";
+  const setSnap = (on) => {
+    store.setUi({ snap: on });
+    $("kt-snap").classList.toggle("on", on);
+    try {
+      storage.setItem(SNAP_KEY, on ? "1" : "0");
+    } catch {
+      // Best effort: the toggle still works for this session.
+    }
+  };
+  setSnap(storage.getItem(SNAP_KEY) !== "0");
+  $("kt-snap").addEventListener("click", () => setSnap(!store.state.ui.snap));
   const previews = mountPreviews(
     store,
     {
