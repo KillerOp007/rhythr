@@ -22,6 +22,15 @@ test("the_keyboard_section_names_every_shortcut_the_window_binds", () => {
   }
 });
 
+test("the_table_covers_groups_effects_and_snapping", () => {
+  const titles = HELP.map((s) => s.title);
+  assert.ok(titles.includes("Groups and effects"));
+  const all = HELP.flatMap((s) => s.rows.map((r) => r[0])).join(" ");
+  for (const control of ["Snap", "Group", "Fold", "Ungroup", "Waves", "Round", "Rim", "Mirror", "Repeat", "Leave group"]) {
+    assert.ok(all.includes(control), `missing ${control}`);
+  }
+});
+
 test("the_markdown_mirrors_the_sections", () => {
   const md = helpMarkdown();
   assert.ok(md.includes("**Toolbar**"));

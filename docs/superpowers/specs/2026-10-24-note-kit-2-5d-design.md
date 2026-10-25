@@ -254,12 +254,20 @@ until the switch is complete, then the v1 window is removed.
 5.2 Panels
 
 - Parts list: ordered, drag to reorder, visibility and lock toggles,
-  Add or Cut badge, Solid or Glass badge, group rows that fold. Cut
-  parts draw hatched and translucent in the front view.
+  Add or Cut badge, Solid or Glass badge, group rows that fold (Phase
+  3: a group's header row sits above its members, which stay contiguous
+  in the parts array; the header selects the group, its triangle folds
+  the members as editor state, a part row dropped on it joins the
+  group). Cut parts, and the members of a Cut group, draw hatched in the
+  front view.
 - Inspector for the selected part: shape type and its parameters,
   numeric transform fields, depth band (two fields plus a small depth
-  bar), effect chips (toggle to enable, expand to tune), material
-  switch, symmetry controls.
+  bar), a Group field (None, an existing group, New group), effect
+  chips (Waves with count, depth and style; Round; Rim: one On/Off
+  button each, the fields follow while on, defaults 6/0.15/sine, 0.1,
+  0.15), material switch, symmetry controls (Mirror none/X/Y/both,
+  Repeat 2 to 12 with 0 for off). A selected group shows its own
+  inspector: name, mode, its parts with Leave group, Ungroup.
 - Front view (orthographic, Canvas 2D): the only place geometry is
   edited. Click selects, drag moves, corner handles scale (Shift keeps
   aspect), a rotation handle rotates, arrows nudge, snapping as in v2,
@@ -383,7 +391,14 @@ because the game could not load it.
    v1 migration. Testbuild.
 3. Composition: groups, effects chips, symmetry, snapping, glass (point
    edit, the depth shading of the front view, the turntable and the help
-   table landed early, in the Phase 2 test rounds). Testbuild.
+   table landed early, in the Phase 2 test rounds). Built 25.10. with the
+   owner's rulings: waves modulate inward (crest on the outline, trough
+   at 1 minus the depth; a v1 depth d migrates as 2d / (1 + d)); groups
+   form without multi-selection (the part's Group field, or a drop on a
+   group's header row), members stay contiguous in the parts array, a
+   group's header folds its members as editor state; Snap is on by
+   default (0.05 grid, the box lines, 15 degree steps within 3 degrees,
+   a 6 px radius; Shift keeps its meanings). Testbuild kit7.
 4. Polish and acceptance: presets, reference underlay, user guide,
    in-game probe round, removal of the v1 designer (imports as parts and
    the one-file save landed early, in the Phase 2 test rounds). Release

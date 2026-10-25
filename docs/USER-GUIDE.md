@@ -206,8 +206,16 @@ endorsed by Rhythia or Capo Games.
   draws it translucent like the approach fade. Designs autosave in the
   window. "From old designer" brings your current Note Designer note in
   as one part. Help (F1) lists every button, mouse action and key; the
-  same table is at the end of this section. Groups, waves and rims follow
-  in the next updates; the Note Designer stays until the kit is complete.
+  same table is at the end of this section. Groups gather parts: a Cut
+  part inside a group carves only that group's Add parts, and a Cut group
+  carves everything outside it; the Group field of a part or a drop on a
+  group's row in the list puts it in, the group's row folds its parts
+  away. Effects sit on each part as switches: Waves ripple the outline
+  inward, Round softens corners, Rim keeps only the outline band; Mirror
+  reflects the part across the axes and Repeat turns copies around the
+  centre. Snap (next to the zoom button) pulls moves, sizes, turns and
+  points to a 0.05 grid and the box lines while the pointer is near one.
+  The Note Designer stays until the kit is complete.
 - **Hit sound choice**: under the Hit sounds slider, pick the game's
   default or one of its four alternative packs (Bass, Creamy, Pick,
   Vulnus), or choose your own audio file: anything your ffmpeg reads is
@@ -266,6 +274,9 @@ action and key of the Note Kit window.
 | Lock | Lock the part against moving, scaling, rotating and point edits. |
 | Number | The part's Front depth. Parts at one depth merge into one surface; a higher Front stands out. |
 | Add, Cut, Solid, Glass | The part's mode and material, set in the inspector. |
+| Group header | Selects the group; its parts sit under it. A Cut group carves everything outside it with the shape of its Add parts. |
+| Fold triangle | Hides or shows the group's parts in the list; nothing in the design changes. |
+| Drop a part on a group header | The part joins the group. |
 
 **Canvas (front view)**
 
@@ -280,6 +291,7 @@ action and key of the Note Kit window.
 | Wheel | Zoom about the pointer. |
 | Middle drag, or Space and drag | Pan the view. |
 | 100% button | Reset zoom and pan. |
+| Snap | Pulls moves, sizes, turns and points to a 0.05 grid and the box lines while the pointer is near one; off, everything is free. |
 | Solid square | The note box: whatever a part puts outside it is cut off, nothing is rescaled. |
 | Dashed square | The game's true hit area. |
 | Shades | The highest part keeps the colour, lower parts draw darker; Cut parts hatch. |
@@ -304,6 +316,19 @@ action and key of the Note Kit window.
 | Front, 3/4 | Snap to the front or to a view from the side and above. |
 | Shaded | Shade the faces so relief reads. The game draws the note flat; relief shows there only on the approach. |
 | Fade | Draw the note translucent like the game's approach fade, where overlapping parts brighten. |
+
+**Groups and effects**
+
+| Control | What it does |
+|---|---|
+| Group (inspector) | Puts the part into a group, takes it out (None) or starts a new one. A Cut part inside a group carves only that group's Add parts. |
+| Group inspector: Name, Mode | Names the group; Add contributes its parts, Cut carves them out of everything else. |
+| Leave group, Ungroup | Takes one part out, or dissolves the group and keeps its parts. |
+| Waves | Ripples the outline inward from the edge: count, depth and style (sine, spike, pulse). |
+| Round | Softens the part's corners by the radius. |
+| Rim | Keeps only the outline band of that thickness. |
+| Mirror | Reflects the part across the note's axes (X, Y or both). |
+| Repeat | Turns copies of the part around the centre, 2 to 12; 0 switches it off. |
 
 **Inspector**
 
