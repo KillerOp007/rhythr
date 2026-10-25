@@ -199,11 +199,15 @@ endorsed by Rhythia or Capo Games.
   the game from a local folder. The previews
   (still and gameplay loop through
   the real renderer) start hidden; the Previews button or the P key
-  shows them, and the choice is remembered. Designs autosave, save as
-  `.rhsd` files, and export as `.rhs` packs like the Note Designer.
-  "From old designer" brings your current Note Designer note in as one
-  part. Groups, waves, rims, point editing and the turntable follow in
-  the next updates; the Note Designer stays until the kit is complete.
+  shows them, and the choice is remembered. 3D (or the 3 key) shows the
+  baked note turned, up to 60 degrees each way, so you can judge the
+  depth you are building: Shaded lights the faces so relief reads (the
+  game draws the note flat and shows relief only on the approach), Fade
+  draws it translucent like the approach fade. Designs autosave in the
+  window. "From old designer" brings your current Note Designer note in
+  as one part. Help (F1) lists every button, mouse action and key; the
+  same table is at the end of this section. Groups, waves and rims follow
+  in the next updates; the Note Designer stays until the kit is complete.
 - **Hit sound choice**: under the Hit sounds slider, pick the game's
   default or one of its four alternative packs (Bass, Creamy, Pick,
   Vulnus), or choose your own audio file: anything your ffmpeg reads is
@@ -228,6 +232,105 @@ endorsed by Rhythia or Capo Games.
   the recorded hits fit no note on the chart that is loaded, which
   usually means it is not the chart that was played; load the right one
   before doubting the run.
+
+### Note Kit controls
+
+The same table the kit shows under Help (F1): every button, mouse
+action and key of the Note Kit window.
+
+**Toolbar**
+
+| Control | What it does |
+|---|---|
+| Disc, Square, Polygon, Star, Ring, Pill | Add a part of that shape at the centre, one note wide, and select it. |
+| SVG | Add an SVG file: one part per colour, strokes outlined at their width; a colour drawn on another colour comes in as a Cut. |
+| Letter field, then Enter or the Letter button | Add the typed letter, digit, symbol or emoji (any installed font) as a part. |
+| Undo, Redo | Step back and forward through every change (Ctrl+Z, Ctrl+Y). |
+| Previews | Show the still and the gameplay loop from the real renderer below the canvas (P). |
+| 3D | Show the note turned, to judge its depth (3). |
+| Help | This table (F1 or ?). |
+| New | Start a fresh note; asks first when there are unsaved changes. |
+| Open | Open a skin saved by rhythr's editors (.rhs) or a design file (.rhsd) (Ctrl+O). |
+| Recent | Reopen one of the last six files. |
+| Save .rhs | Write the one file that is the skin for rhythr and the game with your design inside (Ctrl+S). A design the kernel cannot build is not written; the status says why. |
+| Save as | Write to a new .rhs file (Ctrl+Shift+S). |
+| From old designer | Bring in the note from the old Note Designer's autosave. |
+
+**Parts list**
+
+| Control | What it does |
+|---|---|
+| Click a row | Select the part. |
+| Drag a row | Reorder the parts; the top part is picked first by a click on the canvas. The order changes no geometry. |
+| Eye | Hide or show the part; a hidden part adds and cuts nothing. |
+| Lock | Lock the part against moving, scaling, rotating and point edits. |
+| Number | The part's Front depth. Parts at one depth merge into one surface; a higher Front stands out. |
+| Add, Cut, Solid, Glass | The part's mode and material, set in the inspector. |
+
+**Canvas (front view)**
+
+| Control | What it does |
+|---|---|
+| Click | Select the part under the pointer, top of the list first; empty space clears the selection. |
+| Drag a part | Move it. |
+| Drag a corner handle | Scale it; Shift keeps the proportions. |
+| Drag an edge handle | Scale along that axis only. |
+| Drag the handle above the part | Rotate it; Shift snaps to 15 degrees. |
+| Double-click a part | Edit its outline point by point (any shape is converted to points first). |
+| Wheel | Zoom about the pointer. |
+| Middle drag, or Space and drag | Pan the view. |
+| 100% button | Reset zoom and pan. |
+| Solid square | The note box: whatever a part puts outside it is cut off, nothing is rescaled. |
+| Dashed square | The game's true hit area. |
+| Shades | The highest part keeps the colour, lower parts draw darker; Cut parts hatch. |
+
+**Point editing**
+
+| Control | What it does |
+|---|---|
+| Drag a point | Move it; Shift snaps to a grid of the part's own frame. |
+| Click the dashed outline | Insert a point there and pick it up (a corner between two corners, smooth otherwise). |
+| Double-click a point | Switch between smooth (round) and corner (square). |
+| Right-click a point, or Delete | Remove it; a loop keeps three points, a three-point loop goes as a whole unless it is the last. |
+| Arrows | Nudge the selected point by 0.01, with Shift by 0.1. |
+| Esc, a click away from the outline, or Done | Finish editing. |
+
+**3D (turned view)**
+
+| Control | What it does |
+|---|---|
+| Drag | Turn the note, up to 60 degrees each way. |
+| Wheel | Zoom. |
+| Front, 3/4 | Snap to the front or to a view from the side and above. |
+| Shaded | Shade the faces so relief reads. The game draws the note flat; relief shows there only on the approach. |
+| Fade | Draw the note translucent like the game's approach fade, where overlapping parts brighten. |
+
+**Inspector**
+
+| Control | What it does |
+|---|---|
+| Name | The part's name in the list. |
+| Shape | Swap the shape kind; its own fields (sides, rounding, points, thickness, roundness) follow. |
+| To points, Edit points, Done | Convert the outline to points, start or finish editing them. |
+| Mode | Add puts material, Cut takes it away from the Add parts that share its depth. |
+| Material | Solid, or Glass, which the game draws translucent. |
+| X, Y, Width, Height, Rotation | The part's place and size in note units (the box is 1 from the centre to its edge). |
+| Front, Back | The depth band; Front faces the player. The game's own disc spans 0.1 to -0.1. |
+| Duplicate, Remove | Copy the part above itself, or delete it. |
+| Colors | The colours the notes cycle through, in beat order; drag to reorder, the first one colours the canvas. |
+
+**Keyboard**
+
+| Control | What it does |
+|---|---|
+| Ctrl+Z, Ctrl+Y or Ctrl+Shift+Z | Undo, redo. |
+| Ctrl+S, Ctrl+Shift+S, Ctrl+O | Save, save as, open. |
+| Ctrl+D | Duplicate the selected part. |
+| Delete, Backspace | Remove the selected part, or the selected point while editing points. |
+| Arrows, Shift+Arrows | Nudge the selected part (or point) by 0.01 or 0.1. |
+| Esc | Clear the selection, or finish point editing. |
+| P, 3, F1 or ? | Previews, 3D view, this help. |
+| Space and drag | Pan the front view. |
 
 ## The Analyze window
 

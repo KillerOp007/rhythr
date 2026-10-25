@@ -126,6 +126,11 @@ export function fileStem(name) {
   return s && s !== "." && s !== ".." ? s : "my-note";
 }
 
+// Whether a modal (the Help dialog) is open; under node there is no document.
+function defaultDialogOpen() {
+  return typeof document !== "undefined" && Boolean(document.querySelector("dialog[open]"));
+}
+
 const TEXT_TYPES = new Set(["text", "number", "search", "email", "url", "password"]);
 const inputType = (el) => String(el.type || "text").toLowerCase();
 
@@ -150,13 +155,20 @@ export function ownsArrows(el) {
 // activeElement() returns document.activeElement. Ctrl+S, Ctrl+Shift+S and
 // Ctrl+O work from a focused text field, after blur() has committed what
 // was typed (the field's change event fires synchronously); every other
-// shortcut leaves a text field to its own editing.
-export function bindKeys(store, actions, activeElement) {
+// shortcut leaves a text field to its own editing. An open dialog (Help)
+// keeps every key to itself.
+export function bindKeys(store, actions, activeElement, dialogOpen = defaultDialogOpen) {
   window.addEventListener("keydown", (e) => {
     const mod = e.ctrlKey || e.metaKey;
     // Autofill dispatches keydown events without a key.
     const key = String(e.key || "").toLowerCase();
     const active = activeElement();
+    if (e.key === "F1") {
+      e.preventDefault();
+      if (!e.repeat && actions.help) actions.help();
+      return;
+    }
+    if (dialogOpen()) return;
     // A held key must not stack dialogs, repeat a removal or flip the previews.
     // Save as comes first: the plain branch below would take Ctrl+Shift+S too.
     if (mod && e.shiftKey && key === "s") {
@@ -175,6 +187,8 @@ export function bindKeys(store, actions, activeElement) {
     if (mod && key === "z" && !e.shiftKey) { e.preventDefault(); store.undo(); return; }
     if (mod && (key === "y" || (key === "z" && e.shiftKey))) { e.preventDefault(); store.redo(); return; }
     if (!mod && !e.altKey && key === "p") { if (!e.repeat) actions.togglePreviews(); return; }
+    if (!mod && !e.altKey && key === "3" && actions.toggleTurntable) { if (!e.repeat) actions.toggleTurntable(); return; }
+    if (!mod && !e.altKey && e.key === "?" && actions.help) { if (!e.repeat) actions.help(); return; }
     // Point editing takes Escape, Delete and the arrows for the selected
     // point; everything else falls through to the part.
     const editing = store.state.ui.pointEdit;

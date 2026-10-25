@@ -130,6 +130,11 @@ async function invoke(name, args) {
       if (!fs.existsSync(args.path)) throw new Error(`not a readable SVG: ${args.path}`);
       if (path.basename(args.path).includes("badge")) return SVG_LAYERS_BADGE;
       return [{ contours: SVG_OUTLINE, mode: "add", paint: "#000000" }];
+    case "kit_mesh": {
+      const out = JSON.parse(await run(["--mesh"], JSON.stringify(args.design)));
+      if (out.error) throw new Error(out.error);
+      return out;
+    }
     case "kit_shape_to_points": {
       const out = JSON.parse(await run(["--points"], JSON.stringify(args.shape)));
       if (out.error) throw new Error(out.error);

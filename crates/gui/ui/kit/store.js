@@ -74,7 +74,7 @@ export function createStore(design, opts = {}) {
     last: { label: null, at: -Infinity },
     // pointEdit: the id of the Points part whose points are being edited, or
     // null; pointSel: the selected point as { loop, index }, or null.
-    ui: { previews: false, pointEdit: null, pointSel: null },
+    ui: { previews: false, turntable: false, pointEdit: null, pointSel: null },
     // The last good evaluation stays on screen through an error, so the
     // handles never vanish under the cursor.
     evaluated: null,

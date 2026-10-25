@@ -5,12 +5,15 @@
 //! `--load <file>` prints what `kit_doc_load` would ({json, migrated}) for
 //! a .rhs or .rhsd; `--save <file>` bakes the design on stdin into a .rhs
 //! like `kit_export` and prints {path}; `--points` reads a shape on stdin
-//! and prints it as freeform points like `kit_shape_to_points`. Errors
-//! print as {error}.
-//! Usage: kit_eval_json [--default | --load <file> | --save <file> | --points] < design.json
+//! and prints it as freeform points like `kit_shape_to_points`; `--mesh`
+//! prints the baked note like `kit_mesh` (positions, indices, ranges).
+//! Errors print as {error}.
+//! Usage: kit_eval_json [--default | --load <file> | --save <file> | --points | --mesh] < design.json
 
 use rhythia_render::kit::doc::{Design, Shape};
-use rhythia_render::kit::{export, levels, mesh, migrate, points, KitError, MAX_TRIANGLES};
+use rhythia_render::kit::{
+    export, levels, mesh, migrate, points, validate, KitError, MAX_TRIANGLES,
+};
 use serde::Serialize;
 use std::io::Read;
 
@@ -159,6 +162,26 @@ fn main() {
             return;
         }
     };
+    if args.first().map(String::as_str) == Some("--mesh") {
+        let built = mesh::build_mesh(&ev)
+            .and_then(|m| validate::validate(&m).map(|r| (m, r)))
+            .map_err(|e| message(&e));
+        match built {
+            Ok((m, r)) => println!(
+                "{}",
+                serde_json::json!({
+                    "positions": m.positions,
+                    "indices": m.indices,
+                    "solid": [m.solid.start, m.solid.end],
+                    "glass": [m.glass.start, m.glass.end],
+                    "triangles": r.triangles,
+                    "vertices": r.vertices,
+                })
+            ),
+            Err(e) => print_error(e),
+        }
+        return;
+    }
     let (triangles, mesh_error) = match mesh::build_mesh(&ev) {
         Ok(m) => (Some(m.indices.len() / 3), None),
         Err(e) => (None, Some(message(&e))),

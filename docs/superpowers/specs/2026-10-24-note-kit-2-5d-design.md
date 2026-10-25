@@ -289,10 +289,22 @@ until the switch is complete, then the v1 window is removed.
   last), arrows nudge the selected point, Esc or a click away from the
   polygon finishes. Undo, removal or a shape change of the part ends the
   editing.
-- Turntable (WebGL2, inspection only): the kit mesh with orbit limited
-  to plus or minus 60 degrees, two snap buttons (front, three-quarter),
-  the game's unlit tint and glass alpha, optional fade slider that
-  shows the overlap brightening.
+- Turntable (WebGL2, inspection only; landed in the Phase 2 test
+  rounds as "3D", key 3): the kit mesh (`kit_mesh`, the export's own
+  triangles, expanded to flat faces) from an orbit camera limited to
+  plus or minus 60 degrees in yaw and pitch, wheel zoom, two snap
+  buttons (Front, 3/4), the game's tint and glass alpha, a Shaded toggle
+  (a headlight on the face normals so relief reads; off is the game's
+  flat look) and a Fade slider (the whole note at one alpha without a
+  depth test, so overlapping parts brighten as in the approach fade).
+  It lives in the band below the front view and shares it with the
+  previews; its state is remembered. A refused design keeps the last
+  note and says why in the caption. The note box at the hit plane draws
+  as lines for orientation.
+- Help (button, F1 or ?): a modal with the table of every control
+  (toolbar, parts list, canvas, point editing, 3D, inspector, keyboard);
+  `help.js` holds the rows, the guide carries the same table, and keys
+  stay with the dialog while it is open.
 - Previews: still and gameplay loop through the real renderer, as in
   v2, with the splitter.
 - Presets: the v2 gallery becomes multi-part presets (a gear with a
@@ -369,9 +381,9 @@ because the game could not load it.
 2. Editor core: store and render layer, parts list, inspector, front
    view with transforms and selection, previews, undo, autosave, files,
    v1 migration. Testbuild.
-3. Composition: groups, effects chips, symmetry, snapping, glass,
-   turntable (point edit and the depth shading of the front view landed
-   early, in the Phase 2 test rounds). Testbuild.
+3. Composition: groups, effects chips, symmetry, snapping, glass (point
+   edit, the depth shading of the front view, the turntable and the help
+   table landed early, in the Phase 2 test rounds). Testbuild.
 4. Polish and acceptance: presets, reference underlay, user guide,
    in-game probe round, removal of the v1 designer (imports as parts and
    the one-file save landed early, in the Phase 2 test rounds). Release

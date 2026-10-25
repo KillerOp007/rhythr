@@ -5,6 +5,8 @@ import { createView } from "./view.js";
 import { invoke, coalesced } from "./ipc.js";
 import { render, POINT_HELP } from "./render.js";
 import { mountPreviews } from "./preview.js";
+import { mountTurntable } from "./turntable.js";
+import { renderHelp } from "./help.js";
 import {
   makeRecent,
   autosave,
@@ -97,9 +99,39 @@ async function boot() {
       still: $("kt-still"),
       loop: $("kt-preview"),
       error: $("kt-preview-error"),
+      figures: [$("kt-still-figure"), $("kt-loop-figure")],
     },
     invoke,
   );
+  const turntable = mountTurntable(
+    store,
+    {
+      toggle: $("kt-turntable"),
+      figure: $("kt-turntable-figure"),
+      canvas: $("kt-tt-canvas"),
+      front: $("kt-tt-front"),
+      threeQuarter: $("kt-tt-quarter"),
+      shaded: $("kt-tt-shaded"),
+      fade: $("kt-tt-fade"),
+      note: $("kt-turntable-note"),
+      box: $("kt-preview-box"),
+      splitter: $("kt-splitter"),
+    },
+    invoke,
+  );
+  actions.toggleTurntable = turntable.toggle;
+  // Help: the table of every control, as a modal; Esc closes it natively.
+  const help = $("kt-help");
+  renderHelp($("kt-help-body"));
+  actions.help = () => {
+    if (!help.open) help.showModal();
+  };
+  $("kt-help-btn").addEventListener("click", actions.help);
+  $("kt-help-close").addEventListener("click", () => help.close());
+  // A click on the backdrop closes it too.
+  help.addEventListener("click", (e) => {
+    if (e.target === help) help.close();
+  });
   // The recent list is rebuilt from storage on every render, but the DOM
   // is touched only when it changed: an open dropdown survives the evaluate
   // results that arrive while it is open.
@@ -131,6 +163,7 @@ async function boot() {
       autoSave();
       evaluate({ design: s.design });
       previews.designChanged(s.design);
+      turntable.designChanged(s.design);
     }
     // Someone else wrote the status line: it is no longer ours to clear.
     if (statusFromEval && s.status.text !== evalText) statusFromEval = false;
@@ -323,7 +356,7 @@ async function boot() {
   });
   bindKeys(
     store,
-    { save: saveDoc, saveAs: saveAsDoc, open: openDoc, togglePreviews: previews.toggle },
+    { save: saveDoc, saveAs: saveAsDoc, open: openDoc, togglePreviews: previews.toggle, toggleTurntable: turntable.toggle, help: actions.help },
     () => document.activeElement,
   );
   // The debounce must not hold back the last edit when the window goes.
@@ -339,6 +372,7 @@ async function boot() {
   // A remembered "on" state needs the starting design too; the subscriber
   // only sees later changes.
   previews.designChanged(store.state.design);
+  turntable.designChanged(store.state.design);
   window.kitStore = store;
 }
 

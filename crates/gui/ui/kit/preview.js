@@ -126,10 +126,14 @@ export function mountPreviews(store, els, invoke) {
   } catch {
     saved = false;
   }
+  // The band below the canvas is shared with the turned view: it shows
+  // while either is on; the two preview figures follow this toggle alone.
   function apply(on) {
     store.setUi({ previews: on });
-    els.box.hidden = !on;
-    els.splitter.hidden = !on;
+    const band = on || Boolean(store.state.ui.turntable);
+    els.box.hidden = !band;
+    els.splitter.hidden = !band;
+    if (els.figures) for (const f of els.figures) f.hidden = !on;
     sched.setEnabled(on);
     try {
       localStorage.setItem(PREVIEWS_KEY, on ? "1" : "0");
