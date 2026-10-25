@@ -15,7 +15,15 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager};
 
+mod imports;
+mod kit_commands;
 mod live;
+
+/// The frontend copy step of `build.rs`, compiled here too so its tests run
+/// with the crate's (build scripts are not test targets).
+#[cfg(test)]
+#[path = "../build_support.rs"]
+mod build_support;
 
 use rhythia_formats::{map::Map, rhr::Replay};
 use rhythia_render::{scene::SceneParams, SkinConfig};
@@ -578,6 +586,15 @@ struct Shared {
     /// renders many frames of the SAME shape, and rebuilding mesh plus
     /// GPU textures per frame was the preview's whole cost.
     designer_skin: Mutex<
+        Option<(
+            u64,
+            rhythia_render::config::SkinConfig,
+            rhythia_render::renderer::SkinTextures,
+        )>,
+    >,
+    /// The kit window's prepared skin keyed by the design's JSON hash; it
+    /// shares `designer_renderer` so one wgpu device serves both windows.
+    kit_skin: Mutex<
         Option<(
             u64,
             rhythia_render::config::SkinConfig,
@@ -4329,12 +4346,26 @@ async fn open_designer_window(app_handle: tauri::AppHandle) -> Result<(), String
         w.on_window_event(move |e| {
             if matches!(e, tauri::WindowEvent::Destroyed) {
                 if let Some(app) = handle.try_state::<App>() {
-                    if let Ok(mut skin) = app.designer_skin.lock() {
-                        *skin = None;
-                    }
-                    if let Ok(mut slot) = app.designer_renderer.lock() {
-                        *slot = None;
-                    }
+                    // Renderer first, then the skins, all held until the
+                    // renderer is gone: the preview's own lock order
+                    // (renderer, then skin), so this cannot deadlock against
+                    // a frame in flight. A frame that lands between the
+                    // steps would otherwise rebuild a skin on the old
+                    // device that the next, new renderer would then reuse.
+                    // The kit skin is prepared on this same renderer, so it
+                    // must not outlive it either.
+                    // A poisoned lock is recovered as the previews do, so a
+                    // poisoned skin can never outlive its renderer.
+                    let mut slot = app
+                        .designer_renderer
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner());
+                    let mut designer_skin =
+                        app.designer_skin.lock().unwrap_or_else(|p| p.into_inner());
+                    *designer_skin = None;
+                    let mut kit_skin = app.kit_skin.lock().unwrap_or_else(|p| p.into_inner());
+                    *kit_skin = None;
+                    *slot = None;
                 }
             }
         });
@@ -4593,254 +4624,245 @@ async fn designer_preview(
             *cache = Some((hash, cfg, skin));
         }
         let (_, cfg, skin) = cache.as_ref().expect("just filled");
-        let params = rhythia_render::scene::SceneParams::from(cfg);
-        // The still is its own scene: three notes SIDE BY SIDE at staggered
-        // approach depths, so the first three colours all stay visible
-        // instead of queueing behind one grid cell the way the loop's
-        // snake does. The loop keeps the snake.
-        let (map, replay) = if still.unwrap_or(false) {
-            let mut map = rhythia_formats::map::Map::default();
-            for (i, t) in [360i64, 480, 620].into_iter().enumerate() {
-                map.notes.push(rhythia_formats::map::Note {
-                    time_ms: t,
-                    x: i as f32,
-                    y: 1.0,
-                });
-            }
-            (map, designer_scene().1)
-        } else {
-            designer_scene()
-        };
-        // The clock wraps over the loop; the map carries two laps so the
-        // seam always has notes in the approach window.
-        let t = if still.unwrap_or(false) {
-            300.0
-        } else {
-            500.0 + time_ms.rem_euclid(DESIGNER_LOOP_MS)
-        };
-        let px = renderer
-            .render_still(&params, cfg, skin, &replay, &map, t, None)
-            .map_err(|e| e.to_string())?;
-        let bytes = png_bytes(&px, DESIGNER_PREVIEW_W, DESIGNER_PREVIEW_H)?;
-        use base64::Engine as _;
-        Ok(format!(
-            "data:image/png;base64,{}",
-            base64::engine::general_purpose::STANDARD.encode(bytes)
-        ))
+        preview_frame(renderer, cfg, skin, time_ms, still.unwrap_or(false))
     })
     .await
     .map_err(err_str)?
 }
 
-/// Splits a kurbo path into flat contours at an adaptive tolerance, in
-/// y-up coordinates, centred on the origin and scaled to the unit box:
-/// the shared tail of every import route.
-fn contours_from_bezpath(path: &kurbo::BezPath) -> Vec<Vec<[f32; 2]>> {
-    let mut extent = 0.0f64;
-    for el in path.elements() {
-        let pts: &[kurbo::Point] = match el {
-            kurbo::PathEl::MoveTo(p) | kurbo::PathEl::LineTo(p) => std::slice::from_ref(p),
-            kurbo::PathEl::QuadTo(a, b) => {
-                extent = extent.max(a.x.abs()).max(a.y.abs());
-                std::slice::from_ref(b)
-            }
-            kurbo::PathEl::CurveTo(a, b, c) => {
-                extent = extent
-                    .max(a.x.abs())
-                    .max(a.y.abs())
-                    .max(b.x.abs())
-                    .max(b.y.abs());
-                std::slice::from_ref(c)
-            }
-            kurbo::PathEl::ClosePath => &[],
-        };
-        for p in pts {
-            extent = extent.max(p.x.abs()).max(p.y.abs());
-        }
-    }
-    let tol = extent.max(1.0) * 0.0015;
-    let mut contours: Vec<Vec<[f32; 2]>> = Vec::new();
-    let mut current: Vec<[f32; 2]> = Vec::new();
-    kurbo::flatten(path.elements().iter().copied(), tol, |el| match el {
-        kurbo::PathEl::MoveTo(p) => {
-            if current.len() >= 3 {
-                contours.push(std::mem::take(&mut current));
-            } else {
-                current.clear();
-            }
-            current.push([p.x as f32, p.y as f32]);
-        }
-        kurbo::PathEl::LineTo(p) => current.push([p.x as f32, p.y as f32]),
-        kurbo::PathEl::ClosePath => {
-            if current.len() >= 3 {
-                contours.push(std::mem::take(&mut current));
-            } else {
-                current.clear();
-            }
-        }
-        _ => {}
-    });
-    if current.len() >= 3 {
-        contours.push(current);
-    }
-    contours
-}
-
-/// Centres the contours on the origin and scales the longest half-extent
-/// to 1, so imports land in the editor the size a note should be instead
-/// of wherever the source file's coordinate system put them.
-fn centre_contours(mut contours: Vec<Vec<[f32; 2]>>) -> Vec<Vec<[f32; 2]>> {
-    let (mut min_x, mut min_y, mut max_x, mut max_y) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
-    for p in contours.iter().flatten() {
-        min_x = min_x.min(p[0]);
-        min_y = min_y.min(p[1]);
-        max_x = max_x.max(p[0]);
-        max_y = max_y.max(p[1]);
-    }
-    if min_x > max_x {
-        return contours;
-    }
-    let (cx, cy) = ((min_x + max_x) * 0.5, (min_y + max_y) * 0.5);
-    let half = ((max_x - min_x).max(max_y - min_y) * 0.5).max(1e-6);
-    for c in &mut contours {
-        for p in c.iter_mut() {
-            p[0] = (p[0] - cx) / half;
-            p[1] = (p[1] - cy) / half;
-        }
-    }
-    contours
-}
-
-/// Imports every FILLED path of an SVG as note contours: each path is
-/// resolved under its own fill rule (an even-odd donut stays a donut),
-/// then everything merges under nonzero in the geometry pipeline. Design
-/// anywhere (Inkscape, Figma, Illustrator), render here.
-#[tauri::command]
-async fn designer_import_svg(path: String) -> Result<Vec<Vec<[f32; 2]>>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let data = std::fs::read(&path).map_err(|e| e.to_string())?;
-        svg_to_contours(&data)
-    })
-    .await
-    .map_err(err_str)?
-}
-
-/// The SVG import core, separated from the command for testability.
-fn svg_to_contours(data: &[u8]) -> Result<Vec<Vec<[f32; 2]>>, String> {
-    {
-        let tree = usvg::Tree::from_data(data, &usvg::Options::default())
-            .map_err(|e| format!("not a readable SVG: {e}"))?;
-        let mut all: Vec<Vec<[f32; 2]>> = Vec::new();
-        fn walk(group: &usvg::Group, all: &mut Vec<Vec<[f32; 2]>>) {
-            for node in group.children() {
-                match node {
-                    usvg::Node::Group(g) => walk(g, all),
-                    usvg::Node::Path(p) => {
-                        let Some(fill) = p.fill() else { continue };
-                        let even_odd = matches!(fill.rule(), usvg::FillRule::EvenOdd);
-                        let t = p.abs_transform();
-                        let mut bez = kurbo::BezPath::new();
-                        let map = |pt: tiny_skia_path::Point| {
-                            let x = t.sx * pt.x + t.kx * pt.y + t.tx;
-                            let y = t.ky * pt.x + t.sy * pt.y + t.ty;
-                            // SVG y grows downward; the note plane is y-up.
-                            kurbo::Point::new(x as f64, -y as f64)
-                        };
-                        for seg in p.data().segments() {
-                            use tiny_skia_path::PathSegment as S;
-                            match seg {
-                                S::MoveTo(a) => bez.move_to(map(a)),
-                                S::LineTo(a) => bez.line_to(map(a)),
-                                S::QuadTo(a, b) => bez.quad_to(map(a), map(b)),
-                                S::CubicTo(a, b, c) => bez.curve_to(map(a), map(b), map(c)),
-                                S::Close => bez.close_path(),
-                            }
-                        }
-                        let contours = contours_from_bezpath(&bez);
-                        all.extend(rhythia_render::designer::clean_contours(
-                            &contours, even_odd,
-                        ));
-                    }
-                    _ => {}
-                }
-            }
-        }
-        walk(tree.root(), &mut all);
-        if all.is_empty() {
-            return Err("the SVG has no filled paths (strokes and text are not imported)".into());
-        }
-        Ok(centre_contours(all))
-    }
-}
-
-/// Imports a typed character as note contours, using the first system
-/// font that covers it. Regular glyphs outline cleanly; color emoji
-/// fonts carry no outlines and report as not found.
-#[tauri::command]
-async fn designer_import_glyph(ch: String) -> Result<Vec<Vec<[f32; 2]>>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let c = ch.trim().chars().next().ok_or("type a character first")?;
-        struct B {
-            bez: kurbo::BezPath,
-        }
-        impl ttf_parser::OutlineBuilder for B {
-            fn move_to(&mut self, x: f32, y: f32) {
-                self.bez.move_to((x as f64, y as f64));
-            }
-            fn line_to(&mut self, x: f32, y: f32) {
-                self.bez.line_to((x as f64, y as f64));
-            }
-            fn quad_to(&mut self, x1: f32, y1: f32, x: f32, y: f32) {
-                self.bez
-                    .quad_to((x1 as f64, y1 as f64), (x as f64, y as f64));
-            }
-            fn curve_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, x: f32, y: f32) {
-                self.bez.curve_to(
-                    (x1 as f64, y1 as f64),
-                    (x2 as f64, y2 as f64),
-                    (x as f64, y as f64),
-                );
-            }
-            fn close(&mut self) {
-                self.bez.close_path();
-            }
-        }
-        let mut db = fontdb::Database::new();
-        db.load_system_fonts();
-        let mut ids: Vec<fontdb::ID> = Vec::new();
-        // Prefer a plain sans face so letters look like letters; fall
-        // back to anything that covers the character.
-        if let Some(id) = db.query(&fontdb::Query {
-            families: &[fontdb::Family::SansSerif],
-            ..Default::default()
-        }) {
-            ids.push(id);
-        }
-        ids.extend(db.faces().map(|f| f.id));
-        for id in ids {
-            let out = db.with_face_data(id, |data, index| {
-                let face = ttf_parser::Face::parse(data, index).ok()?;
-                let glyph = face.glyph_index(c)?;
-                let mut b = B {
-                    bez: kurbo::BezPath::new(),
-                };
-                face.outline_glyph(glyph, &mut b)?;
-                let contours = contours_from_bezpath(&b.bez);
-                if contours.is_empty() {
-                    return None;
-                }
-                Some(rhythia_render::designer::clean_contours(&contours, false))
+/// One preview frame: the gameplay loop at `time_ms`, or the still scene
+/// (three notes side by side at staggered depths) when `still`. Shared by
+/// the old designer and the kit window so the two can never drift.
+fn preview_frame(
+    renderer: &rhythia_render::Renderer,
+    cfg: &rhythia_render::config::SkinConfig,
+    skin: &rhythia_render::renderer::SkinTextures,
+    time_ms: f64,
+    still: bool,
+) -> Result<String, String> {
+    let params = rhythia_render::scene::SceneParams::from(cfg);
+    // The still is its own scene: three notes SIDE BY SIDE at staggered
+    // approach depths, so the first three colours all stay visible
+    // instead of queueing behind one grid cell the way the loop's
+    // snake does. The loop keeps the snake.
+    let (map, replay) = if still {
+        let mut map = rhythia_formats::map::Map::default();
+        for (i, t) in [360i64, 480, 620].into_iter().enumerate() {
+            map.notes.push(rhythia_formats::map::Note {
+                time_ms: t,
+                x: i as f32,
+                y: 1.0,
             });
-            if let Some(Some(contours)) = out {
-                if !contours.is_empty() {
-                    return Ok(centre_contours(contours));
-                }
-            }
         }
-        Err(format!("no installed font has an outline for '{c}'"))
+        (map, designer_scene().1)
+    } else {
+        designer_scene()
+    };
+    // The clock wraps over the loop; the map carries two laps so the
+    // seam always has notes in the approach window.
+    let t = if still {
+        300.0
+    } else {
+        500.0 + time_ms.rem_euclid(DESIGNER_LOOP_MS)
+    };
+    let px = renderer
+        .render_still(&params, cfg, skin, &replay, &map, t, None)
+        .map_err(|e| e.to_string())?;
+    let bytes = png_bytes(&px, DESIGNER_PREVIEW_W, DESIGNER_PREVIEW_H)?;
+    use base64::Engine as _;
+    Ok(format!(
+        "data:image/png;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    ))
+}
+
+/// The kit note as a prepared skin: the baked mesh as an obj, the
+/// design's colours, the preview camera (tele FOV, no cursor).
+fn kit_skin_for(
+    renderer: &rhythia_render::Renderer,
+    design: &rhythia_render::kit::doc::Design,
+) -> Result<
+    (
+        rhythia_render::config::SkinConfig,
+        rhythia_render::renderer::SkinTextures,
+    ),
+    String,
+> {
+    let ev = rhythia_render::kit::levels::evaluate(design)
+        .map_err(|e| kit_commands::user_message(&e))?;
+    let mesh =
+        rhythia_render::kit::mesh::build_mesh(&ev).map_err(|e| kit_commands::user_message(&e))?;
+    let obj = rhythia_render::kit::export::to_obj(&mesh, "preview");
+    let mut cfg = rhythia_render::config::SkinConfig {
+        note_mesh: Some(obj.into_bytes()),
+        ..Default::default()
+    };
+    let cs = rhythia_render::config::parse_colorset(&design.colors.join("\n"));
+    if !cs.is_empty() {
+        cfg.colorset = cs;
+    }
+    cfg.camera_fov = 34.0;
+    cfg.cursor_opacity = 0.0;
+    cfg.cursor_trail_enabled = false;
+    let skin = renderer.prepare_skin(&cfg);
+    Ok((cfg, skin))
+}
+
+/// Renders the kit's note through the same cached renderer and frame
+/// function as the old designer, and returns the picture as a data URL.
+#[tauri::command]
+async fn kit_preview(
+    state: tauri::State<'_, App>,
+    design: rhythia_render::kit::doc::Design,
+    time_ms: f64,
+    still: Option<bool>,
+) -> Result<String, String> {
+    let app = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let hash = {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            serde_json::to_string(&design)
+                .map_err(|e| e.to_string())?
+                .hash(&mut h);
+            h.finish()
+        };
+        let mut slot = app
+            .designer_renderer
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        if slot.is_none() {
+            let cfg = rhythia_render::config::SkinConfig::default();
+            *slot = Some(
+                rhythia_render::Renderer::new(
+                    DESIGNER_PREVIEW_W,
+                    DESIGNER_PREVIEW_H,
+                    cfg.hud_fonts().as_slice(),
+                )
+                .map_err(|e| e.to_string())?,
+            );
+        }
+        let renderer = slot.as_ref().expect("just created");
+        let mut cache = app.kit_skin.lock().unwrap_or_else(|p| p.into_inner());
+        let stale = cache.as_ref().map(|(h, _, _)| *h != hash).unwrap_or(true);
+        if stale {
+            let (cfg, skin) = kit_skin_for(renderer, &design)?;
+            *cache = Some((hash, cfg, skin));
+        }
+        let (_, cfg, skin) = cache.as_ref().expect("just filled");
+        preview_frame(renderer, cfg, skin, time_ms, still.unwrap_or(false))
     })
     .await
     .map_err(err_str)?
+}
+
+/// Opens (or focuses) the note kit window: the part-based note editor,
+/// previewed through the shared renderer.
+#[tauri::command]
+async fn open_kit_window(app_handle: tauri::AppHandle) -> Result<(), String> {
+    use tauri::{WebviewUrl, WebviewWindowBuilder};
+    if let Some(w) = app_handle.get_webview_window("kit") {
+        let _ = w.unminimize();
+        let _ = w.show();
+        let _ = w.set_focus();
+        return Ok(());
+    }
+    // The main window owns the app: when it goes, this window goes too,
+    // instead of keeping the process alive headless.
+    if let Some(main) = app_handle.get_webview_window("main") {
+        let handle = app_handle.clone();
+        main.on_window_event(move |e| {
+            if matches!(e, tauri::WindowEvent::Destroyed) {
+                if let Some(w) = handle.get_webview_window("kit") {
+                    let _ = w.close();
+                }
+            }
+        });
+    }
+    let built = WebviewWindowBuilder::new(&app_handle, "kit", WebviewUrl::App("kit.html".into()))
+        .title("rhythr · Note Kit")
+        .inner_size(1380.0, 860.0)
+        .min_inner_size(1000.0, 660.0)
+        // The kit window takes no file drops, and HTML5 drag reorder needs the native handler off on Windows.
+        .disable_drag_drop_handler()
+        // Tauri 2 installs no title handler, so the native title bar shows document.title (dirty mark, file name) only through this.
+        .on_document_title_changed(|w, title| {
+            let _ = w.set_title(&title);
+        })
+        .build();
+    if let Ok(w) = &built {
+        // The prepared kit skin holds GPU textures; the window going away
+        // is the moment to let it go. The renderer is shared with the old
+        // designer, so it is released only when that window is gone too.
+        let handle = app_handle.clone();
+        w.on_window_event(move |e| {
+            if matches!(e, tauri::WindowEvent::Destroyed) {
+                if let Some(app) = handle.try_state::<App>() {
+                    // Renderer first, then the skin: the preview's own lock
+                    // order, so a frame in flight finishes before the skin
+                    // it is using goes. A poisoned lock is recovered as the
+                    // previews do.
+                    let mut slot = app
+                        .designer_renderer
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner());
+                    let mut kit_skin = app.kit_skin.lock().unwrap_or_else(|p| p.into_inner());
+                    *kit_skin = None;
+                    if handle.get_webview_window("designer").is_none() {
+                        // A designer frame queued after its window's
+                        // Destroyed may have prepared a skin on this
+                        // renderer; it must not meet the next device.
+                        let mut designer_skin =
+                            app.designer_skin.lock().unwrap_or_else(|p| p.into_inner());
+                        *designer_skin = None;
+                        *slot = None;
+                    }
+                }
+            }
+        });
+    }
+    if let Err(e) = built {
+        // A double-click races the existence check against the build; the
+        // second build fails on the duplicate label. That is the focus
+        // case, not an error.
+        if let Some(w) = app_handle.get_webview_window("kit") {
+            let _ = w.set_focus();
+            return Ok(());
+        }
+        return Err(err_str(e));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod kit_preview_tests {
+    use super::*;
+
+    #[test]
+    fn a_kit_frame_renders_through_the_shared_path() {
+        let design = rhythia_render::kit::doc::Design::default_note();
+        let cfg = rhythia_render::config::SkinConfig::default();
+        let renderer = rhythia_render::Renderer::new(
+            DESIGNER_PREVIEW_W,
+            DESIGNER_PREVIEW_H,
+            cfg.hud_fonts().as_slice(),
+        )
+        .unwrap();
+        let (cfg, skin) = kit_skin_for(&renderer, &design).unwrap();
+        let url = preview_frame(&renderer, &cfg, &skin, 300.0, true).unwrap();
+        assert!(url.starts_with("data:image/png;base64,"));
+        assert!(url.len() > 1000);
+
+        // A frame of the right shape could still be an empty stage. Change
+        // the first note's colour on the same renderer: the picture only
+        // differs if the note is really in the frame and wears its colour.
+        let mut red = design.clone();
+        red.colors[0] = "#ff0000".into();
+        let (red_cfg, red_skin) = kit_skin_for(&renderer, &red).unwrap();
+        let red_url = preview_frame(&renderer, &red_cfg, &red_skin, 300.0, true).unwrap();
+        assert!(red_url.starts_with("data:image/png;base64,"));
+        assert_ne!(url, red_url, "the note's colour never reached the frame");
+    }
 }
 
 /// Reads a local image as a data URL for the tracing underlay. The file
@@ -4888,14 +4910,32 @@ async fn designer_doc_save(path: String, json: String) -> Result<String, String>
     .map_err(err_str)?
 }
 
-/// Loads a design document saved by [`designer_doc_save`].
+/// Loads a design document saved by [`designer_doc_save`], or the one
+/// embedded in a .rhs written by [`designer_export`]. A skin saved by the
+/// Note Kit carries the kit's format, which this editor cannot show.
 #[tauri::command]
 async fn designer_doc_load(path: String) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let data = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+        let data = if bytes.starts_with(b"PK") {
+            rhythia_render::kit::export::embedded_design(&bytes)
+                .map_err(|_| "not a skin archive".to_string())?
+                .ok_or_else(|| {
+                    "this skin carries no editable design: only skins saved by rhythr's editors open here"
+                        .to_string()
+                })?
+        } else {
+            String::from_utf8(bytes).map_err(|_| "not a design file".to_string())?
+        };
         // A quick shape check so a wrong file errors here instead of
         // half-applying in the editor.
-        serde_json::from_str::<serde_json::Value>(&data).map_err(|e| e.to_string())?;
+        let value: serde_json::Value = serde_json::from_str(&data).map_err(|e| e.to_string())?;
+        if value.get("version").and_then(|v| v.as_u64()) == Some(2) {
+            return Err(
+                "this design was made in the Note Kit; open it there (Note Kit in the main window)"
+                    .into(),
+            );
+        }
         Ok(data)
     })
     .await
@@ -4903,10 +4943,15 @@ async fn designer_doc_load(path: String) -> Result<String, String> {
 }
 
 /// Writes the designed note as a complete .rhs pack at `path` (picked by
-/// the user through the save dialog). Loadable by rhythr and importable
-/// by the game, mtl always bundled.
+/// the user through the save dialog), with the editor's document embedded
+/// when `doc` is given, so the file opens again here or in the Note Kit.
+/// Loadable by rhythr and importable by the game, mtl always bundled.
 #[tauri::command]
-async fn designer_export(shape: DesignerShape, path: String) -> Result<String, String> {
+async fn designer_export(
+    shape: DesignerShape,
+    path: String,
+    doc: Option<String>,
+) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let mesh = rhythia_render::designer::build_note_mesh_multi(
             &shape.resolved_contours(),
@@ -4922,8 +4967,13 @@ async fn designer_export(shape: DesignerShape, path: String) -> Result<String, S
             .chars()
             .map(|c| if c.is_alphanumeric() { c } else { '_' })
             .collect();
-        let pack = rhythia_render::designer::export_rhs(&mesh, &name, &shape.colors)
-            .map_err(|e| e.to_string())?;
+        let pack = rhythia_render::designer::export_rhs_with_design(
+            &mesh,
+            &name,
+            &shape.colors,
+            doc.as_deref(),
+        )
+        .map_err(|e| e.to_string())?;
         std::fs::write(&path, pack).map_err(err_str)?;
         Ok(path)
     })
@@ -6072,6 +6122,7 @@ fn main() {
         render_thread: Mutex::new(None),
         designer_renderer: Mutex::new(None),
         designer_skin: Mutex::new(None),
+        kit_skin: Mutex::new(None),
         renders_done: std::sync::atomic::AtomicU64::new(0),
         last_render: Mutex::new(None),
     });
@@ -6413,10 +6464,20 @@ fn main() {
             designer_outline,
             designer_doc_save,
             designer_doc_load,
-            designer_import_svg,
-            designer_import_glyph,
+            imports::designer_import_svg,
+            imports::designer_import_glyph,
+            imports::kit_import_svg,
             designer_read_image,
             designer_preview,
+            kit_commands::kit_evaluate,
+            kit_commands::kit_mesh,
+            kit_commands::kit_default_doc,
+            kit_commands::kit_migrate_v1,
+            kit_commands::kit_doc_load,
+            kit_commands::kit_export,
+            kit_commands::kit_shape_to_points,
+            kit_preview,
+            open_kit_window,
             designer_export,
             set_clip,
             clear_clip,
@@ -6766,10 +6827,7 @@ mod settings_migration_tests {
 
 #[cfg(test)]
 mod diagnostics_tests {
-    use super::{
-        designer_import_glyph, diagnostics_report, err_str, redact_path, svg_to_contours, App,
-        Shared,
-    };
+    use super::{diagnostics_report, err_str, redact_path, App, Shared};
     use std::sync::Arc;
 
     /// The report exists to be sent to a stranger, so the test that matters
@@ -6846,68 +6904,5 @@ mod diagnostics_tests {
 
         // Paths outside the home folder are nobody's name and stay readable.
         assert_eq!(redact_path("/usr/bin/ffmpeg"), "/usr/bin/ffmpeg");
-    }
-
-    #[test]
-    fn svg_import_keeps_donut_holes_and_merges_shapes() {
-        // A donut drawn with even-odd (both rings wound the same way,
-        // only the rule makes the hole) plus an overlapping square.
-        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
-          <path fill="red" fill-rule="evenodd"
-            d="M50 10 A40 40 0 1 0 50 90 A40 40 0 1 0 50 10 Z
-               M50 30 A20 20 0 1 0 50 70 A20 20 0 1 0 50 30 Z"/>
-          <rect x="70" y="40" width="25" height="20" fill="blue"/>
-        </svg>"##;
-        let contours = svg_to_contours(svg.as_bytes()).unwrap();
-        // Donut outer + donut hole + rect: three contours, one clockwise.
-        assert!(contours.len() >= 3, "got {} contours", contours.len());
-        let area = |c: &Vec<[f32; 2]>| -> f32 {
-            let mut a = 0.0;
-            for i in 0..c.len() {
-                let p = c[i];
-                let q = c[(i + 1) % c.len()];
-                a += p[0] * q[1] - q[0] * p[1];
-            }
-            a * 0.5
-        };
-        assert!(
-            contours.iter().any(|c| area(c) < 0.0),
-            "no clockwise hole survived the even-odd resolve"
-        );
-        // Centred and unit-scaled: the extent must touch 1.
-        let m = contours
-            .iter()
-            .flatten()
-            .map(|p| p[0].abs().max(p[1].abs()))
-            .fold(0.0f32, f32::max);
-        assert!((0.99..=1.01).contains(&m), "extent {m}");
-        // And the geometry pipeline accepts it with the hole intact.
-        let plan = rhythia_render::designer::plan_note_multi(&contours, None).unwrap();
-        assert!(
-            plan.shapes.iter().any(|s| !s.holes.is_empty()),
-            "the donut hole vanished in the plan"
-        );
-    }
-
-    #[test]
-    fn svg_without_filled_paths_reports_cleanly() {
-        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">
-          <path d="M0 0 L10 10" stroke="red" fill="none"/>
-        </svg>"##;
-        assert!(svg_to_contours(svg.as_bytes()).is_err());
-    }
-
-    #[test]
-    fn glyph_import_outlines_a_letter_with_its_counter() {
-        // Depends on system fonts; any sane install has a face with 'A'.
-        let rt = tauri::async_runtime::block_on(designer_import_glyph("A".into()));
-        let Ok(contours) = rt else {
-            // A fontless CI box is not a designer bug.
-            return;
-        };
-        assert!(!contours.is_empty());
-        let plan = rhythia_render::designer::plan_note_multi(&contours, None).unwrap();
-        // The letter A encloses a triangular counter: it must be a hole.
-        assert!(plan.shapes.iter().any(|s| !s.holes.is_empty()));
     }
 }

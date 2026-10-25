@@ -1,0 +1,77 @@
+/* Note kit window. Inherits the app tokens from style.css. Three columns
+   fill the window: parts, the front view (previews below it when shown),
+   the inspector. */
+#kit-body { overflow: hidden; display: flex; flex-direction: column; height: 100vh; margin: 0; }
+#kit-body .hint { color: var(--muted); font-size: var(--fs-sm); }
+#kt-toolbar { display: flex; flex-wrap: wrap; gap: 0.5rem 0.75rem; align-items: center; padding: 0.5rem 1rem; border-bottom: 1px solid var(--border); flex: 0 0 auto; }
+#kt-recent { width: 9rem; }
+#kt-glyph { width: 6rem; }
+#kt-toolbar .group { display: flex; gap: 0.3rem; align-items: center; }
+#kt-toolbar .group.grow { flex: 1 1 auto; }
+#kt-toolbar .label { color: var(--muted); font-size: var(--fs-sm); margin-right: 0.2rem; }
+#kt-previews.on, #kt-turntable.on { outline: 2px solid var(--accent); }
+#kt-tt-canvas { flex: 1 1 auto; min-height: 0; width: 100%; display: block; border: 1px solid var(--border); border-radius: var(--radius); background: #0b0e12; touch-action: none; cursor: grab; }
+#kt-turntable-bar { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; color: var(--muted); font-size: var(--fs-sm); }
+#kt-turntable-bar label { display: flex; align-items: center; gap: 0.25rem; }
+#kt-turntable-bar input[type="range"] { width: 5rem; }
+#kit-body #kt-turntable-note.err { color: var(--danger); }
+#kt-help { width: min(92vw, 780px); max-height: 86vh; overflow: auto; background: var(--panel); color: inherit; border: 1px solid var(--border); border-radius: var(--radius); padding: 0.9rem 1.2rem 1.2rem; }
+#kt-help::backdrop { background: rgba(0, 0, 0, 0.55); }
+.kt-help-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+.kt-help-head h2 { margin: 0; font-size: var(--fs-md); }
+#kt-help h3 { margin: 0.9rem 0 0.3rem; font-size: var(--fs-md); color: var(--muted); }
+#kt-help table { width: 100%; border-collapse: collapse; }
+#kt-help td { padding: 0.25rem 0.5rem; border-top: 1px solid var(--border); vertical-align: top; font-size: var(--fs-sm); }
+#kt-help td:first-child { width: 34%; color: var(--accent); }
+#kt-root { display: flex; gap: 1rem; padding: 0.75rem 1rem; flex: 1 1 auto; min-height: 0; box-sizing: border-box; }
+#kt-parts-pane { flex: 0 0 240px; overflow-y: auto; display: flex; flex-direction: column; gap: 0.4rem; }
+#kt-parts-pane h2, #kt-inspector h2 { font-size: var(--fs-md); margin: 0.2rem 0; color: var(--muted); }
+#kt-parts { display: flex; flex-direction: column-reverse; gap: 0.2rem; }
+.kt-part { display: flex; align-items: center; gap: 0.35rem; padding: 0.3rem 0.4rem; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--panel); cursor: grab; }
+.kt-part.selected { outline: 2px solid var(--accent); }
+.kt-part.hidden-part { opacity: 0.5; }
+.kt-part.dragging { opacity: 0.4; }
+.kt-part .name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kt-part .depth { font-size: var(--fs-sm); color: var(--muted); font-variant-numeric: tabular-nums; min-width: 2.4rem; text-align: right; }
+.kt-part .badge { font-size: var(--fs-sm); padding: 0 0.3rem; border-radius: var(--radius-sm); border: 1px solid var(--border); color: var(--muted); }
+.kt-part .badge.cut { color: var(--danger); border-color: var(--danger); }
+.kt-part .badge.glass { color: var(--accent); border-color: var(--accent); }
+.kt-part button { opacity: 0.6; }
+.kt-part button:hover { opacity: 1; }
+#kt-centre { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 0.5rem; }
+#kt-canvas-box { flex: 1 1 60%; min-height: 0; position: relative; }
+#kt-canvas { position: absolute; inset: 0; width: 100%; height: 100%; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); cursor: default; touch-action: none; }
+#kt-view-reset { position: absolute; top: 8px; right: 8px; z-index: 2; opacity: 0.75; }
+#kt-canvas-hint { flex: 0 0 auto; }
+#kt-splitter { flex: 0 0 8px; margin: -2px 0; cursor: ns-resize; border-radius: 4px; background: transparent; touch-action: none; }
+#kt-splitter:hover { background: var(--accent-soft); }
+/* A column, so the error line above the row takes its height from the box
+   instead of pushing the row out of it. */
+#kt-preview-box { flex: 0 0 clamp(140px, 26vh, 340px); min-height: 120px; display: flex; flex-direction: column; gap: 0.25rem; }
+/* "#kit-body .hint" sets the muted colour; the error must win over it. */
+#kit-body #kt-preview-error { color: var(--danger); }
+#kt-preview-row { display: flex; gap: 0.5rem; flex: 1 1 auto; min-height: 0; }
+#kt-preview-row figure { flex: 1 1 50%; min-width: 0; margin: 0; display: flex; flex-direction: column; gap: 0.15rem; }
+#kt-preview-row img { flex: 1 1 auto; min-height: 0; width: 100%; object-fit: contain; object-position: center; border: 1px solid var(--border); border-radius: var(--radius); background: #000; display: block; }
+#kt-inspector { flex: 0 0 320px; overflow-y: auto; padding-right: 0.25rem; }
+.kt-field { display: flex; align-items: center; gap: 0.4rem; margin: 0.25rem 0; }
+.kt-field label { flex: 0 0 5.5rem; color: var(--muted); font-size: var(--fs-sm); }
+.kt-field input[type="range"] { flex: 1 1 auto; }
+.kt-field input[type="number"], .kt-field input[type="text"], .kt-field select { width: 5.5rem; }
+.kt-field input[type="text"] { width: 100%; }
+.kt-field .val { width: 3.2rem; text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); font-size: var(--fs-sm); }
+.kt-seg { display: flex; gap: 0; }
+.kt-seg button { border-radius: 0; }
+.kt-seg button:first-child { border-radius: var(--radius-sm) 0 0 var(--radius-sm); }
+.kt-seg button:last-child { border-radius: 0 var(--radius-sm) var(--radius-sm) 0; }
+.kt-seg button.on, .kt-field button.on { background: var(--accent-soft); }
+#kt-depth-bar { position: relative; height: 10px; background: var(--border); border-radius: 5px; margin: 0.3rem 0 0.5rem; }
+#kt-depth-bar .band { position: absolute; top: 0; bottom: 0; background: var(--accent); border-radius: 5px; }
+#kt-depth-bar .zero { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--muted); }
+#kt-colors { display: flex; flex-direction: column; gap: 0.25rem; margin-bottom: 0.4rem; }
+.kt-color-row { display: flex; align-items: center; gap: 0.4rem; cursor: grab; }
+.kt-color-row input[type="color"] { width: 2.2rem; height: 1.6rem; padding: 0; border: 1px solid var(--border); border-radius: var(--radius-sm); background: none; cursor: pointer; }
+.kt-color-row .hex { width: 6rem; }
+.kt-color-row.dragging { opacity: 0.4; }
+#kt-status-bar { display: flex; justify-content: space-between; padding: 0.3rem 1rem; border-top: 1px solid var(--border); min-height: 1.4em; flex: 0 0 auto; }
+#kt-status.err { color: var(--danger); }

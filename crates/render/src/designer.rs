@@ -378,6 +378,18 @@ pub fn to_obj(mesh: &Mesh, name: &str) -> String {
 /// game exports, loadable by rhythr's `--config` and importable as a
 /// skin, so a note designed here works in both worlds.
 pub fn export_rhs(mesh: &Mesh, name: &str, colors_hex: &[String]) -> Result<Vec<u8>, Error> {
+    export_rhs_with_design(mesh, name, colors_hex, None)
+}
+
+/// [`export_rhs`] with the designer's own document embedded under the
+/// kit's design entry, so the one file opens again in the Note Designer
+/// and converts in the Note Kit. `None` writes a plain skin.
+pub fn export_rhs_with_design(
+    mesh: &Mesh,
+    name: &str,
+    colors_hex: &[String],
+    design_json: Option<&str>,
+) -> Result<Vec<u8>, Error> {
     use std::io::Write;
     let obj = to_obj(mesh, name);
     let colorset: String = colors_hex
@@ -414,6 +426,9 @@ pub fn export_rhs(mesh: &Mesh, name: &str, colors_hex: &[String]) -> Result<Vec<
             &format!("colorSet/{name}.txt"),
             colorset.as_bytes(),
         )?;
+    }
+    if let Some(doc) = design_json {
+        write(&mut zw, crate::kit::export::DESIGN_ENTRY, doc.as_bytes())?;
     }
     let cur = zw.finish().map_err(|_| Error::BadObj)?;
     Ok(cur.into_inner())
@@ -565,6 +580,23 @@ mod tests {
         let cfg = crate::config::SkinConfig::from_rhs(&zip_bytes).unwrap();
         assert!(cfg.note_mesh.is_some());
         assert_eq!(cfg.colorset.len(), 1);
+        // A plain export carries no design; one with a document gives it back.
+        assert_eq!(
+            crate::kit::export::embedded_design(&zip_bytes).unwrap(),
+            None
+        );
+        let doc = r##"{"P":{"shape":"circle"},"free":null,"colors":["#ff0000"],"imported":null}"##;
+        let with_doc = export_rhs_with_design(&mesh, "designed", &colors, Some(doc)).unwrap();
+        assert_eq!(
+            crate::kit::export::embedded_design(&with_doc)
+                .unwrap()
+                .as_deref(),
+            Some(doc)
+        );
+        assert!(crate::config::SkinConfig::from_rhs(&with_doc)
+            .unwrap()
+            .note_mesh
+            .is_some());
     }
 
     #[test]

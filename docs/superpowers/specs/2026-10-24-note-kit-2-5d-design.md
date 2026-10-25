@@ -84,7 +84,7 @@ Part {
        | Ring { thickness }
        | Pill { aspect }
        | Contours { contours, label }   // an SVG or glyph import, resolved by the editor, stored as oriented unit-scaled contours; the kernel never touches fonts or files
-       | Points { control: [{x, y, smooth}] },   // freeform, one closed loop
+       | Points { control: [{x, y, smooth}], loops: [[{x, y, smooth}]] },   // freeform: the first closed loop and any further ones (holes clockwise, islands counterclockwise); any shape converts to this
   transform: { x, y, w, h, rotation },   // x, y, w, h in note-box units, rotation in degrees
   mode: Add | Cut,
   depth: { front, back },        // z band; front > back; front toward the player
@@ -103,9 +103,12 @@ Rules
 
 - Depth bands live in [-2.0, 0.5] in note units. Defaults: a new part
   spans [-0.1, 0.1] like the built-in circle.
-- The hard size cap applies to the union of all Add parts: the kernel
-  normalises the resolved silhouette to the unit box; the editor shows
-  the cap and the true hit area exactly as v2 does.
+- The note box is fixed (owner decision, 24.10. evening, after the first
+  test round): transform units are note units, nothing is ever rescaled,
+  and whatever a part puts outside the unit box is cut away, like an
+  artboard. The editor shows the box and the true hit area. A v1 design
+  is fitted to the box once, at migration, because v1 normalised on
+  every evaluation.
 - A v1 design (the current .rhsd and autosave) loads as one Add part:
   slider shapes become a Polygon, Square or Circle part with the same
   effects, freeform becomes Points holding the loop v1 built from the
@@ -133,12 +136,14 @@ pipeline keeps working until the editor switches over.
    complexity budget per part (points and contours) so a corrupt file
    degrades instead of running away.
 6. Round (closing then opening) and rim (region minus its erosion) are a
-   finish in note units: the level evaluation applies them after the
-   whole design is normalised to the box and before the level set, on
-   the merged region of the part, never deleting a part (a region too
-   thin to erode keeps its outline). A finish never makes a part larger;
-   a chord-sized overshoot is cut to the box, anything larger is an
-   error. Region results drop shapes below a visible area, because the
+   finish in note units: the level evaluation applies them before the
+   level set, on the merged region of the part, never deleting a part (a
+   region too thin to erode keeps its outline). After the finish every
+   part is cut to the unit box, quietly: a part may reach past the box
+   or lie beyond it, and what lies outside is not part of the note. The
+   finish comes first so a part's own corners round and its rim follows
+   its own outline, while the box edge stays a straight cut. Region
+   results drop shapes below a visible area, because the
    erosion leaves micro loops that a later dilation would blow up.
 
 4.2 Level evaluation: `evaluate(design) -> Evaluation`
@@ -153,14 +158,10 @@ pipeline keeps working until the editor switches over.
    its adds; a part id in more than one group is a document error).
    Glass is a second region per interval: `glass(i) = union(glass adds)
    minus union(all cuts) minus solid(i)`; opaque wins where they overlap.
-3. Before the level set, the design is normalised: the silhouette is the
-   largest extent over the parts that add material (loose Add parts and
-   Add members of Add-mode groups; cuts and the members of Cut-mode
-   groups only remove and never set the size), every part is scaled by
-   1/extent and re-snapped to the lattice, removers are clipped to a
-   square three times the silhouette before scaling so a scaled-up cut
-   cannot leave the lattice range, and then the finish of 4.1 step 6
-   runs.
+3. Before the level set, every part is finished (4.1 step 6) and cut to
+   the unit box. There is no normalisation: the silhouette is whatever
+   the parts that add material cover inside the box, and a design with
+   nothing inside the box is empty (KitError::Empty).
 4. All overlay operations run through one fixed-origin integer lattice
    (i_overlay with a shared adapter: cell 1/65536, origin fixed, never
    recentred on the input) so identical input polygons produce
@@ -240,7 +241,7 @@ until the switch is complete, then the v1 window is removed.
   panels and state from ever disagreeing.
 - IPC: `kit_evaluate(design)` returns, for drawing and hit testing, the
   resolved contours per part, the solid and glass silhouettes per
-  level, the normalisation scale, validator report and triangle count;
+  level, validator report and triangle count;
   `kit_mesh(design)` returns positions, indices and material ranges for
   the turntable; `kit_preview(design, time, still)` renders through the
   real renderer with the cached skin as today; `kit_export(design,
@@ -263,21 +264,66 @@ until the switch is complete, then the v1 window is removed.
   edited. Click selects, drag moves, corner handles scale (Shift keeps
   aspect), a rotation handle rotates, arrows nudge, snapping as in v2,
   zoom about cursor and pan as in v2. The resolved silhouette draws in
-  the first colorset colour with holes cut by orientation; glass draws
+  the first colorset colour band by band from the back forward, the
+  highest band in the colour and lower bands shaded toward dark (toward
+  light for a dark colour) by how far they lie below the top, so a raised
+  or recessed part reads head-on (the game shows it only through
+  parallax, which the hint says); holes cut by orientation; glass draws
   at the game's alpha; every part's own outline draws faintly so cut
-  parts stay findable. Point-edit mode (double-click a Points part)
-  shows handles and uses the v2 insertion and drag rules, fixed: insert
-  on the nearest contour segment, drag folded consistently, never by
-  polar angle.
-- Turntable (WebGL2, inspection only): the kit mesh with orbit limited
-  to plus or minus 60 degrees, two snap buttons (front, three-quarter),
-  the game's unlit tint and glass alpha, optional fade slider that
-  shows the overlap brightening.
+  parts stay findable. The parts list shows each part's Front depth. The
+  list order has no geometric meaning (adds and cuts combine per
+  interval regardless of order); it sets which part a click picks first.
+  Point editing (landed in the Phase 2 test rounds): double-click a part
+  or press To points in the inspector; a Points part opens for editing,
+  any other shape is converted first (`kit_shape_to_points`: the kernel
+  thins the outline with Ramer-Douglas-Peucker to at most 64 points per
+  loop, a turn of 40 degrees or more makes a corner, every loop of the
+  source becomes a loop of points, the effects and transform stay). In
+  editing, the points draw as handles in the part's own frame (round for
+  smooth, square for a corner) with the control polygon dashed; drag
+  moves a point (Shift snaps to a 0.05 grid of that frame), a click
+  within 12 px of the polygon inserts a point on the nearest segment
+  (smooth unless both neighbours are corners) and picks it up, double-
+  click switches smooth and corner, right-click or Delete removes (a loop
+  keeps three points; a three-point loop goes as a whole unless it is the
+  last), arrows nudge the selected point, Esc or a click away from the
+  polygon finishes. Undo, removal or a shape change of the part ends the
+  editing.
+- Turntable (WebGL2, inspection only; landed in the Phase 2 test
+  rounds as "3D", key 3): the kit mesh (`kit_mesh`, the export's own
+  triangles, expanded to flat faces) from an orbit camera limited to
+  plus or minus 60 degrees in yaw and pitch, wheel zoom, two snap
+  buttons (Front, 3/4), the game's tint and glass alpha, a Shaded toggle
+  (a headlight on the face normals so relief reads; off is the game's
+  flat look) and a Fade slider (the whole note at one alpha without a
+  depth test, so overlapping parts brighten as in the approach fade).
+  It lives in the band below the front view and shares it with the
+  previews; its state is remembered. A refused design keeps the last
+  note and says why in the caption. The note box at the hit plane draws
+  as lines for orientation.
+- Help (button, F1 or ?): a modal with the table of every control
+  (toolbar, parts list, canvas, point editing, 3D, inspector, keyboard);
+  `help.js` holds the rows, the guide carries the same table, and keys
+  stay with the dialog while it is open.
 - Previews: still and gameplay loop through the real renderer, as in
   v2, with the splitter.
 - Presets: the v2 gallery becomes multi-part presets (a gear with a
   hub, a shield with an emblem, a ring with a recessed plate).
-- Import: SVG and glyph become new parts; the reference underlay stays.
+- Import: SVG and glyph become new parts (landed in the Phase 2 test
+  rounds: the SVG button and the Letter field add `Contours` parts named
+  after their source). An SVG (`kit_import_svg`) contributes every
+  visible path's fill and stroke, the stroke outlined at its width with
+  caps, joins and dashes; paths group into one layer per paint colour in
+  order of first appearance, all layers share one unit frame, and each
+  layer is a part (`<name> 1`, `<name> 2`, the inspector naming the
+  colour). `kit::import::layer_modes` sets the mode: the first layer
+  adds; a later layer whose area lies more than half on material already
+  there is a Cut and is taken out of that material, otherwise it adds
+  (the game shows one tint, so a figure on a badge can only be told
+  apart as a hole; stripes side by side stay a full silhouette). Same-
+  colour shapes merge. Text is not imported. The old designer keeps its
+  single merged outline (`designer_import_svg`, strokes included). The
+  reference underlay stays (Phase 4).
 
 5.3 Vocabulary
 
@@ -294,8 +340,15 @@ undefined), and `colorSet/<name>.txt`, exactly the layout the game
 accepts today. The skin name is validated first: letters, digits,
 spaces, `_` and `-`, 1 to 64 characters, no leading or trailing space,
 because it reaches the config JSON, two archive paths and the obj's `o`
-line. The design file (.rhsd, version 2) is the editable source; the
-.rhs is baked output.
+line. The design itself is written into the archive as its last entry,
+`rhythr/design.json` (the game ignores entries it does not know, verified
+2026-10-24 with a probe skin), so the one .rhs is both the game's skin
+and the editable document: Save writes it, Open reads it back, and a
+skin saved by the old designer carries its own document under the same
+entry and converts on open. A plain .rhsd (version 2 text, or the old
+designer's) still opens; a skin without the entry is refused with a
+sentence that says so. A design the kernel refuses is not written,
+because the game could not load it.
 
 ## 7. Testing
 
@@ -328,10 +381,13 @@ line. The design file (.rhsd, version 2) is the editable source; the
 2. Editor core: store and render layer, parts list, inspector, front
    view with transforms and selection, previews, undo, autosave, files,
    v1 migration. Testbuild.
-3. Composition: groups, effects chips, symmetry, point edit, snapping,
-   glass, turntable. Testbuild.
-4. Polish and acceptance: presets, imports as parts, user guide,
-   in-game probe round, removal of the v1 designer. Release candidate.
+3. Composition: groups, effects chips, symmetry, snapping, glass (point
+   edit, the depth shading of the front view, the turntable and the help
+   table landed early, in the Phase 2 test rounds). Testbuild.
+4. Polish and acceptance: presets, reference underlay, user guide,
+   in-game probe round, removal of the v1 designer (imports as parts and
+   the one-file save landed early, in the Phase 2 test rounds). Release
+   candidate.
 
 ## 9. Decisions still open for the owner
 

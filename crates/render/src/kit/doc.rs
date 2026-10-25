@@ -79,8 +79,13 @@ pub enum Shape {
         #[serde(default)]
         label: String,
     },
+    /// Freeform: `control` is the first closed loop, `loops` any further
+    /// ones (a hole winds clockwise, an island counterclockwise), each
+    /// splined through its points. Any shape converts to this.
     Points {
         control: Vec<ControlPoint>,
+        #[serde(default)]
+        loops: Vec<Vec<ControlPoint>>,
     },
 }
 

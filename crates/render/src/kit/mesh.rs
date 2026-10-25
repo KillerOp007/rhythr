@@ -545,16 +545,16 @@ mod tests {
         // validates: the wall area at x = 0 is the oracle (0.4, not 0.8).
         let mut a = part("a", Shape::Square { rounding: 0.0 }, Mode::Add, 0.2, -0.2);
         a.transform = Transform {
-            x: -0.4,
-            w: 0.4,
-            h: 0.4,
+            x: -0.5,
+            w: 0.5,
+            h: 0.5,
             ..Transform::default()
         };
         let mut c = part("c", Shape::Square { rounding: 0.0 }, Mode::Add, 0.0, -0.2);
         c.transform = Transform {
-            x: 0.3,
-            w: 0.3,
-            h: 0.8,
+            x: 0.375,
+            w: 0.375,
+            h: 1.0,
             ..Transform::default()
         };
         let m = mesh_of(vec![a, c]);
@@ -656,7 +656,6 @@ mod tests {
         let points = solid[0][0].len();
         assert!(points >= 21_000, "the lattice kept only {points} points");
         let ev = Evaluation {
-            scale: 1.0,
             levels: vec![-0.1, 0.1],
             intervals: vec![crate::kit::levels::Interval {
                 z0: -0.1,

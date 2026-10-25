@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>rhythr · Note Kit</title>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="kit.css" />
+</head>
+<body id="kit-body">
+  <header id="kt-toolbar">
+    <div class="group" id="kt-add">
+      <span class="label">Add</span>
+      <button class="btn small" data-add="circle">Disc</button>
+      <button class="btn small" data-add="square">Square</button>
+      <button class="btn small" data-add="polygon">Polygon</button>
+      <button class="btn small" data-add="star">Star</button>
+      <button class="btn small" data-add="ring">Ring</button>
+      <button class="btn small" data-add="pill">Pill</button>
+      <button class="btn small" id="kt-add-svg" title="Add an SVG file as parts: one per colour, strokes included; a colour drawn on another comes in as a Cut">SVG</button>
+      <input id="kt-glyph" type="text" maxlength="8" placeholder="A or emoji" title="A letter, digit, symbol or emoji from an installed font; Enter or the Letter button adds it as a part" />
+      <button class="btn small" id="kt-add-glyph" title="Add the typed letter or emoji as a part">Letter</button>
+    </div>
+    <div class="group">
+      <button class="btn small ghost" id="kt-undo" title="Undo (Ctrl+Z)">Undo</button>
+      <button class="btn small ghost" id="kt-redo" title="Redo (Ctrl+Y)">Redo</button>
+    </div>
+    <div class="group">
+      <button class="btn small" id="kt-previews" title="Show or hide the previews (P)">Previews</button>
+      <button class="btn small" id="kt-turntable" title="Show the note turned, to judge its depth (3)">3D</button>
+      <button class="btn small ghost" id="kt-help-btn" title="Every button, mouse action and key (F1)">Help</button>
+    </div>
+    <div class="group grow"></div>
+    <div class="group">
+      <button class="btn small ghost" id="kt-new" title="New design">New</button>
+      <button class="btn small ghost" id="kt-load" title="Open a skin saved by rhythr's editors, or a design file (Ctrl+O)">Open</button>
+      <select id="kt-recent" title="Recently opened or saved skins" disabled>
+        <option value="" disabled selected>Recent</option>
+      </select>
+      <button class="btn small" id="kt-save" title="Save as .rhs: the skin for rhythr and the game, with your design inside (Ctrl+S)">Save .rhs</button>
+      <button class="btn small ghost" id="kt-save-as" title="Save to a new .rhs file (Ctrl+Shift+S)">Save as</button>
+      <button class="btn small ghost" id="kt-import-old" title="Bring in the note from the old Note Designer's autosave">From old designer</button>
+    </div>
+  </header>
+  <main id="kt-root">
+    <aside id="kt-parts-pane">
+      <h2>Parts</h2>
+      <div id="kt-parts"></div>
+      <div class="hint">Drag to reorder; the top part is picked first by a click. The number is the Front depth: parts at one depth merge into one surface, a higher Front stands out (lower parts draw darker).</div>
+    </aside>
+    <section id="kt-centre">
+      <div id="kt-canvas-box">
+        <canvas id="kt-canvas"></canvas>
+        <button id="kt-view-reset" class="btn small ghost" title="Reset zoom and pan">100%</button>
+      </div>
+      <div id="kt-canvas-hint" class="hint">
+        Click selects a part, drag moves it, corner handles scale (Shift keeps the proportions),
+        the handle above rotates, arrows nudge. Double-click a part to edit its outline point by
+        point. Wheel zooms, middle drag or Space+drag pans.
+        The solid square is the note box: whatever a part puts outside it is cut off, nothing is
+        ever rescaled. The dashed square is the game's true hit area. Parts at the same depth merge
+        into one surface, in the game too; a part with a higher Front stands out and lower parts
+        draw darker here. 3D shows the note turned. Help lists every control.
+        Save writes one .rhs file: the skin for rhythr and the game, with your editable design
+        inside, so Open brings it back here. Import that file into the game from a local folder.
+      </div>
+      <div id="kt-splitter" title="Drag to resize editor vs. previews" hidden></div>
+      <div id="kt-preview-box" hidden>
+        <div id="kt-preview-error" class="hint err" hidden></div>
+        <div id="kt-preview-row">
+          <figure id="kt-turntable-figure" hidden>
+            <canvas id="kt-tt-canvas"></canvas>
+            <div id="kt-turntable-bar">
+              <button class="btn small ghost" id="kt-tt-front" title="Look from the front, as the game does">Front</button>
+              <button class="btn small ghost" id="kt-tt-quarter" title="Look from the side and above">3/4</button>
+              <label title="Shade the faces so relief reads; the game draws the note flat"><input type="checkbox" id="kt-tt-shaded" checked /> Shaded</label>
+              <label title="Draw the note translucent like the game's approach fade">Fade <input type="range" id="kt-tt-fade" min="0.2" max="1" step="0.05" value="1" /></label>
+            </div>
+            <figcaption class="hint" id="kt-turntable-note">Turned view of the baked note: drag turns it (60 degrees each way), wheel zooms. The game draws the note flat; its relief shows only on the approach.</figcaption>
+          </figure>
+          <figure id="kt-still-figure">
+            <img id="kt-still" alt="Note close-up" />
+            <figcaption class="hint">Still: first three colors on approach</figcaption>
+          </figure>
+          <figure id="kt-loop-figure">
+            <img id="kt-preview" alt="Gameplay preview" />
+            <figcaption class="hint">Gameplay loop, real renderer</figcaption>
+          </figure>
+        </div>
+      </div>
+    </section>
+    <aside id="kt-inspector">
+      <div id="kt-inspector-body"></div>
+      <h2>Colors</h2>
+      <div id="kt-colors"></div>
+      <button class="btn small ghost" id="kt-color-add">Add color</button>
+    </aside>
+  </main>
+  <footer id="kt-status-bar">
+    <span id="kt-status"></span>
+    <span id="kt-triangles" class="hint"></span>
+  </footer>
+  <dialog id="kt-help">
+    <div class="kt-help-head">
+      <h2>Note Kit controls</h2>
+      <button class="btn small ghost" id="kt-help-close" title="Close (Esc)">Close</button>
+    </div>
+    <div id="kt-help-body"></div>
+  </dialog>
+  <script type="module" src="kit/main.js"></script>
+</body>
+</html>

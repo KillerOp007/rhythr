@@ -127,12 +127,11 @@ pub fn base_contours(shape: &Shape) -> Vec<Contour> {
             vec![sample_edges(&arcs, SAMPLES)]
         }
         Shape::Contours { contours, .. } => contours.clone(),
-        Shape::Points { control } => {
-            if control.len() < 3 {
-                return Vec::new();
-            }
-            vec![flatten_controls(control)]
-        }
+        Shape::Points { control, loops } => std::iter::once(control)
+            .chain(loops.iter())
+            .filter(|l| l.len() >= 3)
+            .map(|l| flatten_controls(l))
+            .collect(),
     }
 }
 
@@ -254,6 +253,7 @@ mod tests {
                 ctrl(1.0, 1.0),
                 ctrl(-1.0, 1.0),
             ],
+            loops: vec![],
         });
         assert!(pts[0].len() > 4);
         let raw = vec![vec![[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]];

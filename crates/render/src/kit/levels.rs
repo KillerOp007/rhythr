@@ -4,7 +4,7 @@
 //! as a second region that yields to solid wherever both overlap.
 
 use crate::kit::doc::*;
-use crate::kit::geom::{boolean, extent, is_empty, snap, OverlayRule, Shapes};
+use crate::kit::geom::{boolean, extent, is_empty, OverlayRule, Shapes};
 use crate::kit::resolve::{finish_part, resolve_part, ResolvedPart};
 use crate::kit::{KitError, Z_MAX, Z_MIN};
 use std::borrow::Cow;
@@ -18,17 +18,14 @@ pub struct Interval {
     pub glass: Shapes,
 }
 
+/// The note box is fixed: design units are note units, and whatever a
+/// part puts outside the unit box is cut away, like an artboard. Nothing
+/// is ever rescaled, so a part keeps its drawn size whatever else moves.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Evaluation {
-    /// The factor applied to every x and y to put the silhouette on the
-    /// unit box (1.0 when it already was).
-    pub scale: f32,
     pub levels: Vec<f32>,
     pub intervals: Vec<Interval>,
-    /// The visible, non-empty parts, normalised and finished (a finished
-    /// part is cut to the unit box). When `scale > 1` the removers among
-    /// them are clipped to the silhouette square with its two-unit margin,
-    /// not their full outlines.
+    /// The visible, non-empty parts, finished and cut to the unit box.
     pub parts: Vec<ResolvedPart>,
 }
 
@@ -43,23 +40,12 @@ fn unit_box() -> Shapes {
     ]]]
 }
 
-/// How far past the box a finished part may reach and still be cut
-/// quietly. Round joins at L/R = 0.2 have a sagitta of r(1 - cos 0.1),
-/// about 0.005 r; two offsets at MAX_FINISH 0.9 give at most 0.009, so
-/// 0.02 is twice the honest overshoot.
-const BOX_SLACK: f32 = 0.02;
-
-/// Cuts a finished part to the unit box. Within the chord tolerance the
-/// overshoot is the offsets' polygon error and is cut quietly; beyond it
-/// a finish ran away, which no design asks for, so it fails loudly.
-fn cut_to_box(shapes: Shapes, id: &str) -> Result<Shapes, KitError> {
-    let e = extent(&shapes);
-    if e > 1.0 + BOX_SLACK {
-        return Err(KitError::Invalid(format!(
-            "part {id} grew beyond the box after rounding: {e}"
-        )));
-    }
-    if e > 1.0 {
+/// Cuts a part to the unit box. A part may legitimately reach past the
+/// box (moved to the edge, or larger than it), and what lies outside is
+/// simply not part of the note; a part that lies entirely outside comes
+/// back empty.
+fn cut_to_box(shapes: Shapes) -> Result<Shapes, KitError> {
+    if extent(&shapes) > 1.0 {
         return boolean(&shapes, &unit_box(), OverlayRule::Intersect);
     }
     Ok(shapes)
@@ -174,74 +160,24 @@ pub fn evaluate(design: &Design) -> Result<Evaluation, KitError> {
         .collect::<Result<_, _>>()?;
     parts.retain(|p| !p.shapes.is_empty());
 
-    // The silhouette is what the adds cover; removers never count. The
-    // extent of a union is the largest extent of its inputs, so no union
-    // is needed to find it.
-    let m = parts
-        .iter()
-        .filter(|p| !removes(p))
-        .map(|p| extent(&p.shapes))
-        .fold(0.0f32, f32::max);
-    if m < 1e-6 {
+    // Something must add material; removers never count.
+    if !parts.iter().any(|p| !removes(p)) {
         return Err(KitError::Empty);
     }
-    let scale = if (m - 1.0).abs() > 1e-4 { 1.0 / m } else { 1.0 };
-    if scale > 1.0 {
-        // Scaling up would push a remover that reaches far past the
-        // silhouette beyond the lattice range, failing a valid design, so
-        // it is clipped first. The square is the silhouette plus a margin
-        // of two note units (it scales to half-extent 3.0, far inside the
-        // range): the finish runs on the clipped outline after scaling and
-        // reaches at most MAX_FINISH (0.9) from it, so with the margin the
-        // clip edge can never carve a band along the box.
-        let r = 3.0 * m;
-        let square: Shapes = vec![vec![vec![[-r, -r], [r, -r], [r, r], [-r, r]]]];
-        for p in parts.iter_mut().filter(|p| removes(p)) {
-            p.shapes = boolean(&p.shapes, &square, OverlayRule::Intersect)?;
-        }
-    }
-    if scale != 1.0 {
-        for p in &mut parts {
-            for s in &mut p.shapes {
-                for c in s.iter_mut() {
-                    for q in c.iter_mut() {
-                        q[0] *= scale;
-                        q[1] *= scale;
-                    }
-                }
-            }
-            // The multiply leaves the lattice; an interval with a single
-            // contributor never meets an overlay, so snap it here to keep
-            // every region on the same grid.
-            p.shapes = snap(&p.shapes)?;
-        }
-    }
-    // Rounding and rims are note-unit finishes, so they run on each part's
-    // normalised, merged region (the v1 editor normalised first too). A
-    // finish is meant never to make a part larger (a rim keeps the outer
-    // loop, a rounding pulls convex corners inward), but the offsets are
-    // polygons, so the cut below enforces the box.
+    // Rounding and rims are note-unit finishes on each part's merged
+    // region, run on the whole part before the box cut: a part's own
+    // corners round, the box edge stays straight, and a rim follows the
+    // part's outline, not the box. Then every part is cut to the box: what
+    // a part puts outside the note is not part of the note. A remover is
+    // cut the same way; past the box it would remove nothing anyway, and
+    // the cut keeps every overlay small.
     for p in &mut parts {
-        if p.round.is_some() || p.rim.is_some() {
-            let finished = finish_part(&p.shapes, p.round, p.rim)?;
-            // The erode step of a finish is a chord polygon, slightly
-            // larger than the true erosion, so a rounding can overshoot
-            // the box; the box is a promise, so it is cut. A part that
-            // adds material starts inside the box, so an overshoot past
-            // the chord tolerance is an error. A remover is only cut, never
-            // refused: clipped to the silhouette square (or never clipped
-            // at all), it legitimately reaches past the box and removes
-            // nothing there.
-            p.shapes = if removes(p) {
-                if extent(&finished) > 1.0 {
-                    boolean(&finished, &unit_box(), OverlayRule::Intersect)?
-                } else {
-                    finished
-                }
-            } else {
-                cut_to_box(finished, &p.id)?
-            };
-        }
+        let finished = if p.round.is_some() || p.rim.is_some() {
+            finish_part(&p.shapes, p.round, p.rim)?
+        } else {
+            std::mem::take(&mut p.shapes)
+        };
+        p.shapes = cut_to_box(finished)?;
     }
     parts.retain(|p| !p.shapes.is_empty());
 
@@ -326,7 +262,6 @@ pub fn evaluate(design: &Design) -> Result<Evaluation, KitError> {
         return Err(KitError::Empty);
     }
     Ok(Evaluation {
-        scale,
         levels,
         intervals,
         parts,
@@ -469,7 +404,10 @@ mod tests {
     }
 
     #[test]
-    fn silhouette_is_normalised_to_the_box() {
+    fn a_part_past_the_box_is_cut_to_it_and_never_rescaled() {
+        // A disc of radius 3 centred at x 2 covers the box except its far
+        // left corners: what remains is the box minus those corners, at
+        // full size, never a shrunken disc.
         let mut big = part("a", Shape::Circle, Mode::Add, 0.1, -0.1);
         big.transform = Transform {
             x: 2.0,
@@ -478,8 +416,40 @@ mod tests {
             ..Transform::default()
         };
         let ev = evaluate(&design(vec![big])).unwrap();
-        assert!((extent(&ev.intervals[0].solid) - 1.0).abs() < 1e-3);
-        assert!(ev.scale < 1.0);
+        let solid = &ev.intervals[0].solid;
+        assert_eq!(solid.len(), 1);
+        assert!((extent(solid) - 1.0).abs() < 1e-3);
+        assert!(
+            solid[0][0]
+                .iter()
+                .any(|p| (p[0] - 1.0).abs() < 1e-4 && (p[1] - 1.0).abs() < 1e-4),
+            "the right edge is the box edge"
+        );
+        assert!(
+            !solid[0][0]
+                .iter()
+                .any(|p| (p[0] + 1.0).abs() < 1e-4 && (p[1] + 1.0).abs() < 1e-4),
+            "the far corner is outside the disc"
+        );
+        // A small part stays small: nothing is scaled up either.
+        let mut small = part("s", Shape::Square { rounding: 0.0 }, Mode::Add, 0.1, -0.1);
+        small.transform = Transform {
+            x: 0.5,
+            w: 0.25,
+            h: 0.25,
+            ..Transform::default()
+        };
+        let ev = evaluate(&design(vec![small])).unwrap();
+        assert!((extent(&ev.intervals[0].solid) - 0.75).abs() < 1e-4);
+        // Entirely outside the box, a part adds nothing.
+        let mut away = part("w", Shape::Circle, Mode::Add, 0.1, -0.1);
+        away.transform = Transform {
+            x: 1.5,
+            w: 0.4,
+            h: 0.4,
+            ..Transform::default()
+        };
+        assert_eq!(evaluate(&design(vec![away])).unwrap_err(), KitError::Empty);
     }
 
     #[test]
@@ -537,18 +507,11 @@ mod tests {
     }
 
     #[test]
-    fn rim_is_applied_after_normalisation() {
-        // A square twice the box with a rim of 0.3: normalised first, the
-        // hole sits at 0.7; rimmed first and scaled after, it would sit
-        // at 0.85. The v1 editor normalised first, and so does the kit.
-        let mut big = part("a", Shape::Square { rounding: 0.0 }, Mode::Add, 0.1, -0.1);
-        big.transform = Transform {
-            w: 2.0,
-            h: 2.0,
-            ..Transform::default()
-        };
-        big.effects.rim = Some(0.3);
-        let ev = evaluate(&design(vec![big])).unwrap();
+    fn a_rim_follows_the_part_and_the_box_cut_comes_after() {
+        // A box-sized square with a rim of 0.3 keeps a band from 0.7 to 1.
+        let mut sq = part("a", Shape::Square { rounding: 0.0 }, Mode::Add, 0.1, -0.1);
+        sq.effects.rim = Some(0.3);
+        let ev = evaluate(&design(vec![sq.clone()])).unwrap();
         let solid = &ev.intervals[0].solid;
         assert_eq!(solid[0].len(), 2, "outer plus hole");
         let hole = solid[0][1]
@@ -557,6 +520,16 @@ mod tests {
             .fold(0.0f32, f32::max);
         assert!((hole - 0.7).abs() < 1e-3, "hole extent {hole}");
         assert!((extent(solid) - 1.0).abs() < 1e-3);
+        // Twice the box, the rim runs from 1.7 to 2: all of it lies outside
+        // the note. The rim follows the part's own outline, never the box
+        // edge, so nothing is left (a cut before the rim would have left a
+        // band along the box).
+        sq.transform = Transform {
+            w: 2.0,
+            h: 2.0,
+            ..Transform::default()
+        };
+        assert_eq!(evaluate(&design(vec![sq])).unwrap_err(), KitError::Empty);
     }
 
     #[test]
@@ -623,8 +596,7 @@ mod tests {
         // One hole inside, one bite at the edge; the discs add nothing.
         assert_eq!(ev.intervals[0].solid.len(), 1);
         assert_eq!(ev.intervals[0].solid[0].len(), 2);
-        // The discs do not count toward the silhouette: the plate stays the box.
-        assert!((ev.scale - 1.0).abs() < 1e-4);
+        assert!((extent(&ev.intervals[0].solid) - 1.0).abs() < 1e-4);
     }
 
     #[test]
@@ -649,9 +621,7 @@ mod tests {
     }
 
     #[test]
-    fn a_far_cut_does_not_fail_a_small_note() {
-        // The disc has half-extent 0.01, so the scale is 100; the cut's far
-        // edge would land at 100, past KIT_RANGE, without the clip.
+    fn a_tiny_note_stays_tiny() {
         let mut disc = part("disc", Shape::Circle, Mode::Add, 0.1, -0.1);
         disc.transform = Transform {
             w: 0.01,
@@ -666,12 +636,11 @@ mod tests {
             ..Transform::default()
         };
         let ev = evaluate(&design(vec![disc, cut])).unwrap();
-        assert!((ev.scale - 100.0).abs() < 0.1);
         let solid = &ev.intervals[0].solid;
         assert_eq!(solid.len(), 1);
-        // The cut covers x >= 0: the left half-disc remains and reaches -1.
-        assert!(solid[0][0].iter().all(|p| p[0] <= 1e-3));
-        assert!((extent(solid) - 1.0).abs() < 2e-3);
+        // The cut covers x >= 0: the left half-disc remains, still 0.01 across.
+        assert!(solid[0][0].iter().all(|p| p[0] <= 1e-4));
+        assert!((extent(solid) - 0.01).abs() < 1e-3);
     }
 
     #[test]
@@ -736,11 +705,11 @@ mod tests {
     }
 
     #[test]
-    fn a_rimmed_cut_beyond_the_note_removes_nothing_when_scaled_up() {
-        // The plate has half-extent 0.5, so the scale is 2. The cut is a
-        // disc of radius 2 in note units with a rim of 0.2: a ring at
-        // 1.8..2.0, outside the box. Clipping the cut to the box itself
-        // would run the rim along the plate's edge and carve a band.
+    fn a_rimmed_cut_beyond_the_box_removes_nothing() {
+        // The cut is a disc of radius 1.5 with a rim of 0.2: a ring at
+        // 1.3..1.5, outside the box. Cutting the remover to the box before
+        // its rim would run the rim along the box edge, at 0.8..1.0, and
+        // carve a band off the plate; the rim comes first.
         let mut plate = part(
             "plate",
             Shape::Square { rounding: 0.0 },
@@ -749,23 +718,22 @@ mod tests {
             -0.1,
         );
         plate.transform = Transform {
-            w: 0.5,
-            h: 0.5,
+            w: 0.9,
+            h: 0.9,
             ..Transform::default()
         };
         let mut cut = part("cut", Shape::Circle, Mode::Cut, 0.1, -0.1);
         cut.transform = Transform {
-            w: 1.0,
-            h: 1.0,
+            w: 1.5,
+            h: 1.5,
             ..Transform::default()
         };
         cut.effects.rim = Some(0.2);
         let ev = evaluate(&design(vec![plate, cut])).unwrap();
-        assert!((ev.scale - 2.0).abs() < 1e-3);
         let solid = &ev.intervals[0].solid;
         assert_eq!(solid.len(), 1);
         assert_eq!(solid[0].len(), 1, "no band carved along the edge");
-        assert!((extent(solid) - 1.0).abs() < 1e-4);
+        assert!((extent(solid) - 0.9).abs() < 1e-4);
     }
 
     fn square(h: f32) -> Shapes {
@@ -773,21 +741,17 @@ mod tests {
     }
 
     #[test]
-    fn a_chord_overshoot_is_cut_quietly() {
-        let cut = cut_to_box(square(1.01), "p").unwrap();
-        assert_eq!(cut.len(), 1);
-        assert_eq!(extent(&cut), 1.0);
+    fn anything_past_the_box_is_cut_quietly() {
+        for h in [1.01, 1.2, 3.0] {
+            let cut = cut_to_box(square(h)).unwrap();
+            assert_eq!(cut.len(), 1, "half-extent {h}");
+            assert_eq!(extent(&cut), 1.0, "half-extent {h}");
+        }
         // Inside the box nothing changes.
-        assert_eq!(cut_to_box(square(0.5), "p").unwrap(), square(0.5));
-    }
-
-    #[test]
-    fn a_runaway_finish_is_an_error() {
-        let e = cut_to_box(square(1.2), "p").unwrap_err();
-        assert!(
-            matches!(e, KitError::Invalid(ref s) if s.contains("part p")),
-            "{e}"
-        );
+        assert_eq!(cut_to_box(square(0.5)).unwrap(), square(0.5));
+        // Entirely outside, nothing is left.
+        let away: Shapes = vec![vec![vec![[2.0, 2.0], [3.0, 2.0], [3.0, 3.0], [2.0, 3.0]]]];
+        assert!(is_empty(&cut_to_box(away).unwrap()));
     }
 
     #[test]
@@ -858,6 +822,14 @@ mod tests {
             p.effects.rim = rim;
             p.effects.mirror = Mirror::X;
             p.effects.repeat = repeat;
+            // The cases came from the property run while the kernel still
+            // fitted the design to the box; the same fit, done on the
+            // transform, reproduces them against the fixed box.
+            let e0 = extent(&resolve_part(&p).unwrap().shapes);
+            p.transform.x /= e0;
+            p.transform.y /= e0;
+            p.transform.w /= e0;
+            p.transform.h /= e0;
             let ev = evaluate(&design(vec![p])).unwrap();
             let e = ev
                 .intervals

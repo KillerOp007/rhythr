@@ -1095,9 +1095,11 @@ function wireControls() {
     }
   });
   $("dz-doc-load").addEventListener("click", async () => {
+    // A .rhs saved here carries this design inside; one from the Note Kit
+    // is refused by the backend with a hint to open it there.
     const path = await dialog.open({
       multiple: false,
-      filters: [{ name: "rhythr note design", extensions: ["rhsd"] }],
+      filters: [{ name: "rhythr note design or skin", extensions: ["rhsd", "rhs"] }],
     });
     if (!path || Array.isArray(path)) return;
     loadDocFrom(path);
@@ -1114,8 +1116,10 @@ function wireControls() {
     });
     if (!path) return;
     try {
-      const saved = await invoke("designer_export", { shape: shapePayload(), path });
-      setStatus(`Saved: ${saved} - load it via Config in the main window, or import it in the game.`);
+      // The design rides inside the skin, so the file opens again here
+      // (Load design) or converts in the Note Kit.
+      const saved = await invoke("designer_export", { shape: shapePayload(), path, doc: docState() });
+      setStatus(`Saved: ${saved} - load it via Config in the main window, import it in the game, or open it again here or in the Note Kit.`);
     } catch (e) {
       setStatus(String(e), true);
     }

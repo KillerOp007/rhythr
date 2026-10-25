@@ -1247,6 +1247,9 @@ function initHudEdit() {
   $("btn-designer").addEventListener("click", () => {
     call(() => invoke("open_designer_window"));
   });
+  $("btn-kit").addEventListener("click", () => {
+    call(() => invoke("open_kit_window"));
+  });
   $("btn-analyze").addEventListener("click", () => {
     call(() => invoke("open_analyze_window"));
   });
