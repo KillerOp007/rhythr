@@ -1,6 +1,7 @@
 //! A part becomes clean regions: source outline, waves (keyed on each
-//! point's angle and applied before the transform, so a turned shape
-//! keeps its wave phase), the 2D transform, symmetry copies, then one
+//! point's angle, running inward from the outline, applied before the
+//! transform so a turned shape keeps its wave phase), the 2D transform,
+//! symmetry copies, then one
 //! nonzero clean so overlapping copies merge. Rounding and the rim are
 //! deferred to `finish_part`, which the evaluation runs on the merged
 //! region of the part, in note units (the box is fixed, so design units
@@ -66,7 +67,10 @@ fn apply_waves(contours: &mut [Contour], w: &Waves) {
     for c in contours.iter_mut() {
         for p in c.iter_mut() {
             let th = p[1].atan2(p[0]);
-            let f = 1.0 + depth * wave_fn(w.style, count as f32 * th);
+            // Inward only: the wave's crest sits on the source outline and
+            // the trough at 1 minus the depth, so the part stays within its
+            // own extent (the handles and the box hold).
+            let f = 1.0 + depth * (wave_fn(w.style, count as f32 * th) - 1.0) * 0.5;
             p[0] *= f;
             p[1] *= f;
         }
@@ -405,7 +409,9 @@ mod tests {
     }
 
     #[test]
-    fn waves_change_the_radius() {
+    fn waves_stay_inside_the_part() {
+        // Tips at the part's own extent, valleys at 1 minus the depth: a
+        // wavy part at full size never reaches past its handles or the box.
         let mut p = part(Shape::Circle);
         p.effects.waves = Some(Waves {
             count: 6,
@@ -418,7 +424,8 @@ mod tests {
             radii.iter().cloned().fold(f32::MAX, f32::min),
             radii.iter().cloned().fold(f32::MIN, f32::max),
         );
-        assert!(min < 0.9 && max > 1.1, "radii {min}..{max}");
+        assert!(max <= 1.0 + 1e-3, "tips past the extent: {max}");
+        assert!((min - 0.8).abs() < 0.02, "valleys at {min}, expected 0.8");
     }
 
     #[test]
