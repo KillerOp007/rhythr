@@ -84,7 +84,7 @@ Part {
        | Ring { thickness }
        | Pill { aspect }
        | Contours { contours, label }   // an SVG or glyph import, resolved by the editor, stored as oriented unit-scaled contours; the kernel never touches fonts or files
-       | Points { control: [{x, y, smooth}] },   // freeform, one closed loop
+       | Points { control: [{x, y, smooth}], loops: [[{x, y, smooth}]] },   // freeform: the first closed loop and any further ones (holes clockwise, islands counterclockwise); any shape converts to this
   transform: { x, y, w, h, rotation },   // x, y, w, h in note-box units, rotation in degrees
   mode: Add | Cut,
   depth: { front, back },        // z band; front > back; front toward the player
@@ -264,12 +264,31 @@ until the switch is complete, then the v1 window is removed.
   edited. Click selects, drag moves, corner handles scale (Shift keeps
   aspect), a rotation handle rotates, arrows nudge, snapping as in v2,
   zoom about cursor and pan as in v2. The resolved silhouette draws in
-  the first colorset colour with holes cut by orientation; glass draws
+  the first colorset colour band by band from the back forward, the
+  highest band in the colour and lower bands shaded toward dark (toward
+  light for a dark colour) by how far they lie below the top, so a raised
+  or recessed part reads head-on (the game shows it only through
+  parallax, which the hint says); holes cut by orientation; glass draws
   at the game's alpha; every part's own outline draws faintly so cut
-  parts stay findable. Point-edit mode (double-click a Points part)
-  shows handles and uses the v2 insertion and drag rules, fixed: insert
-  on the nearest contour segment, drag folded consistently, never by
-  polar angle.
+  parts stay findable. The parts list shows each part's Front depth. The
+  list order has no geometric meaning (adds and cuts combine per
+  interval regardless of order); it sets which part a click picks first.
+  Point editing (landed in the Phase 2 test rounds): double-click a part
+  or press To points in the inspector; a Points part opens for editing,
+  any other shape is converted first (`kit_shape_to_points`: the kernel
+  thins the outline with Ramer-Douglas-Peucker to at most 64 points per
+  loop, a turn of 40 degrees or more makes a corner, every loop of the
+  source becomes a loop of points, the effects and transform stay). In
+  editing, the points draw as handles in the part's own frame (round for
+  smooth, square for a corner) with the control polygon dashed; drag
+  moves a point (Shift snaps to a 0.05 grid of that frame), a click
+  within 12 px of the polygon inserts a point on the nearest segment
+  (smooth unless both neighbours are corners) and picks it up, double-
+  click switches smooth and corner, right-click or Delete removes (a loop
+  keeps three points; a three-point loop goes as a whole unless it is the
+  last), arrows nudge the selected point, Esc or a click away from the
+  polygon finishes. Undo, removal or a shape change of the part ends the
+  editing.
 - Turntable (WebGL2, inspection only): the kit mesh with orbit limited
   to plus or minus 60 degrees, two snap buttons (front, three-quarter),
   the game's unlit tint and glass alpha, optional fade slider that
@@ -280,7 +299,19 @@ until the switch is complete, then the v1 window is removed.
   hub, a shield with an emblem, a ring with a recessed plate).
 - Import: SVG and glyph become new parts (landed in the Phase 2 test
   rounds: the SVG button and the Letter field add `Contours` parts named
-  after their source); the reference underlay stays (Phase 4).
+  after their source). An SVG (`kit_import_svg`) contributes every
+  visible path's fill and stroke, the stroke outlined at its width with
+  caps, joins and dashes; paths group into one layer per paint colour in
+  order of first appearance, all layers share one unit frame, and each
+  layer is a part (`<name> 1`, `<name> 2`, the inspector naming the
+  colour). `kit::import::layer_modes` sets the mode: the first layer
+  adds; a later layer whose area lies more than half on material already
+  there is a Cut and is taken out of that material, otherwise it adds
+  (the game shows one tint, so a figure on a badge can only be told
+  apart as a hole; stripes side by side stay a full silhouette). Same-
+  colour shapes merge. Text is not imported. The old designer keeps its
+  single merged outline (`designer_import_svg`, strokes included). The
+  reference underlay stays (Phase 4).
 
 5.3 Vocabulary
 
@@ -338,8 +369,9 @@ because the game could not load it.
 2. Editor core: store and render layer, parts list, inspector, front
    view with transforms and selection, previews, undo, autosave, files,
    v1 migration. Testbuild.
-3. Composition: groups, effects chips, symmetry, point edit, snapping,
-   glass, turntable. Testbuild.
+3. Composition: groups, effects chips, symmetry, snapping, glass,
+   turntable (point edit and the depth shading of the front view landed
+   early, in the Phase 2 test rounds). Testbuild.
 4. Polish and acceptance: presets, reference underlay, user guide,
    in-game probe round, removal of the v1 designer (imports as parts and
    the one-file save landed early, in the Phase 2 test rounds). Release

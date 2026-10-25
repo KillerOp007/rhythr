@@ -5,7 +5,7 @@
 // detaches the button under the pointer and the click never lands. Nothing in
 // the DOM is a source of truth: a field the user is typing in keeps its text
 // until it commits, every other widget is rewritten from state.
-import { DEPTH_MIN, DEPTH_MAX, SHAPES } from "./store.js";
+import { DEPTH_MIN, DEPTH_MAX, SHAPES, loopsOf } from "./store.js";
 
 export const MIN_BAND = 0.05;
 
@@ -49,7 +49,16 @@ export function shapeFields(kind) {
   return FIELDS[kind] || [];
 }
 
-const KIND_LABELS = { circle: "Disc", square: "Square", polygon: "Polygon", star: "Star", ring: "Ring", pill: "Pill", contours: "Outline (imported)", points: "Outline (freehand)" };
+const KIND_LABELS = { circle: "Disc", square: "Square", polygon: "Polygon", star: "Star", ring: "Ring", pill: "Pill", contours: "Outline (imported)", points: "Outline (points)" };
+
+export const POINT_HELP = "Drag a point, click the outline to add one, double-click a point to switch smooth and corner, right-click or Delete removes it, Esc or a click elsewhere finishes.";
+
+// "12 points in 2 loops": what the inspector says about a Points shape.
+export function pointSummary(shape) {
+  const loops = loopsOf(shape) || [];
+  const n = loops.reduce((sum, l) => sum + l.length, 0);
+  return `${n} point${n === 1 ? "" : "s"} in ${loops.length} loop${loops.length === 1 ? "" : "s"}`;
+}
 
 const $ = (id) => document.getElementById(id);
 
@@ -154,9 +163,10 @@ function buildParts(store, root) {
     const lock = el("button", { class: "btn small ghost",
       onclick: (e) => { e.stopPropagation(); store.updatePart(id, "lock", (x) => (x.locked = !x.locked)); } });
     const name = el("span", { class: "name" });
+    const depth = el("span", { class: "depth", title: "Front depth. Parts at one depth merge into one surface; a higher Front stands out, a lower one lies deeper." });
     const mode = el("span", { class: "badge" });
     const material = el("span", { class: "badge" });
-    row.append(eye, lock, name, mode, material);
+    row.append(eye, lock, name, depth, mode, material);
     row.addEventListener("click", () => store.select(id));
     row.addEventListener("dragstart", (e) => { dragPartId = id; row.classList.add("dragging"); e.dataTransfer.effectAllowed = "move"; });
     row.addEventListener("dragend", () => { dragPartId = null; row.classList.remove("dragging"); });
@@ -170,7 +180,7 @@ function buildParts(store, root) {
       store.movePart(from, to);
     });
     root.append(row);
-    partRows.push({ id, row, eye, lock, name, mode, material });
+    partRows.push({ id, row, eye, lock, name, depth, mode, material });
   }
 }
 
@@ -192,6 +202,7 @@ function renderParts(store) {
     setText(r.lock, p.locked ? "🔒" : "🔓");
     r.lock.setAttribute("title", p.locked ? "Unlock" : "Lock");
     setText(r.name, p.name);
+    setText(r.depth, fmt(p.depth.front, 0.01));
     r.mode.classList.toggle("cut", p.mode === "cut");
     setText(r.mode, p.mode === "cut" ? "Cut" : "Add");
     r.material.classList.toggle("glass", p.material === "glass");
@@ -206,7 +217,7 @@ function placeDepthBand(band, depth) {
   band.style.right = `${100 - at(depth.front)}%`;
 }
 
-function buildInspector(store, body, p) {
+function buildInspector(store, body, p, actions) {
   const id = p.id;
   const up = (label, patch) => store.updatePart(id, label, patch);
   const get = () => store.part(id);
@@ -238,6 +249,28 @@ function buildInspector(store, body, p) {
   }
   for (const [key, label, min, max, step] of shapeFields(kind)) {
     body.append(slider(p, label, (q) => q.shape[key], min, max, step, (v) => up(`shape.${key}:${id}`, (x) => (x.shape[key] = v))));
+  }
+  // Freeform: a Points part offers its editing, every other shape the
+  // conversion into one (the outline becomes points, the effects stay).
+  if (kind === "points") {
+    const info = el("div", { class: "hint" });
+    const toggle = el("button", { class: "btn small", "data-role": "edit-points", onclick: () => actions.editPoints?.(id, store.state.ui.pointEdit !== id) });
+    const sync = (q) => {
+      const on = store.state.ui.pointEdit === id;
+      setText(info, `${pointSummary(q.shape)}. ${on ? POINT_HELP : "Edit points to move, add and remove them; double-click the part does the same."}`);
+      setText(toggle, on ? "Done" : "Edit points");
+      toggle.classList.toggle("on", on);
+    };
+    sync(p);
+    inspectorWidgets.push(sync);
+    body.append(el("div", { class: "kt-field" }, [el("label", { text: "Points" }), toggle]), info);
+  } else {
+    body.append(el("div", { class: "kt-field" }, [
+      el("label", { text: "Points" }),
+      el("button", { class: "btn small ghost", "data-role": "to-points", text: "To points",
+        title: "Turn the outline into points you can drag, add and remove (double-click the part does the same)",
+        onclick: () => actions.toPoints?.(id) }),
+    ]));
   }
 
   const pick = (key, label) => (v) => {
@@ -278,7 +311,7 @@ function buildInspector(store, body, p) {
   ]));
 }
 
-function renderInspector(store) {
+function renderInspector(store, actions) {
   const body = $("kt-inspector-body");
   const p = store.part();
   const key = p ? `${p.id}|${p.shape.kind}` : "";
@@ -298,7 +331,7 @@ function renderInspector(store) {
     body.append(el("div", { class: "hint", text: "Select a part, or add one from the toolbar." }));
     return;
   }
-  buildInspector(store, body, p);
+  buildInspector(store, body, p, actions);
   if (kindHadFocus && kindSelect) kindSelect.focus();
 }
 
@@ -360,10 +393,12 @@ function renderColors(store) {
   });
 }
 
-export function render(store) {
+// actions: { toPoints(id), editPoints(id, on) }, supplied by the owner of
+// the IPC; the panels only call them.
+export function render(store, actions = {}) {
   const s = store.state;
   renderParts(store);
-  renderInspector(store);
+  renderInspector(store, actions);
   renderColors(store);
   $("kt-undo").disabled = s.undo.length === 0;
   $("kt-redo").disabled = s.redo.length === 0;

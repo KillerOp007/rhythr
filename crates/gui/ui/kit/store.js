@@ -17,7 +17,20 @@ const DISCRETE = new Set([
   "add", "remove", "duplicate", "reorder",
   "visible", "lock", "mode", "material", "shape", "name",
   "color-add", "color-remove", "color-reorder",
+  "point-add", "point-remove", "point-smooth",
 ]);
+
+// A Points shape holds its first loop in `control` and the rest in `loops`;
+// the editor treats them as one list of loops.
+export function loopsOf(shape) {
+  if (!shape || shape.kind !== "points" || !Array.isArray(shape.control)) return null;
+  return [shape.control, ...(Array.isArray(shape.loops) ? shape.loops : [])];
+}
+
+function setLoops(shape, loops) {
+  shape.control = loops[0] || [];
+  shape.loops = loops.slice(1);
+}
 
 export const SHAPES = {
   circle: () => ({ kind: "circle" }),
@@ -59,7 +72,9 @@ export function createStore(design, opts = {}) {
     undo: [],
     redo: [],
     last: { label: null, at: -Infinity },
-    ui: { previews: false },
+    // pointEdit: the id of the Points part whose points are being edited, or
+    // null; pointSel: the selected point as { loop, index }, or null.
+    ui: { previews: false, pointEdit: null, pointSel: null },
     // The last good evaluation stays on screen through an error, so the
     // handles never vanish under the cursor.
     evaluated: null,
@@ -73,6 +88,20 @@ export function createStore(design, opts = {}) {
   const noLast = () => ({ label: null, at: -Infinity });
   function fixSelection() {
     if (s.selected && !s.design.parts.some((p) => p.id === s.selected)) s.selected = topId(s.design);
+    // Point editing follows its part: gone (undo, remove) or no longer a
+    // Points shape, and the mode ends; a selected point past the loop's end
+    // (undo of an insert) is dropped.
+    if (s.ui.pointEdit) {
+      const p = s.design.parts.find((x) => x.id === s.ui.pointEdit);
+      const loops = p ? loopsOf(p.shape) : null;
+      if (!loops) {
+        s.ui.pointEdit = null;
+        s.ui.pointSel = null;
+      } else if (s.ui.pointSel) {
+        const { loop, index } = s.ui.pointSel;
+        if (!loops[loop] || index >= loops[loop].length) s.ui.pointSel = null;
+      }
+    }
   }
   const api = {
     state: s,
@@ -159,6 +188,99 @@ export function createStore(design, opts = {}) {
         s.selected = id;
       });
       return id;
+    },
+    // An SVG's colours, one part each in paint order: the top colour of the
+    // file ends on top of the list and is selected. Each layer brings its
+    // mode (a colour drawn on another is a Cut).
+    addLayers(layers, label) {
+      const base = String(label || "").trim() || "Outline";
+      const ids = [];
+      if (!layers.length) return ids;
+      api.commit("add", (d) => {
+        layers.forEach((l, i) => {
+          const id = api.nextId();
+          const p = newPart(id, "circle");
+          const one = layers.length === 1;
+          p.name = one ? base : `${base} ${i + 1}`;
+          p.shape = { kind: "contours", contours: l.contours, label: one || !l.paint ? base : `${base}, colour ${l.paint}` };
+          p.mode = l.mode === "cut" ? "cut" : "add";
+          d.parts.push(p);
+          ids.push(id);
+        });
+        s.selected = ids[ids.length - 1];
+      });
+      return ids;
+    },
+    // Point editing. Coordinates are in the part's own unit frame (the
+    // transform is applied afterwards, so a point dragged on a turned part
+    // lands where the pointer is).
+    setPointEdit(id) {
+      s.ui.pointEdit = id;
+      s.ui.pointSel = null;
+      emit();
+    },
+    selectPoint(sel) {
+      s.ui.pointSel = sel;
+      emit();
+    },
+    pointLoops(id = s.ui.pointEdit) {
+      const p = api.part(id);
+      return p ? loopsOf(p.shape) : null;
+    },
+    movePoint(id, loop, index, x, y) {
+      api.updatePart(id, `point:${id}`, (p) => {
+        const l = loopsOf(p.shape);
+        const q = l && l[loop] && l[loop][index];
+        if (q) {
+          q.x = x;
+          q.y = y;
+        }
+      });
+    },
+    // Inserted before `index` in the loop; smooth unless both neighbours are
+    // corners, so a point on a straight edge keeps the edge straight.
+    insertPoint(id, loop, index, x, y) {
+      let placed = null;
+      api.updatePart(id, "point-add", (p) => {
+        const l = loopsOf(p.shape);
+        if (!l || !l[loop]) return;
+        const pts = l[loop];
+        const at = Math.max(0, Math.min(pts.length, index));
+        const prev = pts[(at + pts.length - 1) % pts.length];
+        const next = pts[at % pts.length];
+        const smooth = !(prev && next && !prev.smooth && !next.smooth);
+        pts.splice(at, 0, { x, y, smooth });
+        placed = { loop, index: at };
+        s.ui.pointSel = placed;
+      });
+      return placed;
+    },
+    // A loop keeps three points; at three, removing a point drops the loop
+    // unless it is the part's last one, which stays.
+    removePoint(id, loop, index) {
+      let done = false;
+      api.updatePart(id, "point-remove", (p) => {
+        const l = loopsOf(p.shape);
+        if (!l || !l[loop] || index >= l[loop].length) return;
+        if (l[loop].length > 3) {
+          l[loop].splice(index, 1);
+        } else if (l.length > 1) {
+          l.splice(loop, 1);
+          setLoops(p.shape, l);
+        } else {
+          return;
+        }
+        done = true;
+        s.ui.pointSel = null;
+      });
+      return done;
+    },
+    togglePoint(id, loop, index) {
+      api.updatePart(id, "point-smooth", (p) => {
+        const l = loopsOf(p.shape);
+        const q = l && l[loop] && l[loop][index];
+        if (q) q.smooth = !q.smooth;
+      });
     },
     removePart(id) {
       api.commit("remove", (d) => {

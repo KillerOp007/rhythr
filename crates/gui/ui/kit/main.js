@@ -3,7 +3,7 @@
 import { createStore } from "./store.js";
 import { createView } from "./view.js";
 import { invoke, coalesced } from "./ipc.js";
-import { render } from "./render.js";
+import { render, POINT_HELP } from "./render.js";
 import { mountPreviews } from "./preview.js";
 import {
   makeRecent,
@@ -78,9 +78,14 @@ async function boot() {
       evalStatus(msg);
     },
   );
+  // What the panels and the canvas ask of the IPC owner; filled in below,
+  // read when an event fires.
+  const actions = {};
   const view = createView($("kt-canvas"), store, {
     onEdit: () => {},
     onZoom: (pct) => ($("kt-view-reset").textContent = `${pct}%`),
+    // Double-click: a Points part opens for editing, any other converts.
+    onDoubleClick: (part) => (part.shape.kind === "points" ? actions.editPoints(part.id, true) : actions.toPoints(part.id)),
   });
   $("kt-view-reset").addEventListener("click", view.resetView);
   const previews = mountPreviews(
@@ -117,7 +122,7 @@ async function boot() {
     sel.value = "";
   }
   store.subscribe((s) => {
-    render(store);
+    render(store, actions);
     syncRecent();
     view.draw();
     const serial = store.serialize();
@@ -252,14 +257,36 @@ async function boot() {
   });
   // Imports become parts: the backend resolves the file or the font once
   // and the outline is stored in the design, so the kernel never touches
-  // either. Both land centred at the box size, like a shape from Add.
+  // either. Both land centred at the box size, like a shape from Add. An
+  // SVG arrives as one layer per colour, each its own part, with strokes
+  // outlined; a colour drawn on another comes as a Cut.
   const addSvg = exclusive(async () => {
     const path = await dialog().open({ multiple: false, filters: SVG_FILTER });
     if (!path || Array.isArray(path)) return;
-    const contours = await invoke("designer_import_svg", { path });
-    store.addContours(contours, fileName(path).replace(/\.svg$/i, ""));
-    store.setStatus(`Added ${fileName(path)} as a part`);
+    const layers = await invoke("kit_import_svg", { path });
+    store.addLayers(layers, fileName(path).replace(/\.svg$/i, ""));
+    if (layers.length === 1) {
+      store.setStatus(`Added ${fileName(path)} as a part`);
+    } else {
+      const cuts = layers.filter((l) => l.mode === "cut").length;
+      const cutNote = cuts ? `; ${cuts} drawn on another colour came in as Cut` : "";
+      store.setStatus(`Added ${fileName(path)} as ${layers.length} parts, one per colour${cutNote}`);
+    }
   });
+  // Freeform: the kernel thins the part's outline to control points; the
+  // part keeps its transform, mode, depth and effects.
+  actions.toPoints = exclusive(async (id) => {
+    const p = store.part(id);
+    if (!p) return;
+    const shape = await invoke("kit_shape_to_points", { shape: p.shape });
+    store.updatePart(id, "shape", (x) => (x.shape = shape));
+    store.setPointEdit(id);
+    store.setStatus(`Editing points. ${POINT_HELP}`);
+  });
+  actions.editPoints = (id, on) => {
+    store.setPointEdit(on ? id : null);
+    store.setStatus(on ? `Editing points. ${POINT_HELP}` : "");
+  };
   const glyphField = $("kt-glyph");
   const addGlyph = exclusive(async () => {
     const ch = glyphOf(glyphField.value);
@@ -305,7 +332,7 @@ async function boot() {
     if (document.visibilityState === "hidden") autoSave.flush();
   });
 
-  render(store);
+  render(store, actions);
   syncRecent();
   view.fit();
   evaluate({ design: store.state.design });

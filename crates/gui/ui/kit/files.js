@@ -175,6 +175,31 @@ export function bindKeys(store, actions, activeElement) {
     if (mod && key === "z" && !e.shiftKey) { e.preventDefault(); store.undo(); return; }
     if (mod && (key === "y" || (key === "z" && e.shiftKey))) { e.preventDefault(); store.redo(); return; }
     if (!mod && !e.altKey && key === "p") { if (!e.repeat) actions.togglePreviews(); return; }
+    // Point editing takes Escape, Delete and the arrows for the selected
+    // point; everything else falls through to the part.
+    const editing = store.state.ui.pointEdit;
+    if (editing) {
+      const sel = store.state.ui.pointSel;
+      const part = store.part(editing);
+      if (e.key === "Escape") { store.setPointEdit(null); return; }
+      if ((e.key === "Delete" || e.key === "Backspace") && !mod) {
+        e.preventDefault();
+        if (!e.repeat && sel && part && !part.locked) store.removePoint(editing, sel.loop, sel.index);
+        return;
+      }
+      if (!mod && !e.altKey && !ownsArrows(active) && sel && part && !part.locked) {
+        const step = e.shiftKey ? 0.1 : 0.01;
+        const nudge = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, step], ArrowDown: [0, -step] }[e.key];
+        if (nudge) {
+          e.preventDefault();
+          const loops = store.pointLoops(editing);
+          const q = loops && loops[sel.loop] && loops[sel.loop][sel.index];
+          const r3 = (v) => Math.round(v * 1000) / 1000;
+          if (q) store.movePoint(editing, sel.loop, sel.index, r3(q.x + nudge[0]), r3(q.y + nudge[1]));
+          return;
+        }
+      }
+    }
     if (e.key === "Escape") { store.select(null); return; }
     const p = store.part();
     if (!p) return;

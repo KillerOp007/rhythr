@@ -327,6 +327,7 @@ mod tests {
         };
         let mut p = part(Shape::Points {
             control: vec![ctrl(1.0, 0.0), ctrl(0.0, 1.0), ctrl(-1.0, 0.0)],
+            loops: vec![],
         });
         p.transform.rotation = 90.0;
         let r = resolve_part(&p).unwrap();
@@ -347,6 +348,7 @@ mod tests {
         };
         let mut p = part(Shape::Points {
             control: vec![ctrl(0.6, 0.0), ctrl(0.9, 0.1), ctrl(0.6, 0.2)],
+            loops: vec![],
         });
         p.effects.repeat = Some(u32::MAX);
         p.effects.waves = Some(Waves {
@@ -453,7 +455,10 @@ mod tests {
 
     #[test]
     fn degenerate_parts_resolve_to_nothing() {
-        let mut p = part(Shape::Points { control: vec![] });
+        let mut p = part(Shape::Points {
+            control: vec![],
+            loops: vec![],
+        });
         let r = resolve_part(&p).unwrap();
         assert!(r.shapes.is_empty());
         p.shape = Shape::Circle;

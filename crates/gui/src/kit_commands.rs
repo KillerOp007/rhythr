@@ -2,9 +2,11 @@
 //! turns its results into what the editor draws and its errors into the
 //! editor's own words.
 
-use rhythia_render::kit::doc::Design;
+use rhythia_render::kit::doc::{Design, Shape};
 use rhythia_render::kit::geom::Shapes;
-use rhythia_render::kit::{export, levels, mesh, migrate, validate, KitError, MAX_TRIANGLES};
+use rhythia_render::kit::{
+    export, levels, mesh, migrate, points, validate, KitError, MAX_TRIANGLES,
+};
 use serde::Serialize;
 
 #[derive(Serialize, Debug)]
@@ -249,6 +251,13 @@ pub async fn kit_doc_load(path: String) -> Result<Loaded, String> {
         })
         .await,
     )
+}
+
+/// Any shape as freeform points, for the inspector's "To points": the
+/// kernel thins the outline to the points that carry its form.
+#[tauri::command]
+pub fn kit_shape_to_points(shape: Shape) -> Result<Shape, String> {
+    points::to_points(&shape).map_err(|e| user_message(&e))
 }
 
 /// The editor's Save: bakes the design into a skin archive at `path` with

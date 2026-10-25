@@ -1,7 +1,14 @@
 // crates/gui/ui/kit/tests/render.test.mjs
 import test from "node:test";
 import assert from "node:assert/strict";
-import { fmt, roundToStep, clampDepth, shapeFields } from "../render.js";
+import { fmt, roundToStep, clampDepth, shapeFields, pointSummary } from "../render.js";
+
+test("a_points_shape_is_summed_up_in_points_and_loops", () => {
+  const pt = { x: 0, y: 0, smooth: true };
+  assert.equal(pointSummary({ kind: "points", control: [pt, pt, pt], loops: [[pt, pt, pt, pt]] }), "7 points in 2 loops");
+  assert.equal(pointSummary({ kind: "points", control: [pt, pt, pt] }), "3 points in 1 loop");
+  assert.equal(pointSummary({ kind: "circle" }), "0 points in 0 loops");
+});
 
 test("numbers_show_as_many_decimals_as_their_step", () => {
   assert.equal(fmt(0.123456, 0.01), "0.12");

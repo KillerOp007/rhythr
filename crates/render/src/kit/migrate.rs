@@ -112,7 +112,14 @@ pub fn from_v1(json: &str) -> Result<Design, KitError> {
     } else if let Some(control) = free.and_then(|f| control_loop(&f, symmetry, mirror)) {
         // The symmetry and the mirror live in the expanded loop itself, so
         // the part carries no repeat and no mirror effect.
-        (Shape::Points { control }, "Freeform", 0.0)
+        (
+            Shape::Points {
+                control,
+                loops: Vec::new(),
+            },
+            "Freeform",
+            0.0,
+        )
     } else {
         let waves = f("waves", 0.0) as u32;
         if waves > 0 {
@@ -266,7 +273,7 @@ mod tests {
 
     fn control_of(d: &Design) -> &[ControlPoint] {
         match &d.parts[0].shape {
-            Shape::Points { control } => control,
+            Shape::Points { control, .. } => control,
             other => panic!("expected points, got {other:?}"),
         }
     }

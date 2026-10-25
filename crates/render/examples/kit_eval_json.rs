@@ -4,11 +4,13 @@
 //! against the real kernel. `--default` prints the default design instead;
 //! `--load <file>` prints what `kit_doc_load` would ({json, migrated}) for
 //! a .rhs or .rhsd; `--save <file>` bakes the design on stdin into a .rhs
-//! like `kit_export` and prints {path}. Errors print as {error}.
-//! Usage: kit_eval_json [--default | --load <file> | --save <file>] < design.json
+//! like `kit_export` and prints {path}; `--points` reads a shape on stdin
+//! and prints it as freeform points like `kit_shape_to_points`. Errors
+//! print as {error}.
+//! Usage: kit_eval_json [--default | --load <file> | --save <file> | --points] < design.json
 
-use rhythia_render::kit::doc::Design;
-use rhythia_render::kit::{export, levels, mesh, migrate, KitError, MAX_TRIANGLES};
+use rhythia_render::kit::doc::{Design, Shape};
+use rhythia_render::kit::{export, levels, mesh, migrate, points, KitError, MAX_TRIANGLES};
 use serde::Serialize;
 use std::io::Read;
 
@@ -122,6 +124,20 @@ fn main() {
     std::io::stdin()
         .read_to_string(&mut text)
         .expect("read stdin");
+    if args.first().map(String::as_str) == Some("--points") {
+        let shape: Shape = match serde_json::from_str(&text) {
+            Ok(s) => s,
+            Err(e) => {
+                print_error(format!("shape: {e}"));
+                return;
+            }
+        };
+        match points::to_points(&shape) {
+            Ok(s) => println!("{}", serde_json::to_string(&s).unwrap()),
+            Err(e) => print_error(message(&e)),
+        }
+        return;
+    }
     let design: Design = match serde_json::from_str(&text) {
         Ok(d) => d,
         Err(e) => {

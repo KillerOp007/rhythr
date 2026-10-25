@@ -1,9 +1,10 @@
 // Browser harness for the Note Kit window: serves crates/gui/ui/ as the
 // desktop app would and stands in for the Tauri IPC, so kit.html can be
 // driven in a plain browser (by hand or with Playwright) against the real
-// kernel. kit_evaluate, kit_doc_load and kit_export run the kit_eval_json
-// example, so saved skins are real archives under a temp directory;
-// previews and the two imports (SVG, glyph) are canned outlines.
+// kernel. kit_evaluate, kit_doc_load, kit_export and kit_shape_to_points run
+// the kit_eval_json example, so saved skins are real archives under a temp
+// directory and point conversion is the kernel's; previews and the two
+// imports (SVG, glyph) are canned outlines.
 //
 //   cargo build -p rhythia-render --example kit_eval_json
 //   node crates/gui/ui/kit/tests/harness.mjs      (PORT=8791 by default)
@@ -32,9 +33,15 @@ const PNG_1x1 = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfF
 // Stand-ins for the font and SVG importers (gui crate code): a square with a
 // square hole, orientation marking the hole as the real importers do, and a
 // triangle for any character. A character starting with "?" has "no font".
+// An SVG whose name contains "badge" imports as two colours: a square and a
+// smaller square on it that the real importer would mark as a Cut.
 const SVG_OUTLINE = [
   [[-1, -1], [1, -1], [1, 1], [-1, 1]],
   [[-0.5, -0.5], [-0.5, 0.5], [0.5, 0.5], [0.5, -0.5]],
+];
+const SVG_LAYERS_BADGE = [
+  { contours: [[[-1, -1], [1, -1], [1, 1], [-1, 1]]], mode: "add", paint: "#ff4500" },
+  { contours: [[[-0.4, -0.4], [0.4, -0.4], [0.4, 0.4], [-0.4, 0.4]]], mode: "cut", paint: "#ffffff" },
 ];
 const GLYPH_OUTLINE = [[[-1, -0.8], [1, -0.8], [0, 1]]];
 
@@ -119,6 +126,15 @@ async function invoke(name, args) {
     case "designer_import_svg":
       if (!fs.existsSync(args.path)) throw new Error(`not a readable SVG: ${args.path}`);
       return SVG_OUTLINE;
+    case "kit_import_svg":
+      if (!fs.existsSync(args.path)) throw new Error(`not a readable SVG: ${args.path}`);
+      if (path.basename(args.path).includes("badge")) return SVG_LAYERS_BADGE;
+      return [{ contours: SVG_OUTLINE, mode: "add", paint: "#000000" }];
+    case "kit_shape_to_points": {
+      const out = JSON.parse(await run(["--points"], JSON.stringify(args.shape)));
+      if (out.error) throw new Error(out.error);
+      return out;
+    }
     case "designer_import_glyph": {
       const ch = String(args.ch || "").trim();
       if (!ch) throw new Error("type a character first");

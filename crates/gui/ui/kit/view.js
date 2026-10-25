@@ -4,13 +4,27 @@
 // box is fixed at the unit square, the kernel cuts every part to it and
 // never rescales anything, so a part keeps its drawn size whatever moves
 // or hides, and the outlines show exactly what the note keeps.
+//
+// Depth shows head-on: every band of the note is filled from the back
+// forward, the highest band in the note colour and lower bands shaded by
+// how far they lie below it, so a raised or recessed part reads as such.
+//
+// Point editing (a Points part, entered by double-click or the inspector):
+// the part's control points draw as handles in the part's own frame; drag
+// moves one, a click on the outline inserts one, double-click switches
+// smooth and corner, right-click removes, a click elsewhere finishes.
 import {
   makeView, unit, toPx, toWorld, zoomAt, partRect, rectCorners, rectContains, handleAt, scaleFrom, angleFrom, HITBOX,
+  unitToWorld, worldToUnit, nearestPoint, nearestSegment, snapUnit, depthShade,
 } from "./view-math.js";
+import { loopsOf } from "./store.js";
 
 const GLASS_ALPHA = 0.57;
 const HANDLE_PX = 7;
 const ROTATE_PX = 24;
+const POINT_PX = 9;
+const SEGMENT_PX = 12;
+const POINT_SNAP = 0.05;
 
 export function createView(canvas, store, hooks) {
   const ctx = canvas.getContext("2d");
@@ -93,6 +107,21 @@ export function createView(canvas, store, hooks) {
     ctx.setLineDash([]);
   }
 
+  // The part whose points are being edited, if it is still a visible Points
+  // part (the store ends the mode when the part goes or changes shape).
+  function editingPart() {
+    const id = store.state.ui.pointEdit;
+    if (!id) return null;
+    const p = store.part(id);
+    return p && p.visible && loopsOf(p.shape) ? p : null;
+  }
+
+  // The control points in pixels, loop by loop, through the part's transform.
+  function pointLoopsPx(part) {
+    const r = partRect(part.transform, 1);
+    return (loopsOf(part.shape) || []).map((loop) => loop.map((q) => toPx(view, size, unitToWorld(r, [q.x, q.y]))));
+  }
+
   function draw() {
     const s = store.state;
     ctx.clearRect(0, 0, size.w, size.h);
@@ -104,16 +133,23 @@ export function createView(canvas, store, hooks) {
     // would still show as solid), so an error shows outlines only.
     const stale = Boolean(s.evalError);
     if (ev && !stale) {
-      // Outer contours run counterclockwise and holes clockwise, so the
-      // nonzero rule cuts the holes without any extra bookkeeping.
-      ctx.fillStyle = colour;
-      for (const iv of ev.intervals) ctx.fill(path(iv.solid), "nonzero");
+      // Bands come back to front. Outer contours run counterclockwise and
+      // holes clockwise, so the nonzero rule cuts the holes without any
+      // extra bookkeeping; a higher band paints over a lower one, so what
+      // shows at any spot is the band nearest the player there.
+      const top = ev.intervals.reduce((m, iv) => (iv.solid.length ? Math.max(m, iv.z1) : m), -Infinity);
+      for (const iv of ev.intervals) {
+        if (!iv.solid.length) continue;
+        ctx.fillStyle = depthShade(colour, iv.z1, top);
+        ctx.fill(path(iv.solid), "nonzero");
+      }
       // The kernel lists a glass part in every band it spans, and the
       // renderer does not stack those layers: one path, one fill. Windings
       // of separate bands add up, so a band's hole stays open only where no
       // other band has glass.
       const glass = new Path2D();
       for (const iv of ev.intervals) glass.addPath(path(iv.glass));
+      ctx.fillStyle = colour;
       ctx.globalAlpha = GLASS_ALPHA;
       ctx.fill(glass, "nonzero");
       ctx.globalAlpha = 1;
@@ -140,10 +176,53 @@ export function createView(canvas, store, hooks) {
         ctx.setLineDash([]);
       }
     }
+    const editing = editingPart();
+    if (editing) {
+      drawPoints(editing);
+      return;
+    }
     // A hidden part stays selected (the inspector is where it comes back),
     // but shows no handles: nothing on the canvas belongs to it.
     const part = store.part();
     if (part && part.visible) handles(part);
+  }
+
+  function drawPoints(part) {
+    const loopsPx = pointLoopsPx(part);
+    const loops = loopsOf(part.shape);
+    const sel = store.state.ui.pointSel;
+    // The control polygon, faint: where a click inserts a point.
+    ctx.setLineDash([3, 3]);
+    ctx.strokeStyle = "rgba(120,200,255,0.45)";
+    ctx.lineWidth = 1;
+    for (const loop of loopsPx) {
+      ctx.beginPath();
+      loop.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+      ctx.closePath();
+      ctx.stroke();
+    }
+    ctx.setLineDash([]);
+    loopsPx.forEach((loop, li) => {
+      loop.forEach(([x, y], i) => {
+        const q = loops[li][i];
+        if (sel && sel.loop === li && sel.index === i) {
+          ctx.beginPath();
+          ctx.arc(x, y, POINT_PX, 0, Math.PI * 2);
+          ctx.strokeStyle = "rgba(120,200,255,0.95)";
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+        }
+        // Round for smooth, square for a corner, as the old designer drew them.
+        ctx.beginPath();
+        if (q.smooth) ctx.arc(x, y, 4.5, 0, Math.PI * 2);
+        else ctx.rect(x - 4, y - 4, 8, 8);
+        ctx.fillStyle = part.locked ? "rgba(120,200,255,0.5)" : "#78c8ff";
+        ctx.fill();
+        ctx.strokeStyle = "rgba(0,0,0,0.7)";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      });
+    });
   }
 
   function handles(part) {
@@ -199,7 +278,7 @@ export function createView(canvas, store, hooks) {
   }
 
   function pick(wp) {
-    // Top of the list draws on top, so it is picked first.
+    // Top of the list is picked first.
     const parts = store.state.design.parts;
     for (let i = parts.length - 1; i >= 0; i--) {
       const p = parts[i];
@@ -210,7 +289,37 @@ export function createView(canvas, store, hooks) {
   }
 
   // The WebView's own menu offers Reload, which would discard the design.
-  canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+  // In point editing a right click on a point removes it.
+  canvas.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    const editing = editingPart();
+    if (!editing || editing.locked) return;
+    const hit = nearestPoint(pointLoopsPx(editing), local(e), POINT_PX);
+    if (hit) store.removePoint(editing.id, hit.loop, hit.index);
+  });
+
+  // Point editing: a point under the pointer is picked up, the outline
+  // near the pointer gets a new point that is picked up at once, anything
+  // else ends the editing (and does nothing more, so a part never moves by
+  // the click that finished editing another).
+  function pointDown(editing, mx, my, wp) {
+    const loopsPx = pointLoopsPx(editing);
+    const hit = nearestPoint(loopsPx, [mx, my], POINT_PX);
+    if (hit) {
+      store.selectPoint({ loop: hit.loop, index: hit.index });
+      if (!editing.locked) gesture = { kind: "point", id: editing.id, loop: hit.loop, index: hit.index };
+      return;
+    }
+    const seg = nearestSegment(loopsPx, [mx, my]);
+    if (seg && seg.dist <= SEGMENT_PX && !editing.locked) {
+      const r = partRect(editing.transform, 1);
+      const [ux, uy] = worldToUnit(r, wp);
+      const placed = store.insertPoint(editing.id, seg.loop, seg.index, round3(ux), round3(uy));
+      if (placed) gesture = { kind: "point", id: editing.id, loop: placed.loop, index: placed.index };
+      return;
+    }
+    store.setPointEdit(null);
+  }
 
   canvas.addEventListener("pointerdown", (e) => {
     // A press that starts no gesture must not leave the last one running.
@@ -223,6 +332,11 @@ export function createView(canvas, store, hooks) {
     }
     if (e.button !== 0) return;
     const wp = toWorld(view, size, mx, my);
+    const editing = editingPart();
+    if (editing) {
+      pointDown(editing, mx, my, wp);
+      return;
+    }
     const s = store.state;
     const sel = store.part();
     if (sel && !sel.locked && sel.visible) {
@@ -268,7 +382,14 @@ export function createView(canvas, store, hooks) {
     // Design units throughout: a world delta is a document delta. Labels
     // carry the part id: undo coalescing merges by label, and a gesture on
     // one part must never merge into a gesture on another.
-    if (gesture.kind === "move") {
+    if (gesture.kind === "point") {
+      // Into the part's own frame, so the point lands under the pointer on
+      // a turned or stretched part too; Shift snaps to a grid of that frame.
+      const r = partRect(part.transform, 1);
+      let q = worldToUnit(r, wp);
+      if (e.shiftKey) q = snapUnit(q, POINT_SNAP);
+      store.movePoint(gesture.id, gesture.loop, gesture.index, round3(clamp(q[0], -4, 4)), round3(clamp(q[1], -4, 4)));
+    } else if (gesture.kind === "move") {
       const dx = wp[0] - gesture.wp[0];
       const dy = wp[1] - gesture.wp[1];
       store.updatePart(gesture.id, `move:${gesture.id}`, (p) => {
@@ -303,6 +424,21 @@ export function createView(canvas, store, hooks) {
   };
   canvas.addEventListener("pointerup", end);
   canvas.addEventListener("pointercancel", end);
+
+  // Double-click: on a point it switches smooth and corner; on a part it
+  // asks for point editing (the owner converts the shape when needed).
+  canvas.addEventListener("dblclick", (e) => {
+    if (e.button !== 0) return;
+    const [mx, my] = local(e);
+    const editing = editingPart();
+    if (editing) {
+      const hit = nearestPoint(pointLoopsPx(editing), [mx, my], POINT_PX);
+      if (hit && !editing.locked) store.togglePoint(editing.id, hit.loop, hit.index);
+      return;
+    }
+    const hit = pick(toWorld(view, size, mx, my));
+    if (hit && !hit.locked && hooks.onDoubleClick) hooks.onDoubleClick(hit);
+  });
 
   canvas.addEventListener(
     "wheel",
@@ -359,3 +495,4 @@ export function isTyping() {
 }
 
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+const round3 = (v) => Math.round(v * 1000) / 1000;

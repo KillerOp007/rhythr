@@ -19,6 +19,7 @@
 .kt-part.hidden-part { opacity: 0.5; }
 .kt-part.dragging { opacity: 0.4; }
 .kt-part .name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kt-part .depth { font-size: var(--fs-sm); color: var(--muted); font-variant-numeric: tabular-nums; min-width: 2.4rem; text-align: right; }
 .kt-part .badge { font-size: var(--fs-sm); padding: 0 0.3rem; border-radius: var(--radius-sm); border: 1px solid var(--border); color: var(--muted); }
 .kt-part .badge.cut { color: var(--danger); border-color: var(--danger); }
 .kt-part .badge.glass { color: var(--accent); border-color: var(--accent); }
@@ -50,7 +51,7 @@
 .kt-seg button { border-radius: 0; }
 .kt-seg button:first-child { border-radius: var(--radius-sm) 0 0 var(--radius-sm); }
 .kt-seg button:last-child { border-radius: 0 var(--radius-sm) var(--radius-sm) 0; }
-.kt-seg button.on { background: var(--accent-soft); }
+.kt-seg button.on, .kt-field button.on { background: var(--accent-soft); }
 #kt-depth-bar { position: relative; height: 10px; background: var(--border); border-radius: 5px; margin: 0.3rem 0 0.5rem; }
 #kt-depth-bar .band { position: absolute; top: 0; bottom: 0; background: var(--accent); border-radius: 5px; }
 #kt-depth-bar .zero { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--muted); }

@@ -92,6 +92,93 @@ test("an_imported_outline_becomes_a_selected_part_with_its_source_as_name", () =
   assert.equal(s.part(id), null);
 });
 
+test("svg_layers_become_parts_in_order_with_their_modes", () => {
+  const s = createStore(design());
+  const sq = [[[-1, -1], [1, -1], [1, 1], [-1, 1]]];
+  const inner = [[[-0.4, -0.4], [0.4, -0.4], [0.4, 0.4], [-0.4, 0.4]]];
+  const ids = s.addLayers([{ contours: sq, mode: "add", paint: "#ff4500" }, { contours: inner, mode: "cut", paint: "#ffffff" }], "badge.svg ");
+  assert.deepEqual(ids, ["p2", "p3"]);
+  assert.equal(s.part("p2").name, "badge.svg 1");
+  assert.equal(s.part("p3").name, "badge.svg 2");
+  assert.equal(s.part("p2").mode, "add");
+  assert.equal(s.part("p3").mode, "cut");
+  assert.equal(s.part("p3").shape.kind, "contours");
+  assert.deepEqual(s.part("p3").shape.contours, inner);
+  assert.equal(s.part("p3").shape.label, "badge.svg, colour #ffffff");
+  assert.equal(s.state.selected, "p3", "the top colour is selected");
+  assert.equal(s.state.undo.length, 1, "one import, one undo step");
+  // A single colour keeps the plain name and label.
+  const [one] = s.addLayers([{ contours: sq, mode: "add", paint: "#000000" }], "cloud");
+  assert.equal(s.part(one).name, "cloud");
+  assert.equal(s.part(one).shape.label, "cloud");
+  assert.deepEqual(s.addLayers([], "x"), []);
+  assert.equal(s.state.undo.length, 2, "nothing to add is no step");
+});
+
+function pointsDesign() {
+  const d = design();
+  const pt = (x, y, smooth = true) => ({ x, y, smooth });
+  d.parts.push({
+    ...newPart("p2", "circle"),
+    id: "p2",
+    shape: { kind: "points", control: [pt(-1, -1, false), pt(1, -1, false), pt(1, 1, false), pt(-1, 1, false)], loops: [[pt(-0.5, -0.5), pt(-0.5, 0.5), pt(0.5, 0.5)]] },
+  });
+  return d;
+}
+
+test("point_edits_change_the_loops_and_a_loop_keeps_three_points", () => {
+  const s = createStore(pointsDesign());
+  s.setPointEdit("p2");
+  assert.equal(s.state.ui.pointEdit, "p2");
+  assert.equal(s.pointLoops().length, 2);
+  s.movePoint("p2", 0, 1, 1.2, -0.9);
+  assert.deepEqual(s.part("p2").shape.control[1], { x: 1.2, y: -0.9, smooth: false });
+  // Inserted between two corners: a corner, so the straight edge stays straight.
+  const placed = s.insertPoint("p2", 0, 1, 0, -1);
+  assert.deepEqual(placed, { loop: 0, index: 1 });
+  assert.deepEqual(s.state.ui.pointSel, placed);
+  assert.equal(s.part("p2").shape.control.length, 5);
+  assert.equal(s.part("p2").shape.control[1].smooth, false);
+  // Between a smooth point and anything: smooth.
+  s.insertPoint("p2", 1, 1, -0.5, 0);
+  assert.equal(s.part("p2").shape.loops[0][1].smooth, true);
+  s.togglePoint("p2", 1, 1);
+  assert.equal(s.part("p2").shape.loops[0][1].smooth, false);
+  // Removing down to three points on the second loop, then the loop itself.
+  assert.ok(s.removePoint("p2", 1, 1));
+  assert.equal(s.part("p2").shape.loops[0].length, 3);
+  assert.ok(s.removePoint("p2", 1, 0), "a three-point loop goes as a whole");
+  assert.deepEqual(s.part("p2").shape.loops, []);
+  assert.equal(s.state.ui.pointSel, null);
+  // The last loop never drops below three points.
+  for (let i = 0; i < 2; i++) assert.ok(s.removePoint("p2", 0, 0));
+  assert.equal(s.part("p2").shape.control.length, 3);
+  assert.equal(s.removePoint("p2", 0, 0), false);
+  assert.equal(s.part("p2").shape.control.length, 3);
+  // Discrete edits are separate undo steps; a drag coalesces.
+  const steps = s.state.undo.length;
+  s.movePoint("p2", 0, 0, 0.1, 0.1);
+  s.movePoint("p2", 0, 0, 0.2, 0.2);
+  assert.equal(s.state.undo.length, steps + 1);
+});
+
+test("point_editing_ends_when_its_part_changes_shape_or_goes", () => {
+  const s = createStore(pointsDesign());
+  s.setPointEdit("p2");
+  s.selectPoint({ loop: 1, index: 2 });
+  // Undo of an insert can leave the selection past the loop's end.
+  s.insertPoint("p2", 1, 3, 0, 0);
+  s.selectPoint({ loop: 1, index: 3 });
+  s.undo();
+  assert.equal(s.state.ui.pointEdit, "p2");
+  assert.equal(s.state.ui.pointSel, null, "a selection past the end is dropped");
+  s.updatePart("p2", "shape", (p) => (p.shape = { kind: "circle" }));
+  assert.equal(s.state.ui.pointEdit, null, "no longer a Points part");
+  s.setPointEdit("p2");
+  s.removePart("p2");
+  assert.equal(s.state.ui.pointEdit, null);
+});
+
 test("an_evaluate_error_keeps_the_last_good_geometry", () => {
   const s = createStore(design());
   const ev = { scale: 1, levels: [], parts: [], intervals: [], triangles: 0, mesh_error: null };
