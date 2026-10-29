@@ -60,6 +60,18 @@ podman run --rm \
         # config, because that file was deleted (it was named after a bundle
         # format, which Tauri never reads).
         cargo tauri build --bundles appimage
+        # linuxdeploy keeps nine display libraries that every desktop has
+        # and that shadow the host copies newer Mesa expects (only
+        # libwayland-client is on its excludelist): drop them and repack
+        # the AppDir with the same appimagetool, then sign the result again.
+        ver=$(sed -n "s/^  \"version\": \"\\(.*\\)\",$/\\1/p" tauri.conf.json)
+        bundle=/work/target-linux22/release/bundle/appimage
+        out=$bundle/rhythr_${ver}_amd64.AppImage
+        find "$bundle/rhythr.AppDir/usr/lib" \( -name "libwayland-*" -o -name "libxkbcommon*" \
+            -o -name "libxcb*" -o -name "libXau*" -o -name "libXdmcp*" \) -delete
+        OUTPUT="$out" ARCH=x86_64 /root/.cache/tauri/linuxdeploy-plugin-appimage.AppImage \
+            --appdir "$bundle/rhythr.AppDir"
+        cargo tauri signer sign "$out"
     '
 
 # The AppImage must leave the display stack to the host: these libraries
