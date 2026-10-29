@@ -426,11 +426,24 @@ choose where the file goes and can read it first.
   The AppImage runtime needs a `fusermount` binary and `/dev/fuse`:
   install your distro's `fuse3` package (`fuse` on some), or run the
   file with `./rhythr_*.AppImage --appimage-extract-and-run`. A white
-  or empty window on a rolling release usually means the bundled
-  libraries clash with your brand-new graphics stack. Either way, on
-  Arch-based distros (Arch, CachyOS, Manjaro, …) prefer the AUR
-  package `rhythr-bin`: a native install without FUSE, built against
-  your own system libraries.
+  window on a system with a very recent Mesa (SteamOS 3.8, Fedora 44,
+  Arch) plus the terminal line `Could not create default EGL display:
+  EGL_BAD_PARAMETER` means the 0.6.2 AppImage's bundled display
+  libraries clash with your graphics stack. Fixed in the next release;
+  until then, extract the file once and drop those libraries:
+
+  ```sh
+  ./rhythr_*.AppImage --appimage-extract
+  cd squashfs-root/usr/lib
+  rm libwayland-client.so.0 libwayland-cursor.so.0 libwayland-egl.so.1 \
+     libwayland-server.so.0 libxkbcommon.so.0 libxcb-randr.so.0 \
+     libxcb-render.so.0 libxcb-shm.so.0 libXau.so.6 libXdmcp.so.6
+  cd ../.. && ./AppRun
+  ```
+
+  On Arch-based distros (Arch, CachyOS, Manjaro, …) prefer the AUR
+  package `rhythr-bin` anyway: a native install without FUSE, built
+  against your own system libraries.
 - **Linux: "ffmpeg not found"**. The AppImage brings its own. The
   `.deb` installs the distro ffmpeg automatically; for the `.rpm` on
   Fedora, enable RPM Fusion and `sudo dnf install ffmpeg` (the stock
