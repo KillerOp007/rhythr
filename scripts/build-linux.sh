@@ -35,8 +35,14 @@ if ! podman image exists "$IMG" || ! cli_ok; then
     podman build --no-cache -t "$IMG" -f "$ROOT/packaging/linux/Containerfile" "$ROOT/packaging/linux"
 fi
 
+# A linked worktree keeps its .git outside the tree; mount the repository's
+# git dir read-only at its host path so build.rs can stamp the build.
+GIT_COMMON="$(cd "$ROOT" && git rev-parse --path-format=absolute --git-common-dir)"
+GIT_MOUNT=()
+case "$GIT_COMMON" in "$ROOT"/*) ;; *) GIT_MOUNT=(-v "$GIT_COMMON":"$GIT_COMMON":ro) ;; esac
+
 podman run --rm \
-    -v "$ROOT":/work \
+    -v "$ROOT":/work "${GIT_MOUNT[@]}" \
     -v "$CACHE/registry":/root/.cargo/registry \
     -v "$CACHE/git":/root/.cargo/git \
     -v "$CACHE/tauri":/root/.cache/tauri \
