@@ -21,7 +21,19 @@ if [ ! -f "$ROOT/crates/gui/ffmpeg" ]; then
     exit 1
 fi
 
-podman image exists "$IMG" || podman build -t "$IMG" -f "$ROOT/packaging/linux/Containerfile" "$ROOT/packaging/linux"
+# Tauri CLI 2.12.1 is the floor: older bundlers ship a linuxdeploy whose
+# excludelist lets libwayland/libxkbcommon/libxcb into the AppImage, which
+# aborts with EGL_BAD_PARAMETER against newer Mesa (SteamOS 3.8, Fedora 44).
+# An image built before that floor is rebuilt from scratch.
+MIN_CLI=2.12.1
+cli_ok() {
+    local have
+    have="$(podman run --rm "$IMG" cargo-tauri --version 2>/dev/null | awk '{print $2}')"
+    [ -n "$have" ] && [ "$(printf '%s\n' "$MIN_CLI" "$have" | sort -V | head -n1)" = "$MIN_CLI" ]
+}
+if ! podman image exists "$IMG" || ! cli_ok; then
+    podman build --no-cache -t "$IMG" -f "$ROOT/packaging/linux/Containerfile" "$ROOT/packaging/linux"
+fi
 
 podman run --rm \
     -v "$ROOT":/work \
@@ -43,6 +55,18 @@ podman run --rm \
         # format, which Tauri never reads).
         cargo tauri build --bundles appimage
     '
+
+# The AppImage must leave the display stack to the host: these libraries
+# clash with newer Mesa (EGL_BAD_PARAMETER at startup, docs/LINUX-BUILD.md).
+APPDIR="$ROOT/target-linux22/release/bundle/appimage/rhythr.AppDir"
+[ -d "$APPDIR/usr/lib" ] || { echo "error: AppDir not found at $APPDIR" >&2; exit 1; }
+stray="$(find "$APPDIR/usr/lib" \( -name 'libwayland-*' -o -name 'libxkbcommon*' \
+    -o -name 'libxcb*' -o -name 'libXau*' -o -name 'libXdmcp*' \) -printf '%f\n' | sort)"
+if [ -n "$stray" ]; then
+    echo "error: the AppImage bundles display libraries that break on newer Mesa:" >&2
+    echo "$stray" >&2
+    exit 1
+fi
 
 echo
 echo "bundles:"

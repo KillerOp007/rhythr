@@ -3,6 +3,21 @@
 rhythr is an unofficial community tool and is not affiliated with or
 endorsed by Rhythia or Capo Games.
 
+## v0.6.3 (2026-10-29)
+
+### Fixed
+
+- **Linux AppImage starts on a current Mesa.** The 0.6.2 AppImage
+  shipped Ubuntu 22.04 copies of libwayland, libxkbcommon and libxcb
+  that shadow the host's; on SteamOS 3.8, Fedora 44 and Arch, Mesa then
+  aborts at startup with `Could not create default EGL display:
+  EGL_BAD_PARAMETER` and the window stays white. The AppImage now
+  leaves the display stack to the host (Tauri CLI 2.12.1+), runs
+  natively on Wayland instead of through XWayland, and the build fails
+  if any of those libraries sneak back in. The guide has the ten-file
+  workaround for the 0.6.2 file. Thanks to the Steam Deck user who
+  reported it with the terminal output. Windows: no changes.
+
 ## v0.6.2 (2026-10-21)
 
 ### Fixed

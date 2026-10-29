@@ -52,6 +52,14 @@ compiles. Bundles land in `target-linux22/release/bundle/`, with a
 
 - The AppImage carries webkit/GTK and ffmpeg: self-contained by design.
   The deb/rpm stay slim and use the system webkit 4.1 + ffmpeg instead.
+- The display stack stays with the host. Tauri CLI 2.12.1+ is required:
+  its linuxdeploy keeps libwayland, libxkbcommon, libxcb, libXau and
+  libXdmcp out of the AppImage. Older bundlers shipped Ubuntu 22.04
+  copies that shadow the host's, and newer Mesa (SteamOS 3.8, Fedora 44)
+  then aborts at startup with `Could not create default EGL display:
+  EGL_BAD_PARAMETER` (the 0.6.2 AppImage has this bug). The script
+  rebuilds the image when its CLI is older and fails the build if any
+  of those libraries land in the AppDir.
 - On Linux the app prefers the **system** ffmpeg when one is installed
   (its VAAPI/NVENC are linked against the system's driver stack; the
   bundled static build is the fallback so the AppImage works stand-alone).
