@@ -429,8 +429,8 @@ choose where the file goes and can read it first.
   window on a system with a very recent Mesa (SteamOS 3.8, Fedora 44,
   Arch) plus the terminal line `Could not create default EGL display:
   EGL_BAD_PARAMETER` means the 0.6.2 AppImage's bundled display
-  libraries clash with your graphics stack. Fixed in the next release;
-  until then, extract the file once and drop those libraries:
+  libraries clash with your graphics stack. Fixed in 0.6.3; on the 0.6.2 file,
+  extract it once and drop those libraries:
 
   ```sh
   ./rhythr_*.AppImage --appimage-extract

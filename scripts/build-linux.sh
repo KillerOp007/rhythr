@@ -35,8 +35,14 @@ if ! podman image exists "$IMG" || ! cli_ok; then
     podman build --no-cache -t "$IMG" -f "$ROOT/packaging/linux/Containerfile" "$ROOT/packaging/linux"
 fi
 
+# A linked worktree keeps its .git outside the tree; mount the repository's
+# git dir read-only at its host path so build.rs can stamp the build.
+GIT_COMMON="$(cd "$ROOT" && git rev-parse --path-format=absolute --git-common-dir)"
+GIT_MOUNT=()
+case "$GIT_COMMON" in "$ROOT"/*) ;; *) GIT_MOUNT=(-v "$GIT_COMMON":"$GIT_COMMON":ro) ;; esac
+
 podman run --rm \
-    -v "$ROOT":/work \
+    -v "$ROOT":/work "${GIT_MOUNT[@]}" \
     -v "$CACHE/registry":/root/.cargo/registry \
     -v "$CACHE/git":/root/.cargo/git \
     -v "$CACHE/tauri":/root/.cache/tauri \
@@ -54,6 +60,18 @@ podman run --rm \
         # config, because that file was deleted (it was named after a bundle
         # format, which Tauri never reads).
         cargo tauri build --bundles appimage
+        # linuxdeploy keeps nine display libraries that every desktop has
+        # and that shadow the host copies newer Mesa expects (only
+        # libwayland-client is on its excludelist): drop them and repack
+        # the AppDir with the same appimagetool, then sign the result again.
+        ver=$(sed -n "s/^  \"version\": \"\\(.*\\)\",$/\\1/p" tauri.conf.json)
+        bundle=/work/target-linux22/release/bundle/appimage
+        out=$bundle/rhythr_${ver}_amd64.AppImage
+        find "$bundle/rhythr.AppDir/usr/lib" \( -name "libwayland-*" -o -name "libxkbcommon*" \
+            -o -name "libxcb*" -o -name "libXau*" -o -name "libXdmcp*" \) -delete
+        OUTPUT="$out" ARCH=x86_64 /root/.cache/tauri/linuxdeploy-plugin-appimage.AppImage \
+            --appdir "$bundle/rhythr.AppDir"
+        cargo tauri signer sign "$out"
     '
 
 # The AppImage must leave the display stack to the host: these libraries
