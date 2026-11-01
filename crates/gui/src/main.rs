@@ -6425,6 +6425,7 @@ fn main() {
             kit_commands::kit_export,
             kit_commands::kit_shape_to_points,
             kit_commands::kit_send_to_game,
+            kit_commands::kit_presets,
             kit_preview,
             open_kit_window,
             designer_export,

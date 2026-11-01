@@ -1,0 +1,100 @@
+{
+ "version": 2,
+ "name": "Notched ring",
+ "colors": [
+  "#ffffff",
+  "#a2e0ff",
+  "#a2e0ff"
+ ],
+ "parts": [
+  {
+   "id": "p1",
+   "name": "Ring",
+   "visible": true,
+   "locked": false,
+   "shape": {
+    "kind": "circle"
+   },
+   "transform": {
+    "x": 0.0,
+    "y": 0.0,
+    "w": 1.0,
+    "h": 1.0,
+    "rotation": 0.0
+   },
+   "mode": "add",
+   "depth": {
+    "front": 0.1,
+    "back": -0.1
+   },
+   "material": "solid",
+   "effects": {
+    "waves": null,
+    "round": null,
+    "rim": 0.24,
+    "mirror": "none",
+    "repeat": null
+   }
+  },
+  {
+   "id": "p2",
+   "name": "Notches",
+   "visible": true,
+   "locked": false,
+   "shape": {
+    "kind": "square",
+    "rounding": 0.0
+   },
+   "transform": {
+    "x": 0.0,
+    "y": 0.9,
+    "w": 0.1,
+    "h": 0.3,
+    "rotation": 0.0
+   },
+   "mode": "cut",
+   "depth": {
+    "front": 0.1,
+    "back": -0.1
+   },
+   "material": "solid",
+   "effects": {
+    "waves": null,
+    "round": null,
+    "rim": null,
+    "mirror": "none",
+    "repeat": 4
+   }
+  },
+  {
+   "id": "p3",
+   "name": "Core",
+   "visible": true,
+   "locked": false,
+   "shape": {
+    "kind": "circle"
+   },
+   "transform": {
+    "x": 0.0,
+    "y": 0.0,
+    "w": 0.3,
+    "h": 0.3,
+    "rotation": 0.0
+   },
+   "mode": "add",
+   "depth": {
+    "front": 0.0,
+    "back": -0.2
+   },
+   "material": "glass",
+   "effects": {
+    "waves": null,
+    "round": null,
+    "rim": null,
+    "mirror": "none",
+    "repeat": null
+   }
+  }
+ ],
+ "groups": []
+}

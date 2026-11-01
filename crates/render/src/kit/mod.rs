@@ -13,6 +13,7 @@ pub mod levels;
 pub mod mesh;
 pub mod migrate;
 pub mod points;
+pub mod presets;
 pub mod resolve;
 pub mod shapes;
 pub mod validate;

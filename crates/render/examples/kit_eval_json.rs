@@ -9,8 +9,10 @@
 //! prints the baked note like `kit_mesh` (positions, indices, ranges);
 //! `--send <dir>` writes the design into `<dir>` as `kit_send_to_game`
 //! does into the game's data folder and prints the report
-//! ({folder, profile_created, message}). Errors print as {error}.
-//! Usage: kit_eval_json [--default | --load <file> | --save <file> | --points | --mesh | --send <dir>] < design.json
+//! ({folder, profile_created, message}); `--presets` prints the five
+//! presets like `kit_presets` ([{id, name, design}]). Errors print as
+//! {error}.
+//! Usage: kit_eval_json [--default | --presets | --load <file> | --save <file> | --points | --mesh | --send <dir>] < design.json
 
 use rhythia_render::kit::doc::{Design, Shape};
 use rhythia_render::kit::{
@@ -130,6 +132,13 @@ fn main() {
         println!(
             "{}",
             serde_json::to_string(&Design::default_note()).unwrap()
+        );
+        return;
+    }
+    if args.iter().any(|a| a == "--presets") {
+        println!(
+            "{}",
+            serde_json::to_string(&rhythia_render::kit::presets::presets()).unwrap()
         );
         return;
     }

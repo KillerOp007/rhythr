@@ -1,0 +1,74 @@
+{
+ "version": 2,
+ "name": "Hex frame",
+ "colors": [
+  "#ffffff",
+  "#a2e0ff",
+  "#a2e0ff"
+ ],
+ "parts": [
+  {
+   "id": "p1",
+   "name": "Frame",
+   "visible": true,
+   "locked": false,
+   "shape": {
+    "kind": "polygon",
+    "sides": 6,
+    "rounding": 0.08
+   },
+   "transform": {
+    "x": 0.0,
+    "y": 0.0,
+    "w": 1.0,
+    "h": 1.0,
+    "rotation": 0.0
+   },
+   "mode": "add",
+   "depth": {
+    "front": 0.1,
+    "back": -0.1
+   },
+   "material": "solid",
+   "effects": {
+    "waves": null,
+    "round": null,
+    "rim": 0.2,
+    "mirror": "none",
+    "repeat": null
+   }
+  },
+  {
+   "id": "p2",
+   "name": "Pane",
+   "visible": true,
+   "locked": false,
+   "shape": {
+    "kind": "polygon",
+    "sides": 6,
+    "rounding": 0.08
+   },
+   "transform": {
+    "x": 0.0,
+    "y": 0.0,
+    "w": 0.56,
+    "h": 0.56,
+    "rotation": 0.0
+   },
+   "mode": "add",
+   "depth": {
+    "front": -0.15,
+    "back": -0.35
+   },
+   "material": "glass",
+   "effects": {
+    "waves": null,
+    "round": null,
+    "rim": null,
+    "mirror": "none",
+    "repeat": null
+   }
+  }
+ ],
+ "groups": []
+}

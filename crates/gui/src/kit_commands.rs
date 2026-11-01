@@ -5,6 +5,7 @@
 use rhythia_render::kit::doc::{Design, Shape};
 use rhythia_render::kit::game::{self, SendError, SendReport};
 use rhythia_render::kit::geom::Shapes;
+use rhythia_render::kit::presets::{presets, Preset};
 use rhythia_render::kit::{
     export, levels, mesh, migrate, points, validate, KitError, MAX_TRIANGLES,
 };
@@ -276,6 +277,12 @@ pub async fn kit_export(design: Design, path: String) -> Result<String, String> 
         })
         .await,
     )
+}
+
+/// The five presets, complete designs the window loads as documents.
+#[tauri::command]
+pub fn kit_presets() -> Vec<Preset> {
+    presets()
 }
 
 /// A failed send as one sentence for the status line: the kernel's
