@@ -16,8 +16,10 @@ use std::path::{Path, PathBuf};
 /// and the colorset all carry it, so a later send overwrites the same
 /// files and the game folder never fills up.
 pub const PROFILE_NAME: &str = "rhythr-kit";
+/// The owner's probe round (01.11.) found that a resent file loads after a
+/// restart of the game while the profile stays selected.
 pub const MSG_AGAIN: &str =
-    "Sent to the game. Apply the profile rhythr-kit again (switch away and back) to load it.";
+    "Sent to the game. Restart the game to load the new note; the profile rhythr-kit stays selected.";
 pub const MSG_NO_PROFILE: &str = "Sent the files, but the active profile could not be read: import a saved .rhs once, then Send to game keeps it current.";
 
 /// The first send names the folder once, so a wrong target shows up

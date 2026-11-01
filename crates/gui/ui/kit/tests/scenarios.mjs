@@ -951,7 +951,7 @@ async function send({ page, h }) {
   await click("kt-send");
   await settle();
   s = await S();
-  check("second send leaves the profile alone", s.status.startsWith("Sent to the game. Apply the profile") && fs.readFileSync(profilePath, "utf8") === before, s.status);
+  check("second send leaves the profile alone", s.status.startsWith("Sent to the game. Restart the game to load the new note") && fs.readFileSync(profilePath, "utf8") === before, s.status);
   check("the document is untouched", s.path === null && s.dirty === false, JSON.stringify({ path: s.path, dirty: s.dirty }));
   const mtime = fs.statSync(objPath).mtimeMs;
   await h.store(`s.updatePart("p1", "visible", (p) => (p.visible = false))`);

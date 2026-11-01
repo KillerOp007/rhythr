@@ -228,8 +228,8 @@ endorsed by Rhythia or Capo Games.
   `skins\colorsets\rhythr-kit.txt`, and once creates a profile named
   `rhythr-kit`, a copy of your active profile with that note and
   colorset. Pick that profile in the game's settings once; after every
-  later send, apply it again (switch to another profile and back) and
-  the new note loads. No import dialog, no file to find. If the folder
+  later send, restart the game (the profile stays selected) and the new
+  note loads. No import dialog, no file to find. If the folder
   cannot be found the status says where it looked; if the game's
   `framework.json` relocates its data, the kit does not follow and asks
   for a manual import instead.
