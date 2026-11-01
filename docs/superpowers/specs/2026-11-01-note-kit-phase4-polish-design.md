@@ -74,9 +74,18 @@ runtime log of 24.10. and the method names in the game binary.
   `ColorSet.Value` hold absolute Windows paths into `skins\notes\` and
   `skins\colorsets\`; built-in assets use `Textures/Game/...` paths.
   `BorderSkin`, `CursorSkin`, `CursorTrailSkin` and `HitSound` follow the
-  same scheme.
+  same scheme. Verified values from an imported kit skin's profile
+  (`kit4_glass_only-20261024-174816.json`):
+  `"NoteSkin":{"Value":"C:\\Users\\Killer Op\\AppData\\Roaming\\CapoRhythia\\skins\\notes\\kit4_glass_only-20261024-174816.obj"}`
+  and
+  `"ColorSet":{"Value":"C:\\Users\\Killer Op\\AppData\\Roaming\\CapoRhythia\\skins\\colorsets\\kit4_glass_only-20261024-174816.txt"}`,
+  the file extension included. Profiles are compact JSON without a byte
+  order mark.
 - `framework.json` holds `CurrentGameProfile.Value`, the file name of the
-  active profile. `userconfig.json` holds account data and secrets.
+  active profile with its extension (`probe8_extra_entry-20261024-233905.json`),
+  and a key `DataPath` (`{"Value":""}` on the owner's machine; the binary
+  reveals nothing about what a non-empty value relocates, the runtime log
+  never mentions it). `userconfig.json` holds account data and secrets.
 - Skin files live flat: `skins\notes\<name>.obj` with `<name>.mtl` next
   to it (the obj's `mtllib` line names that mtl), `skins\colorsets\<name>.txt`
   (one `#rrggbb` per line), `skins\borders\`, and whole `.rhs` files under
@@ -117,10 +126,17 @@ runtime log of 24.10. and the method names in the game binary.
   read and parsed as a JSON object) with `NoteSkin.Value` and
   `ColorSet.Value` replaced by the absolute paths of the two written files
   in the game's own path syntax (Windows separators; under Proton the
-  prefix path `C:\users\steamuser\AppData\Roaming\CapoRhythia\...`). Every
-  other key is copied unchanged, so the player's approach rate, cursor and
-  hit sound stay as they play. Later sends never touch the profile; the
-  player's edits to it in the game survive.
+  prefix path `C:\users\steamuser\AppData\Roaming\CapoRhythia\...`),
+  written as compact JSON like the game's own. Every other key is copied
+  unchanged, so the player's approach rate, cursor and hit sound stay as
+  they play. Later sends never touch the profile; the player's edits to
+  it in the game survive.
+- A `framework.json` whose `DataPath.Value` is not empty stops the send
+  before anything is written: the kit cannot know what that path
+  relocates, and writing into a folder the game does not read would be
+  the silent failure of section 2. The status names the path and points
+  at the manual import (builder's call, 01.11.; the owner's value is
+  empty, so nothing changes for him).
 - Fallback when `framework.json` or the active profile is missing or does
   not parse: the three files are still written and the status says that
   the profile could not be created and that one manual import of a saved
@@ -147,11 +163,15 @@ The status line on failure lists the candidates that were tried.
 
 ### 4.3 Status texts (user wording, no kernel vocabulary)
 
-- First send, profile created: "Sent to the game. Pick the profile
-  rhythr-kit in the game's settings."
+- First send, profile created: "Sent to the game: <data folder>. Pick the
+  profile rhythr-kit in the game's settings." The folder is named once,
+  so a wrong target is visible instead of silent.
 - Later sends: "Sent to the game. Apply the profile rhythr-kit again
   (switch away and back) to load it." The exact instruction follows the
   probe round's finding on reloading.
+- Relocated data folder: "Not sent: the game's framework.json moves its
+  data to <DataPath>, which Send to game does not follow yet. Save the
+  .rhs and import it once."
 - Profile fallback: "Sent the files, but the active profile could not be
   read: import a saved .rhs once, then Send to game keeps it current."
 - Folder not found: "Game folder not found. Looked in: <list>."
@@ -245,6 +265,13 @@ builder re-creates the five from this table).
   migration tests keep passing.
 - `preview_frame` and the shared preview renderer become kit-only; the
   designer's share of the destroy and lock handling goes with it.
+- The four examples that build on the v1 mesh builder go with it:
+  `crates/render/examples/designer_pack.rs`, `designer_plan_json.rs`,
+  `designer_preview_png.rs` and `game_probe_skins.rs` (the probe
+  generator of 24.10.; its archives stay under
+  `/home/killer/RhythiaRenderer/game-probes/` and new probes come from
+  kit designs through `kit_render_png --rhs`). Builder's call; the ledger
+  records it.
 - The guide loses the "Note Designer" paragraph of the v1 window and the
   mention "The Note Designer stays until the kit is complete".
 
@@ -257,6 +284,9 @@ builder re-creates the five from this table).
   "Testing in the game"; the network path warning stays under the manual
   import.
 - Help table (F1): rows for "Presets" and "Send to game" under Toolbar.
+- `crates/gui/README.txt`, the guide copy that ships next to the exe, is
+  regenerated from `docs/USER-GUIDE.md` by `build.rs` on every build and
+  is never edited by hand.
 - Changelog, Unreleased: the entry "A note designer" is rewritten for the
   kit (it described the v1 window); the hit sound and mesh skin entries
   stay. The version becomes 0.7.0 when the release is cut.
