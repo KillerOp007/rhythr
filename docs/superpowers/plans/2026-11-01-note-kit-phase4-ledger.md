@@ -1,0 +1,36 @@
+# Note Kit Phase 4 ledger (polish and acceptance)
+
+Plan: `docs/superpowers/plans/2026-11-01-note-kit-phase4-polish.md`; spec: `docs/superpowers/specs/2026-11-01-note-kit-phase4-polish-design.md`. Executed inline (one session, TDD per task, one fresh whole-branch review at the end), the owner's choice of 01.11.2026 18:16. Branch `note-kit-phase4` from master 34981ea in the worktree `.claude/worktrees/note-kit-phase4` (the Phase 3 folder moved so the build cache stayed warm; the moved cache's build scripts named the old folder and were rerun once).
+
+Pre-flight (shared interfaces): the seven producer and consumer pairs of the plan matched (the send report and error, the `--send` and `--presets` flags, `to_obj` with the mtl name, the preset shape, the glyph command rename, the help rows feeding the guide table). One accepted gap: between Task 6 and Task 7 the Letter button called a renamed command; Task 7 closed it and ran the scenario runner.
+
+- Task 1 complete (34981ea..681649d): `to_obj` takes the mtl file name, `colorset_text` factored out; `kit::game` writes `skins/notes/rhythr-kit.obj` and `.mtl`, `skins/colorsets/rhythr-kit.txt` (only with a valid colour) through temp file and rename, creates `rhythr-kit.json` once as a compact copy of the active profile with the note and colorset pointed at those files, refuses a non-empty `DataPath`, and names the folder in the first message. `kit_eval_json --send <dir>`. Tests: render kit 115.
+- Task 2 complete (681649d..3ba4324): `game_data.rs` (override, Windows roaming, every Steam library's Proton prefix of app 2250500, XDG folders; a folder counts with `framework.json` or `skins`), `steam_library_roots()` factored out of `detect_game_scan`, the command `kit_send_to_game` with its four sentences. Tests: gui 39.
+- Task 3 complete (3ba4324..62dab09): the button, the status, the help row, the harness shim, the scenario group `send` (4 checks against a stand-in game folder under `RHYTHR_GAME_DATA_DIR`). Node 66.
+- Task 4 complete (62dab09..c4fa21a): the five presets as JSON in the kernel, `kit::presets::presets()`, `kit_presets`, `--presets`. Tests: render kit 117 (each preset evaluates and meshes under 10 000 triangles, each has a rim part and a glass part).
+- Task 5 complete (c4fa21a..ef9f14a): `thumb.js` (pure layer model plus painter, the glass alpha shared with the front view through `view-math.js`), `presets.js` (popover, tiles, thumbnails from `kit_evaluate`, Esc and outside click), `store.load` resets point editing, group selection and folds, the help row, the scenario group `presets` (8 checks). Node 70.
+- Task 6 complete (ef9f14a..bea6ae1): `designer.rs` became `kit/v1.rs` (ControlPoint, flatten_controls, clean_contours, two tests), the v1 window, its commands, `DesignerShape`, `designer_skin` and the four v1 examples went; `kit_import_glyph`; the capability entry; the preview renderer and scene renamed. Rulings: `zip` as a GUI dev-dependency for the old-skin fixture (no new crate in the lock); RED for a removal is the compile failure after the deletion with the coverage rewritten first; `kit_migrate_v1` waited for Task 7; the note preview constants became `NOTE_PREVIEW_W/H` (`PREVIEW_W/H` already named the main window preview). Tests: gui 39, render kit 119, examples build, xwin check.
+- Task 7 complete (bea6ae1..59b685b): `designer.html/js/css` deleted, one main window button "Note Designer" opens the kit, the kit's titles read Note Designer, "From old designer" and `kit_migrate_v1` went, the glyph command renamed in main.js and the harness. Ruling: the conversion status reads "converted from an older design format" and the refusal names only the Note Designer; fixture and check names keep the old words. Scenario runner 107/107, node 70, gui 39.
+- Task 8 complete (59b685b..e94dbe2): waves style picks are discrete (labels with a part id are read by their prefix), the wave Depth slider reaches 0.95, a folded group's header marks a selected member (`has-selected`), a new group takes the smallest free id and name (the sole member regrouped is Group 1 again), the migrate fit test comment, the fold scenario counts evaluate calls. Node 73, scenarios groups and effects 27/27.
+- Task 9 complete (e94dbe2..cdddfb1): the guide's designer bullet rewritten for the kit with Presets and Send to game, a "Testing a note in the game" bullet, the controls table regenerated, the changelog entry rewritten, the parent spec's phase 4 and decisions closed. Preflight passed.
+- Task 10: acceptance (see below), testbuild kit8, this ledger.
+
+## Acceptance (01.11.2026)
+
+- `cargo fmt --all --check` clean.
+- `cargo test -p rhythia-render`: 250 lib tests, the property test (10 cases, 12 s) and the kit render test green. The first run found the two integration tests still calling the two-argument `to_obj` (Task 1 had run the lib tests only); fixed in one commit, rerun green.
+- `cargo test -p rhythia-gui`: 39. `rhythia-formats` and `rhythia-sim`: green.
+- `cargo build -p rhythia-render --examples`: green (16 examples; the four v1 examples are gone).
+- Node unit tests: 73. Scenario runner: 112 checks in 11 groups (files, imports, points, depth, turntable, help, groups, effects, snap, send, presets), 0 failed.
+- `cargo xwin check -p rhythia-gui`: green. Clippy: 13 warnings, all pre-existing and outside the Phase 4 files (analysis, audio, nv12, exe_assets, race, video, points.rs from Phase 2).
+- Preflight passed (no em or en dashes, every error code documented).
+- Windows testbuild kit8: `tauri build --runner cargo-xwin --target x86_64-pc-windows-msvc` from `crates/gui` (the moved worktree's release build scripts dropped once and rerun), `rhythr_0.6.3_x64-setup.exe` built 18:57 and copied to `/home/killer/RhythiaRenderer/rhythr_0.6.3_x64-setup_TESTBUILD-kit8.exe` (45 757 856 bytes). The updater signature step reported the missing private key, as every testbuild does; the installer is unaffected. The copy script first picked the stale 0.6.2 installer that sat in the same bundle folder from Phase 3; the copy was redone by hand and checked against the fresh timestamp.
+- Linux container check (`rhythr-linux-build`, Ubuntu 22.04, `cargo check -p rhythia-render` with the worktree's git dir mounted read-only): green in 24 s.
+
+## Release candidate
+
+Not cut in this phase. After the owner's probe round and its fixes: version 0.7.0 in `Cargo.toml` and `crates/gui/tauri.conf.json`, `## v0.7.0 (date)` in the changelog with the Unreleased entries, `bash scripts/preflight.sh 0.7.0`, the Linux build through `scripts/build-linux.sh`, the Windows build, `latest.json`, then the GitHub release and AUR as for 0.6.3, all after the owner's Go; nothing is pushed before it.
+
+## Probe round in the game (owner, testbuild kit8)
+
+Open; the list is section 8 of the spec: three kit-built skins in play with the glass grey measured, Send to game first and second send and which reload step shows the new file, a two-key profile file, the single designer button and a converting v1 file, each preset in the game. Findings decide the wording of `MSG_AGAIN` and the two-key fallback before the release step.
