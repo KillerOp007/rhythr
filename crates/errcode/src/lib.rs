@@ -44,6 +44,10 @@ pub enum Area {
     Network,
     /// The app itself: settings, windows, state.
     App,
+    /// The Note Designer: building a note, its files, its imports.
+    Designer,
+    /// Writing a note into the game's own folders (Send to game).
+    Game,
 }
 
 impl Area {
@@ -55,6 +59,8 @@ impl Area {
             Area::MapReplay => "MAP",
             Area::Network => "NET",
             Area::App => "APP",
+            Area::Designer => "DSN",
+            Area::Game => "GAM",
         }
     }
 
@@ -66,6 +72,8 @@ impl Area {
             Area::MapReplay => "Replays and maps",
             Area::Network => "Downloads",
             Area::App => "Application",
+            Area::Designer => "Note Designer",
+            Area::Game => "Sending to the game",
         }
     }
 
@@ -79,6 +87,8 @@ impl Area {
             Area::MapReplay => "RH-MAP-400",
             Area::Network => "RH-NET-500",
             Area::App => "RH-APP-600",
+            Area::Designer => "RH-DSN-700",
+            Area::Game => "RH-GAM-800",
         }
     }
 }
@@ -1013,6 +1023,238 @@ pub static CODES: &[Entry] = &[
              only lead. A code that shows up here often is a missing row.",
         )],
     },
+    // ------------------------------------------------ note designer (DSN)
+    Entry {
+        id: "RH-DSN-701",
+        area: Area::Designer,
+        title: "the design has nothing to show",
+        fix: "Show a hidden part again or switch one to Add; a note needs material.",
+        patterns: &["nothing to show"],
+        causes: &[(
+            Plat::Any,
+            "Every part is hidden, every part is a Cut, or the Cuts remove all the material. \
+             The window says the same live while editing; the code appears when a save or a \
+             send was attempted in that state.",
+        )],
+    },
+    Entry {
+        id: "RH-DSN-702",
+        area: Area::Designer,
+        title: "the design is too detailed to bake",
+        fix: "Lower Repeat, the wave count or the number of parts until the triangle count fits.",
+        patterns: &["too detailed"],
+        causes: &[(
+            Plat::Any,
+            "The baked note would pass 40 000 triangles. Repeat multiplies every outline, Waves \
+             add points per wave, imported SVGs and letters bring their own detail. The limit \
+             keeps notes near the 10 500 triangles that played in the game without a stutter.",
+        )],
+    },
+    Entry {
+        id: "RH-DSN-703",
+        area: Area::Designer,
+        title: "one part is too complex",
+        fix: "Lower Repeat or Waves on that part, or convert it to points and remove some.",
+        patterns: &["too complex"],
+        causes: &[(
+            Plat::Any,
+            "A single part would pass 16 384 points or 512 outlines before the depth bands are \
+             built: a dense import, a high Repeat on a wavy shape, or a letter with many \
+             counters. The bound exists because an unbounded part once took gigabytes.",
+        )],
+    },
+    Entry {
+        id: "RH-DSN-704",
+        area: Area::Designer,
+        title: "a part reaches too far from the centre",
+        fix: "Move the part closer to the centre or make it smaller.",
+        patterns: &["reaches too far"],
+        causes: &[(
+            Plat::Any,
+            "A part sits or reaches beyond 64 note units from the centre, outside the geometry \
+             grid. The editor keeps transforms far inside that, so this is a hand-edited or \
+             damaged design file.",
+        )],
+    },
+    Entry {
+        id: "RH-DSN-705",
+        area: Area::Designer,
+        title: "the file is not a design",
+        fix: "Open a .rhs saved by rhythr's Note Designer or a .rhsd design file.",
+        patterns: &["not a design file", "design file damaged"],
+        causes: &[(
+            Plat::Any,
+            "The file is not JSON, not a version 2 design and not an old designer document (no \
+             P key): another program's file, a truncated copy, a .rhs renamed to .rhsd, or a \
+             design whose fields were edited by hand.",
+        )],
+    },
+    Entry {
+        id: "RH-DSN-706",
+        area: Area::Designer,
+        title: "the skin carries no editable design",
+        fix: "Only skins saved by the Note Designer carry their design; rebuild the note from parts.",
+        patterns: &["carries no editable design"],
+        causes: &[(
+            Plat::Any,
+            "A skin exported by the game or made by another tool: it has the obj and the \
+             colorset but no rhythr/design.json entry, so there is nothing to edit.",
+        )],
+    },
+    Entry {
+        id: "RH-DSN-707",
+        area: Area::Designer,
+        title: "no installed font has an outline for that character",
+        fix: "Type a letter, digit or symbol an installed font covers; colour emoji fonts have no outlines.",
+        patterns: &["no installed font", "type a letter"],
+        causes: &[
+            (
+                Plat::Windows,
+                "No installed font covers the character. Segoe UI Emoji carries bitmaps, not \
+                 outlines, so an emoji is found only through a font with monochrome outlines \
+                 (Segoe UI Symbol, Noto Emoji).",
+            ),
+            (
+                Plat::Linux,
+                "fontconfig knows no face with the glyph; Noto Color Emoji is bitmap-only, Noto \
+                 Emoji or Symbola provide outlines.",
+            ),
+            (
+                Plat::MacOs,
+                "Apple Color Emoji carries no outlines; install Noto Emoji for emoji letters.",
+            ),
+        ],
+    },
+    Entry {
+        id: "RH-DSN-708",
+        area: Area::Designer,
+        title: "the SVG could not be imported",
+        fix: "Use an SVG with filled or stroked paths; convert text to paths before exporting it.",
+        patterns: &["svg"],
+        causes: &[(
+            Plat::Any,
+            "usvg could not parse the file, or it holds only text, images or paths without fill \
+             and stroke. Text is not imported because the font would be resolved on the \
+             reader's machine, not the author's.",
+        )],
+    },
+    Entry {
+        id: "RH-DSN-709",
+        area: Area::Designer,
+        title: "the design file could not be read or written",
+        fix: "Choose a folder you can write to, or close the program holding the file; a moved file leaves the recent list on the next open.",
+        patterns: &["os error", "denied"],
+        causes: &[
+            (
+                Plat::Windows,
+                "The folder is read-only, protected by Controlled folder access, held by \
+                 OneDrive while syncing, or the file is open elsewhere (os error 5 and 32); a \
+                 recent-list entry whose file was moved reads as os error 2.",
+            ),
+            (
+                Plat::Linux,
+                "Permissions, a read-only mount, or a folder owned by another user (a Flatpak \
+                 or snap sandbox hides the real path); a moved recent file reads as os error 2.",
+            ),
+            (
+                Plat::Any,
+                "The operating system refused the read or the write; its own words follow the \
+                 colon.",
+            ),
+        ],
+    },
+    Entry {
+        id: "RH-DSN-700",
+        area: Area::Designer,
+        title: "the note could not be built",
+        fix: "Save diagnostics and report it; try fewer parts, less rounding or fewer waves meanwhile.",
+        patterns: &[],
+        causes: &[(
+            Plat::Any,
+            "The kernel refused the design with a message the window does not show word for \
+             word (it would name geometry internals); the full text is on stderr with the \
+             prefix kit:. A code that shows up here often is a missing row.",
+        )],
+    },
+    // ------------------------------------------- sending to the game (GAM)
+    Entry {
+        id: "RH-GAM-801",
+        area: Area::Game,
+        title: "the game's data folder was not found",
+        fix: "Start the game once so its folder exists, or set RHYTHR_GAME_DATA_DIR to it; until then save the .rhs and import it in the game.",
+        patterns: &["game folder not found"],
+        causes: &[
+            (
+                Plat::Windows,
+                "%APPDATA%\\CapoRhythia does not exist: the game was never started under this \
+                 Windows account, or AppData is redirected (roaming profile, OneDrive Known \
+                 Folder Move) somewhere the roaming folder lookup does not report. The message \
+                 lists every folder tried.",
+            ),
+            (
+                Plat::Linux,
+                "No Steam library holds steamapps/compatdata/2250500 with a CapoRhythia folder \
+                 in its prefix: the game was never run through Proton on this machine, Steam is \
+                 a Flatpak or snap build with a library outside the scanned roots, or it is the \
+                 native Linux build, whose data folder is not under the XDG config or data \
+                 folders. RHYTHR_GAME_DATA_DIR names the folder outright.",
+            ),
+            (
+                Plat::MacOs,
+                "The game does not run here; only RHYTHR_GAME_DATA_DIR applies.",
+            ),
+        ],
+    },
+    Entry {
+        id: "RH-GAM-802",
+        area: Area::Game,
+        title: "the game relocates its data folder",
+        fix: "Save the .rhs and import it in the game; the kit does not follow a relocated data folder.",
+        patterns: &["moves its data to"],
+        causes: &[(
+            Plat::Any,
+            "framework.json carries a non-empty DataPath. What it relocates (profiles, skins or \
+             both) is not known, so the kit refuses rather than write where the game may never \
+             look. The owner's value is empty, so this is a rare setup.",
+        )],
+    },
+    Entry {
+        id: "RH-GAM-803",
+        area: Area::Game,
+        title: "a file in the game folder could not be written",
+        fix: "Apply another profile in the game or close it, then send again; check that the game folder is writable.",
+        patterns: &["could not write"],
+        causes: &[
+            (
+                Plat::Windows,
+                "The game holds the obj open because its profile is active (sharing violation, \
+                 os error 32), Controlled folder access blocks writes into AppData, or the \
+                 folder is read-only. Applying another profile in the game releases the file.",
+            ),
+            (
+                Plat::Linux,
+                "The Proton prefix is owned by another user, sits on a read-only mount, or a \
+                 Flatpak Steam keeps it under ~/.var where the sandbox denies the write.",
+            ),
+            (
+                Plat::Any,
+                "The operating system refused the write; its own words follow the colon, and \
+                 the path says which of the four files it was.",
+            ),
+        ],
+    },
+    Entry {
+        id: "RH-GAM-800",
+        area: Area::Game,
+        title: "the note could not be sent to the game",
+        fix: "Save diagnostics and report it; the saved .rhs still imports in the game.",
+        patterns: &[],
+        causes: &[(
+            Plat::Any,
+            "Nothing in the game area matched; the message is the lead. The diagnostics file's \
+             game section shows which folder was used and what the kit found there.",
+        )],
+    },
 ];
 
 /// Looks a code up by its id, with or without a platform suffix.
@@ -1174,6 +1416,8 @@ pub fn markdown() -> String {
         Area::MapReplay,
         Area::Network,
         Area::App,
+        Area::Designer,
+        Area::Game,
     ] {
         let _ = write!(s, "\n## {} ({})\n", area.title(), area.tag());
         for e in CODES.iter().filter(|e| e.area == area) {
@@ -1235,6 +1479,8 @@ mod tests {
             Area::MapReplay,
             Area::Network,
             Area::App,
+            Area::Designer,
+            Area::Game,
         ] {
             let f = fallback(area);
             assert_eq!(f.area, area);
@@ -1312,6 +1558,86 @@ mod tests {
         for (message, want) in cases {
             let got = classify(message).id;
             assert_eq!(got, *want, "{message:?} classified as {got}");
+        }
+    }
+
+    /// The Note Designer's and the game writer's wording, copied from
+    /// `kit_commands::user_message`, `kit::game` and the import commands.
+    /// Classified inside their areas, as the commands do.
+    #[test]
+    fn designer_and_game_messages_land_on_the_right_code() {
+        let designer: &[(&str, &str)] = &[
+            (
+                "Not saved, the skin would not load in the game: nothing to show: every part \
+                 is hidden or cut away",
+                "RH-DSN-701",
+            ),
+            (
+                "too detailed: 41200 triangles, the limit is 40000",
+                "RH-DSN-702",
+            ),
+            (
+                "too complex: 17000 points in 520 outlines; lower Repeat or Waves",
+                "RH-DSN-703",
+            ),
+            ("a part reaches too far from the centre", "RH-DSN-704"),
+            (
+                "not a design file: neither a current design nor one in the older format",
+                "RH-DSN-705",
+            ),
+            ("design file damaged: missing field `parts`", "RH-DSN-705"),
+            (
+                "this skin carries no editable design: only skins saved by rhythr's Note \
+                 Designer open here",
+                "RH-DSN-706",
+            ),
+            (
+                "no installed font has an outline for '\u{1F600}'",
+                "RH-DSN-707",
+            ),
+            (
+                "the SVG has no filled or stroked paths (text is not imported)",
+                "RH-DSN-708",
+            ),
+            ("Permission denied (os error 13)", "RH-DSN-709"),
+            (
+                "this design could not be built; try fewer parts, less rounding or fewer waves",
+                "RH-DSN-700",
+            ),
+        ];
+        for (message, want) in designer {
+            let got = classify_in(Area::Designer, message).id;
+            assert_eq!(got, *want, "{message:?} classified as {got}");
+        }
+        let game: &[(&str, &str)] = &[
+            (
+                "Game folder not found. Looked in: ~/.config/CapoRhythia; ~/.local/share/CapoRhythia.",
+                "RH-GAM-801",
+            ),
+            (
+                "Not sent: the game's framework.json moves its data to D:\\x, which Send to \
+                 game does not follow yet. Save the .rhs and import it once.",
+                "RH-GAM-802",
+            ),
+            (
+                "Could not write C:\\Users\\x\\AppData\\Roaming\\CapoRhythia\\skins\\notes\\rhythr-kit.obj: \
+                 The process cannot access the file because it is being used by another \
+                 process. (os error 32)",
+                "RH-GAM-803",
+            ),
+        ];
+        for (message, want) in game {
+            let got = classify_in(Area::Game, message).id;
+            assert_eq!(got, *want, "{message:?} classified as {got}");
+        }
+        // Every new entry carries the next step, which the diagnostics file
+        // prints under the code.
+        for e in CODES
+            .iter()
+            .filter(|e| matches!(e.area, Area::Designer | Area::Game))
+        {
+            assert!(!e.fix.is_empty(), "{} has no fix", e.id);
+            assert!(e.fix.ends_with('.'), "{} fix is not a sentence", e.id);
         }
     }
 

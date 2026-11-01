@@ -320,3 +320,111 @@ Shown to the user: Windows: install the Edge WebView2 runtime. Linux: install we
 Shown to the user: Save diagnostics and report it.
 
 - **all systems**: The catch-all. Nothing anywhere in the table matched, so the message itself is the only lead. A code that shows up here often is a missing row.
+
+## Note Designer (DSN)
+
+### RH-DSN-701 the design has nothing to show
+
+Shown to the user: Show a hidden part again or switch one to Add; a note needs material.
+
+- **all systems**: Every part is hidden, every part is a Cut, or the Cuts remove all the material. The window says the same live while editing; the code appears when a save or a send was attempted in that state.
+- Recognised by: `nothing to show`
+
+### RH-DSN-702 the design is too detailed to bake
+
+Shown to the user: Lower Repeat, the wave count or the number of parts until the triangle count fits.
+
+- **all systems**: The baked note would pass 40 000 triangles. Repeat multiplies every outline, Waves add points per wave, imported SVGs and letters bring their own detail. The limit keeps notes near the 10 500 triangles that played in the game without a stutter.
+- Recognised by: `too detailed`
+
+### RH-DSN-703 one part is too complex
+
+Shown to the user: Lower Repeat or Waves on that part, or convert it to points and remove some.
+
+- **all systems**: A single part would pass 16 384 points or 512 outlines before the depth bands are built: a dense import, a high Repeat on a wavy shape, or a letter with many counters. The bound exists because an unbounded part once took gigabytes.
+- Recognised by: `too complex`
+
+### RH-DSN-704 a part reaches too far from the centre
+
+Shown to the user: Move the part closer to the centre or make it smaller.
+
+- **all systems**: A part sits or reaches beyond 64 note units from the centre, outside the geometry grid. The editor keeps transforms far inside that, so this is a hand-edited or damaged design file.
+- Recognised by: `reaches too far`
+
+### RH-DSN-705 the file is not a design
+
+Shown to the user: Open a .rhs saved by rhythr's Note Designer or a .rhsd design file.
+
+- **all systems**: The file is not JSON, not a version 2 design and not an old designer document (no P key): another program's file, a truncated copy, a .rhs renamed to .rhsd, or a design whose fields were edited by hand.
+- Recognised by: `not a design file`, `design file damaged`
+
+### RH-DSN-706 the skin carries no editable design
+
+Shown to the user: Only skins saved by the Note Designer carry their design; rebuild the note from parts.
+
+- **all systems**: A skin exported by the game or made by another tool: it has the obj and the colorset but no rhythr/design.json entry, so there is nothing to edit.
+- Recognised by: `carries no editable design`
+
+### RH-DSN-707 no installed font has an outline for that character
+
+Shown to the user: Type a letter, digit or symbol an installed font covers; colour emoji fonts have no outlines.
+
+- **Windows**: No installed font covers the character. Segoe UI Emoji carries bitmaps, not outlines, so an emoji is found only through a font with monochrome outlines (Segoe UI Symbol, Noto Emoji).
+- **Linux**: fontconfig knows no face with the glyph; Noto Color Emoji is bitmap-only, Noto Emoji or Symbola provide outlines.
+- **macOS**: Apple Color Emoji carries no outlines; install Noto Emoji for emoji letters.
+- Recognised by: `no installed font`, `type a letter`
+
+### RH-DSN-708 the SVG could not be imported
+
+Shown to the user: Use an SVG with filled or stroked paths; convert text to paths before exporting it.
+
+- **all systems**: usvg could not parse the file, or it holds only text, images or paths without fill and stroke. Text is not imported because the font would be resolved on the reader's machine, not the author's.
+- Recognised by: `svg`
+
+### RH-DSN-709 the design file could not be read or written
+
+Shown to the user: Choose a folder you can write to, or close the program holding the file; a moved file leaves the recent list on the next open.
+
+- **Windows**: The folder is read-only, protected by Controlled folder access, held by OneDrive while syncing, or the file is open elsewhere (os error 5 and 32); a recent-list entry whose file was moved reads as os error 2.
+- **Linux**: Permissions, a read-only mount, or a folder owned by another user (a Flatpak or snap sandbox hides the real path); a moved recent file reads as os error 2.
+- **all systems**: The operating system refused the read or the write; its own words follow the colon.
+- Recognised by: `os error`, `denied`
+
+### RH-DSN-700 the note could not be built
+
+Shown to the user: Save diagnostics and report it; try fewer parts, less rounding or fewer waves meanwhile.
+
+- **all systems**: The kernel refused the design with a message the window does not show word for word (it would name geometry internals); the full text is on stderr with the prefix kit:. A code that shows up here often is a missing row.
+
+## Sending to the game (GAM)
+
+### RH-GAM-801 the game's data folder was not found
+
+Shown to the user: Start the game once so its folder exists, or set RHYTHR_GAME_DATA_DIR to it; until then save the .rhs and import it in the game.
+
+- **Windows**: %APPDATA%\CapoRhythia does not exist: the game was never started under this Windows account, or AppData is redirected (roaming profile, OneDrive Known Folder Move) somewhere the roaming folder lookup does not report. The message lists every folder tried.
+- **Linux**: No Steam library holds steamapps/compatdata/2250500 with a CapoRhythia folder in its prefix: the game was never run through Proton on this machine, Steam is a Flatpak or snap build with a library outside the scanned roots, or it is the native Linux build, whose data folder is not under the XDG config or data folders. RHYTHR_GAME_DATA_DIR names the folder outright.
+- **macOS**: The game does not run here; only RHYTHR_GAME_DATA_DIR applies.
+- Recognised by: `game folder not found`
+
+### RH-GAM-802 the game relocates its data folder
+
+Shown to the user: Save the .rhs and import it in the game; the kit does not follow a relocated data folder.
+
+- **all systems**: framework.json carries a non-empty DataPath. What it relocates (profiles, skins or both) is not known, so the kit refuses rather than write where the game may never look. The owner's value is empty, so this is a rare setup.
+- Recognised by: `moves its data to`
+
+### RH-GAM-803 a file in the game folder could not be written
+
+Shown to the user: Apply another profile in the game or close it, then send again; check that the game folder is writable.
+
+- **Windows**: The game holds the obj open because its profile is active (sharing violation, os error 32), Controlled folder access blocks writes into AppData, or the folder is read-only. Applying another profile in the game releases the file.
+- **Linux**: The Proton prefix is owned by another user, sits on a read-only mount, or a Flatpak Steam keeps it under ~/.var where the sandbox denies the write.
+- **all systems**: The operating system refused the write; its own words follow the colon, and the path says which of the four files it was.
+- Recognised by: `could not write`
+
+### RH-GAM-800 the note could not be sent to the game
+
+Shown to the user: Save diagnostics and report it; the saved .rhs still imports in the game.
+
+- **all systems**: Nothing in the game area matched; the message is the lead. The diagnostics file's game section shows which folder was used and what the kit found there.
