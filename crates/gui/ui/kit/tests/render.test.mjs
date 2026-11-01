@@ -1,7 +1,22 @@
 // crates/gui/ui/kit/tests/render.test.mjs
 import test from "node:test";
 import assert from "node:assert/strict";
-import { fmt, roundToStep, clampDepth, shapeFields, pointSummary } from "../render.js";
+import { fmt, roundToStep, clampDepth, shapeFields, pointSummary, EFFECT_DEFAULTS, repeatFromField, inspectorKeyFor } from "../render.js";
+
+test("chips_toggle_discretely_and_repeat_below_two_is_off", () => {
+  assert.deepEqual(EFFECT_DEFAULTS.waves, { count: 6, depth: 0.15, style: "sine" });
+  assert.equal(EFFECT_DEFAULTS.round, 0.1);
+  assert.equal(EFFECT_DEFAULTS.rim, 0.15);
+  assert.equal(repeatFromField("0"), null);
+  assert.equal(repeatFromField("1"), null);
+  assert.equal(repeatFromField(""), null);
+  assert.equal(repeatFromField("4.7"), 5);
+  assert.equal(repeatFromField("40"), 12);
+  const p = { id: "p1", shape: { kind: "circle" }, effects: { waves: null, round: 0.1, rim: null, mirror: "none", repeat: null } };
+  assert.equal(inspectorKeyFor(p), "p1|circle|0|1|0");
+  p.effects.waves = EFFECT_DEFAULTS.waves;
+  assert.equal(inspectorKeyFor(p), "p1|circle|1|1|0", "a chip switching on rebuilds the inspector");
+});
 
 test("a_points_shape_is_summed_up_in_points_and_loops", () => {
   const pt = { x: 0, y: 0, smooth: true };
@@ -37,4 +52,17 @@ test("every_shape_kind_lists_its_own_fields", () => {
   assert.equal(shapeFields("polygon").map((f) => f[0]).join(","), "sides,rounding");
   assert.equal(shapeFields("star")[1][0], "inner");
   assert.deepEqual(shapeFields("contours"), []);
+});
+
+test("the_parts_list_key_follows_membership_and_the_group_options_follow_names", async () => {
+  const { listKey, groupOptionsKey } = await import("../render.js");
+  const d = { parts: [{ id: "p1" }, { id: "p2" }], groups: [{ id: "g1", name: "G", parts: ["p1", "p2"], mode: "add" }] };
+  const before = listKey(d, []);
+  d.groups[0].parts = ["p2"];
+  assert.notEqual(listKey(d, []), before, "a part leaving its group rebuilds the list");
+  assert.notEqual(listKey(d, ["g1"]), listKey(d, []), "folding rebuilds");
+  const k1 = groupOptionsKey(d, "g1");
+  d.groups[0].name = "Holes";
+  assert.notEqual(groupOptionsKey(d, "g1"), k1, "a renamed group refreshes the options");
+  assert.notEqual(groupOptionsKey(d, null), groupOptionsKey(d, "g1"), "the current group is part of the key");
 });

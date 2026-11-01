@@ -1,0 +1,30 @@
+# Note Kit Phase 3 ledger (composition)
+
+Plan: `docs/superpowers/plans/2026-10-25-note-kit-phase3-composition.md`. Executed inline (one session, TDD per task, one fresh whole-branch review at the end), the owner's choice of 25.10. 07:39. Rulings confirmed by the owner before execution: waves modulate inward; groups form without multi-selection; Snap is on by default.
+
+Pre-flight (shared interfaces): Task 2 produces `listRows` and the group operations that Task 4 consumes, with the discrete labels both name; Task 2's `ui.snap` is read by Task 3's view and set by main.js; Task 1's inward waves match Task 4's hint; Task 5's help rows name Task 4's controls. No conflict.
+
+- Task 1 complete (7191123..4cd3e76): inward waves (`apply_waves`: crest on the outline, trough at 1 minus the depth), the v1 depth converted as 2d / (1 + d) in the migration, import flattening at 0.0005 of the extent (a 256 unit disc gives about 80 points). Tests: render kit 106, gui 35. Ruling: `sliders_become_one_polygon_part_with_effects` expected the raw v1 depth 0.25; with the inward-wave ruling the migration converts it to 0.4, so the expectation moved with it (cost if wrong: one number in a test). The sdd ledger's header is written without an em dash: the house rule beats the skill's template and preflight scans the workspace.
+- Task 2 complete (4cd3e76..4aaa63f): groups in the store (`createGroup`, `addToGroup`, `removeFromGroup`, `ungroup`, `updateGroup`, `selectGroup`, `groupOf`, `toggleFold`, `nextGroupId`), members contiguous in the parts array (`placeNextToGroup`), an emptied group goes (`leaveGroup`), `selectedGroup` excludes `selected`, folding and snap as editor state, `listRows`. Node 56.
+- Task 3 complete (4aaa63f..2ae34a6): `snapValue`, `snapPosition`, `snapSize`, `snapAngle`; the view snaps moves, sizes, turns and point drags with a 6 px radius while Shift keeps its meanings; Cut-group members hatch; a selected group lights its members; the Snap button, remembered. Node 57. Ruling: the plan's example `snapValue(0.537, 0.02)` lies 0.013 from 0.55 and snaps by the plan's own rule, so the test uses 0.525; `snapValue` returns plus zero (a grid value reached from below was minus zero, which strict equality rejects and which would sit in the document). Cost if wrong: none.
+- Task 4 complete (2ae34a6..394083e): the parts list from `listRows` with group header rows (fold triangle, drop target, count), the group inspector (name, mode, parts with Leave group, Ungroup), the part inspector's Group field, the effect chips (Waves with Count, Depth, Style; Round; Rim) and the symmetry controls (Mirror, Repeat with `repeatFromField`), `inspectorKeyFor` so a chip rebuilds the panel, `EFFECT_DEFAULTS`. Node 58.
+- Task 5: help rows for groups, effects and snapping plus the section "Groups and effects"; the guide's controls table regenerated from `helpMarkdown` and the Note Kit paragraph extended; spec 5.2 and 8 updated with the rulings; the scenario runner `crates/gui/ui/kit/tests/scenarios.mjs` (starts the harness, writes its fixtures including small stored zip archives, nine groups: files, imports, points, depth, turntable, help, groups, effects, snap; 95 checks) replaces the raw round scripts. Ruling: the runner's first Repeat check used a 0.3 square at y 0.5 whose four turned copies overlap at the corners and merge into one ring, as the hint promises; the check uses a 0.2 square (cost if wrong: none).
+
+## Final review (25.10., fresh reviewer over 891e5d1..baafae7)
+
+No Critical, four Important, ten Minor. Re-graded by effect: two Minors became Important (a group selection left point editing running on another part; the Group dropdown rebuilt on every emit and closed under the pointer). Fix pass in one commit (0a69702), every fix with a test that failed first, Node 65, scenarios 95/95, preflight:
+
+- Reorder and Duplicate keep a group's block contiguous: a row dropped on another row takes that row's group (none when the target has none), a copy joins its source's group.
+- A drop on the part's own header, an unknown part or an unknown group records nothing (checked before the commit) and the header drop guards too.
+- The parts list key carries each part's group, so a part leaving from the bottom loses its indent.
+- `snapTolerance` caps the radius at 0.4 of the grid, so a free band stays between the lines at the default zoom (ruling: the owner confirmed the grid, not the radius; the plan's 6 px still rules when zoomed in).
+- Selecting another part or a group ends point editing (`select`, `selectGroup`, `createGroup`).
+- The Group dropdown is rebuilt only when its options or the current group change, never while it has focus; it blurs after a choice.
+
+Deferred minors: waves.style picks coalesce; migrated v1 wave depths above 0.6 sit past the Depth slider (kernel clamps at 0.95); a stale comment in the migrate fit test; `toggles_never_merge` lacks the new discrete labels; the fold scenario counts no evaluate calls; a selected member of a folded group shows no selection in the list; re-grouping the sole member of g1 yields "Group 2"; the addToGroup comment.
+
+Rulings on what the reviewer set aside: shortcuts do nothing while a group is selected (spec silent, stands); chip buttons read On/Off beside a plain label (stands); a hand-edited document with a missing group member cannot be ungrouped from the UI (never written by the editor, stands); the runner's default playwright-core path (env override, stands); finer flattening within the part budget (stands); static part names in the group inspector (cosmetic, stands).
+
+## Owner acceptance (01.11.2026)
+
+Testbuild kit7 (25.10., 08:22) tested by the owner against the 29 point list of 01.11. (groups, effect chips, symmetry, snapping, help, file round trip, in-game import, Phase 2 regression). Verdict: "passt alles soweit", no findings. The branch is accepted as built; the merge into master and the start of Phase 4 are the owner's next decisions. A dry-run merge onto master at 001f15e (after the 0.6.3 hotfix) reported no conflicts.

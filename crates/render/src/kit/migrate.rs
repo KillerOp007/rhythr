@@ -123,9 +123,14 @@ pub fn from_v1(json: &str) -> Result<Design, KitError> {
     } else {
         let waves = f("waves", 0.0) as u32;
         if waves > 0 {
+            // v1 modulated outward and normalised afterwards, so its valleys
+            // sat at (1 - d) / (1 + d) of the tips; the kit's waves run
+            // inward with valleys at 1 - d', so d' = 2d / (1 + d) keeps the
+            // look.
+            let d = f("waveDepth", 0.25);
             effects.waves = Some(Waves {
                 count: waves,
-                depth: f("waveDepth", 0.25),
+                depth: 2.0 * d / (1.0 + d),
                 style: match s("waveform", "sine").as_str() {
                     "spike" => WaveStyle::Spike,
                     "pulse" => WaveStyle::Pulse,
@@ -214,11 +219,12 @@ mod tests {
             }
         );
         assert_eq!(p.effects.rim, Some(0.22));
+        // waveDepth 0.25 outward becomes 0.4 inward (2d / (1 + d)).
         assert_eq!(
             p.effects.waves,
             Some(Waves {
                 count: 5,
-                depth: 0.25,
+                depth: 0.4,
                 style: WaveStyle::Spike
             })
         );
@@ -344,6 +350,20 @@ mod tests {
         let d = from_v1(SLIDERS).unwrap();
         let ev = crate::kit::levels::evaluate(&d).unwrap();
         assert!((extent(&ev.intervals[0].solid) - 1.0).abs() < 2e-2);
+    }
+
+    #[test]
+    fn a_v1_wave_depth_converts_to_the_inward_formula() {
+        // v1 modulated outward and normalised afterwards, so its valleys sat
+        // at (1 - d) / (1 + d) of the tips; the inward formula puts them at
+        // 1 - d', so d' = 2d / (1 + d) keeps the look.
+        let json = r##"{"P":{"shape":"circle","n":6,"round":0.0,"hollow":false,"thick":0.22,
+          "depth":0.05,"waves":6,"waveDepth":0.25,"waveform":"sine","twist":0},
+          "free":null,"symmetry":1,"mirror":false,"colors":["#ffffff"],"imported":null}"##;
+        let d = from_v1(json).unwrap();
+        let w = d.parts[0].effects.waves.as_ref().expect("waves kept");
+        assert_eq!(w.count, 6);
+        assert!((w.depth - 0.4).abs() < 1e-5, "depth {}", w.depth);
     }
 
     #[test]

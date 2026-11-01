@@ -57,7 +57,9 @@ pub(crate) fn contours_from_bezpath(path: &kurbo::BezPath) -> Vec<Vec<[f32; 2]>>
             extent = extent.max(p.x.abs()).max(p.y.abs());
         }
     }
-    let tol = extent.max(1.0) * 0.0015;
+    // A 256 unit disc flattens to about 80 segments: no visible facets on
+    // a note, far below the part budget.
+    let tol = extent.max(1.0) * 0.0005;
     let mut contours: Vec<Vec<[f32; 2]>> = Vec::new();
     let mut current: Vec<[f32; 2]> = Vec::new();
     kurbo::flatten(path.elements().iter().copied(), tol, |el| match el {
@@ -542,6 +544,17 @@ mod tests {
         // covered, which is not more than the cut share, so it adds.
         assert_eq!(layers[1].mode, Mode::Add);
         assert_eq!(layers[1].contours.len(), 2, "a band is outer plus hole");
+    }
+
+    #[test]
+    fn a_large_disc_imports_with_a_smooth_outline() {
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+          <circle fill="#ff4500" cx="128" cy="128" r="128"/>
+        </svg>"##;
+        let layers = svg_layers(svg.as_bytes()).unwrap();
+        let n = layers[0].contours[0].len();
+        assert!(n >= 64, "a disc with {n} points shows its facets");
+        assert!(n <= 400, "{n} points is more than the kit needs");
     }
 
     #[test]

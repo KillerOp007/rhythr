@@ -1,7 +1,7 @@
 // crates/gui/ui/kit/tests/store.test.mjs
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createStore, newPart, COALESCE_MS, UNDO_LIMIT } from "../store.js";
+import { createStore, newPart, listRows, COALESCE_MS, UNDO_LIMIT } from "../store.js";
 
 function design() {
   return { version: 2, name: "t", colors: ["#ffffff"], parts: [newPart("p1", "circle")], groups: [] };
@@ -237,4 +237,149 @@ test("serialize_writes_the_kit_format", () => {
   assert.deepEqual(d.parts[0].shape, { kind: "circle" });
   assert.deepEqual(d.parts[0].effects, { waves: null, round: null, rim: null, mirror: "none", repeat: null });
   assert.deepEqual(d.parts[0].depth, { front: 0.1, back: -0.1 });
+});
+
+function fourParts() {
+  const d = design();
+  for (const id of ["p2", "p3", "p4"]) d.parts.push({ ...newPart(id, "square"), id });
+  return d;
+}
+
+test("a_group_forms_from_a_part_and_members_stay_contiguous", () => {
+  const s = createStore(fourParts());
+  const gid = s.createGroup("p1", "Badge");
+  assert.equal(gid, "g1");
+  assert.deepEqual(s.state.design.groups, [{ id: "g1", name: "Badge", parts: ["p1"], mode: "add" }]);
+  assert.equal(s.state.selectedGroup, "g1");
+  assert.equal(s.state.selected, null, "a selected group means no selected part");
+  // p4 sits at the top; joining moves it next to p1 at the bottom.
+  s.addToGroup("p4", "g1");
+  assert.deepEqual(s.state.design.parts.map((p) => p.id), ["p1", "p4", "p2", "p3"]);
+  assert.deepEqual(s.groupOf("p4").parts, ["p1", "p4"]);
+  // A member joining another group leaves the first.
+  const g2 = s.createGroup("p3");
+  s.addToGroup("p4", g2);
+  assert.deepEqual(s.groupOf("p4").id, g2);
+  assert.deepEqual(s.state.design.groups[0].parts, ["p1"]);
+  assert.deepEqual(s.state.design.parts.map((p) => p.id), ["p1", "p2", "p3", "p4"]);
+  assert.equal(s.state.undo.length, 4, "every group edit is one undo step");
+  s.undo();
+  assert.deepEqual(s.state.design.groups[0].parts, ["p1", "p4"]);
+});
+
+test("removing_the_last_member_removes_the_group", () => {
+  const s = createStore(fourParts());
+  s.createGroup("p2");
+  s.addToGroup("p3", "g1");
+  s.removeFromGroup("p2");
+  assert.deepEqual(s.state.design.groups[0].parts, ["p3"]);
+  s.removePart("p3");
+  assert.deepEqual(s.state.design.groups, [], "an emptied group goes");
+  assert.equal(s.state.selectedGroup, null);
+  s.undo();
+  assert.equal(s.state.design.groups.length, 1);
+  s.ungroup("g1");
+  assert.deepEqual(s.state.design.groups, []);
+  assert.equal(s.state.design.parts.length, 4, "ungroup keeps the parts");
+});
+
+test("group_edits_and_selection_rules", () => {
+  const s = createStore(fourParts());
+  s.createGroup("p1");
+  s.updateGroup("g1", "group-mode", (g) => (g.mode = "cut"));
+  s.updateGroup("g1", "group-name", (g) => (g.name = "Holes"));
+  assert.equal(s.state.design.groups[0].mode, "cut");
+  assert.equal(s.state.design.groups[0].name, "Holes");
+  s.select("p2");
+  assert.equal(s.state.selectedGroup, null);
+  assert.equal(s.state.selected, "p2");
+  s.selectGroup("g1");
+  assert.equal(s.state.selected, null);
+  s.ungroup("g1");
+  assert.equal(s.state.selectedGroup, null, "a gone group is not selected");
+  assert.equal(s.nextGroupId(), "g1", "ids are reused when free");
+});
+
+test("folding_is_editor_state_only", () => {
+  const s = createStore(fourParts());
+  s.createGroup("p1");
+  const before = s.serialize();
+  const steps = s.state.undo.length;
+  s.toggleFold("g1");
+  assert.deepEqual(s.state.ui.folded, ["g1"]);
+  assert.equal(s.serialize(), before, "the document is untouched");
+  assert.equal(s.state.undo.length, steps, "no undo step");
+  s.toggleFold("g1");
+  assert.deepEqual(s.state.ui.folded, []);
+  assert.equal(s.state.ui.snap, true, "snapping starts on");
+});
+
+test("list_rows_put_a_group_header_after_its_top_member_and_fold_hides_members", () => {
+  const d = fourParts();
+  d.groups.push({ id: "g1", name: "G", parts: ["p2", "p3"], mode: "cut" });
+  assert.deepEqual(listRows(d, []), [
+    { kind: "part", id: "p1", group: null },
+    { kind: "part", id: "p2", group: "g1" },
+    { kind: "part", id: "p3", group: "g1" },
+    { kind: "group", id: "g1", name: "G", mode: "cut", folded: false, count: 2 },
+    { kind: "part", id: "p4", group: null },
+  ]);
+  assert.deepEqual(listRows(d, ["g1"]).map((r) => `${r.kind}:${r.id}`), ["part:p1", "group:g1", "part:p4"]);
+});
+
+test("reordering_moves_membership_with_the_drop_target", () => {
+  // g1 holds p1 and p2 at the bottom; a part dropped inside the block joins,
+  // a member dropped outside leaves, and the block stays contiguous.
+  const s = createStore(fourParts());
+  s.createGroup("p1");
+  s.addToGroup("p2", "g1");
+  s.movePart("p3", 1);
+  assert.deepEqual(s.state.design.parts.map((p) => p.id), ["p1", "p3", "p2", "p4"]);
+  assert.deepEqual(s.groupOf("p3").parts, ["p1", "p2", "p3"]);
+  s.movePart("p2", 3);
+  assert.deepEqual(s.state.design.parts.map((p) => p.id), ["p1", "p3", "p4", "p2"]);
+  assert.equal(s.groupOf("p2"), null, "dropped on an outsider, the member leaves");
+  assert.deepEqual(s.state.design.groups[0].parts, ["p1", "p3"]);
+  const rows = listRows(s.state.design, []);
+  const block = rows.filter((r) => r.kind === "part" && r.group === "g1").map((r) => r.id);
+  assert.deepEqual(block, ["p1", "p3"]);
+});
+
+test("a_duplicate_of_a_member_joins_its_group_next_to_it", () => {
+  const s = createStore(fourParts());
+  s.createGroup("p1");
+  s.addToGroup("p2", "g1");
+  const copy = s.duplicatePart("p1");
+  assert.deepEqual(s.state.design.parts.map((p) => p.id), ["p1", copy, "p2", "p3", "p4"]);
+  assert.deepEqual(s.groupOf(copy).id, "g1");
+  assert.deepEqual(s.state.design.groups[0].parts, ["p1", "p2", copy]);
+});
+
+test("joining_the_own_group_records_nothing", () => {
+  const s = createStore(fourParts());
+  s.createGroup("p1");
+  s.state.dirty = false;
+  const steps = s.state.undo.length;
+  s.addToGroup("p1", "g1");
+  assert.equal(s.state.undo.length, steps, "no undo step for a no-op");
+  assert.equal(s.state.dirty, false);
+  s.addToGroup("p9", "g1");
+  s.addToGroup("p2", "nope");
+  assert.equal(s.state.undo.length, steps);
+});
+
+test("selecting_another_part_or_a_group_ends_point_editing", () => {
+  const s = createStore(pointsDesign());
+  s.setPointEdit("p2");
+  s.select("p2");
+  assert.equal(s.state.ui.pointEdit, "p2", "re-selecting the edited part keeps editing");
+  s.select("p1");
+  assert.equal(s.state.ui.pointEdit, null);
+  s.setPointEdit("p2");
+  s.createGroup("p1");
+  assert.equal(s.state.ui.pointEdit, null, "a new group takes the selection");
+  s.setPointEdit("p2");
+  s.selectGroup("g1");
+  assert.equal(s.state.ui.pointEdit, null);
+  assert.equal(s.state.ui.pointSel, null);
 });
