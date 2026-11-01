@@ -16,7 +16,10 @@ endorsed by Rhythia or Capo Games.
   writes the note straight into the game's own folders as the profile
   `rhythr-kit`, so testing a change needs no import dialog. Exports
   always bundle their material file, the thing whose absence crashes
-  the game on other people's mesh skins.
+  the game on other people's mesh skins. Designer and game failures
+  carry codes (`RH-DSN`, `RH-GAM`) like the rest of the app, and the
+  diagnostics file shows what the designer finds in the game's folder,
+  with the next thing to try under every code.
 
 - **Pick your hit sound.** The game ships four alternative hit sounds
   next to the default (Bass, Creamy, Pick, Vulnus) and rhythr always used

@@ -1751,7 +1751,7 @@ fn game_section(candidates: &[PathBuf]) -> String {
             let _ = writeln!(
                 s,
                 "  active profile: {}",
-                value("CurrentGameProfile").unwrap_or_else(|| "(unset)".into())
+                redact_path(&value("CurrentGameProfile").unwrap_or_else(|| "(unset)".into()))
             );
             let data_path = value("DataPath").unwrap_or_default();
             let _ = writeln!(
@@ -6663,6 +6663,21 @@ mod diagnostics_tests {
         assert!(text.contains("rhythr-kit.json: present ("), "{text}");
         assert!(text.contains("rhythr-kit.obj: present ("), "{text}");
         assert!(text.contains("rhythr-kit.txt: present ("), "{text}");
+        // The game writes a file name as the active profile today; a path
+        // there would carry the account name, so it is redacted like the rest.
+        if let Some(home) = dirs::home_dir() {
+            let home = home.to_string_lossy().to_string();
+            if !home.is_empty() {
+                let named = format!(
+                    r#"{{"CurrentGameProfile":{{"Value":"{}"}}}}"#,
+                    format!("{home}/p1.json").replace('\\', "\\\\")
+                );
+                std::fs::write(t.path().join("framework.json"), named).unwrap();
+                let text = game_section(&[t.path().to_path_buf()]);
+                assert!(text.contains("active profile: ~"), "{text}");
+                assert!(!text.contains(&home), "{text}");
+            }
+        }
     }
 
     /// The report is written to be sent to a stranger, and on Windows every

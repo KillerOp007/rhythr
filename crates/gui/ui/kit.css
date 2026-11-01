@@ -3,14 +3,14 @@
    the inspector. */
 #kit-body { overflow: hidden; display: flex; flex-direction: column; height: 100vh; margin: 0; }
 #kit-body .hint { color: var(--muted); font-size: var(--fs-sm); }
-#kt-toolbar { display: flex; flex-wrap: wrap; gap: 0.5rem 0.75rem; align-items: center; padding: 0.5rem 1rem; border-bottom: 1px solid var(--border); flex: 0 0 auto; }
+#kt-toolbar { display: flex; flex-wrap: wrap; gap: 0.5rem 1.25rem; align-items: center; padding: 0.5rem 1rem; border-bottom: 1px solid var(--border); flex: 0 0 auto; }
 #kt-recent { width: 9rem; }
 #kt-glyph { width: 6rem; }
 #kt-toolbar .group { display: flex; gap: 0.3rem; align-items: center; --tint: var(--border); }
 #kt-toolbar .group.grow { flex: 1 1 auto; }
 /* The colour of a group: its label and its buttons' borders. Edit and
-   File stay neutral; a separator sits between neighbouring groups. */
-#kt-toolbar .group + .group:not(.grow) { padding-left: 0.75rem; border-left: 1px solid var(--border); }
+   File stay neutral. The labels and the wide gap delimit the groups; a
+   separator drawn by adjacency would start a wrapped row with a stray line. */
 #kt-toolbar .group.add { --tint: var(--accent); }
 #kt-toolbar .group.import { --tint: #c8a3ff; }
 #kt-toolbar .group.view { --tint: var(--warn); }

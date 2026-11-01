@@ -325,8 +325,11 @@ async function files({ page, h }) {
     ghosts: document.querySelectorAll("#kt-toolbar .btn.ghost").length,
     sendFilled: getComputedStyle(document.getElementById("kt-send")).backgroundColor !== "rgba(0, 0, 0, 0)",
     sendGroup: Boolean(document.querySelector("#kt-toolbar .group.game #kt-send")),
+    // The toolbar wraps at this width; a separator drawn by DOM adjacency
+    // would start the second row with a stray line, so there are none.
+    borders: [...document.querySelectorAll("#kt-toolbar .group")].filter((g) => getComputedStyle(g).borderLeftWidth !== "0px").length,
   }));
-  check("toolbar", tb.exportGone && tb.importOldGone && tb.save === "Save .rhs" && !tb.saveGhost && s.scrollW <= 1100 && tb.hint && tb.labels === "Add|Import|Edit|View|File|Game" && tb.ghosts === 0 && tb.sendFilled && tb.sendGroup, JSON.stringify(tb));
+  check("toolbar", tb.exportGone && tb.importOldGone && tb.save === "Save .rhs" && !tb.saveGhost && s.scrollW <= 1100 && tb.hint && tb.labels === "Add|Import|Edit|View|File|Game" && tb.ghosts === 0 && tb.sendFilled && tb.sendGroup && tb.borders === 0, JSON.stringify(tb));
 
   await dlg({ save: `${HARNESS_WORK}/s1.rhs` });
   await keys("Control+s");

@@ -164,8 +164,9 @@ endorsed by Rhythia or Capo Games.
   player name and any path the window does not already show, so sending
   it gives away no more than a screenshot would.
 - **Note Designer** (button in the toolbar): design your own note from
-  parts, no modelling tools needed. Its toolbar is six labelled groups,
-  each with its own colour: Add, Import, Edit, View, File and Game. Add
+  parts, no modelling tools needed. Its toolbar is six labelled groups
+  (Add, Import, Edit, View, File and Game), the shape, import, view and
+  game groups in their own colours. Add
   discs, squares, polygons, stars,
   rings and pills, move, scale and rotate them on the canvas, switch a
   part to Cut to carve into the others, give each part its own Depth

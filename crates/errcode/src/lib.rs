@@ -1079,14 +1079,15 @@ pub static CODES: &[Entry] = &[
     Entry {
         id: "RH-DSN-705",
         area: Area::Designer,
-        title: "the file is not a design",
-        fix: "Open a .rhs saved by rhythr's Note Designer or a .rhsd design file.",
-        patterns: &["not a design file", "design file damaged"],
+        title: "the file is not a design or a skin the designer can open",
+        fix: "Open a .rhs saved by rhythr's Note Designer or a .rhsd design file; a damaged or truncated copy needs the original.",
+        patterns: &["not a design file", "design file damaged", "not a skin archive"],
         causes: &[(
             Plat::Any,
             "The file is not JSON, not a version 2 design and not an old designer document (no \
-             P key): another program's file, a truncated copy, a .rhs renamed to .rhsd, or a \
-             design whose fields were edited by hand.",
+             P key), or the .rhs is not a readable zip archive: another program's file, a \
+             truncated copy, a .rhs renamed to .rhsd, or a design whose fields were edited by \
+             hand.",
         )],
     },
     Entry {
@@ -1105,43 +1106,30 @@ pub static CODES: &[Entry] = &[
         id: "RH-DSN-707",
         area: Area::Designer,
         title: "no installed font has an outline for that character",
-        fix: "Type a letter, digit or symbol an installed font covers; colour emoji fonts have no outlines.",
-        patterns: &["no installed font", "type a letter"],
+        fix: "Type a letter, digit or symbol an installed font covers; bitmap emoji fonts have no outlines.",
+        patterns: &["no installed font", "type a character"],
         causes: &[
             (
                 Plat::Windows,
-                "No installed font covers the character. Segoe UI Emoji carries bitmaps, not \
-                 outlines, so an emoji is found only through a font with monochrome outlines \
-                 (Segoe UI Symbol, Noto Emoji).",
+                "No installed face covers the character; Segoe UI Emoji and Segoe UI Symbol \
+                 cover most, with monochrome outlines the import can read. A bitmap-only emoji \
+                 font (CBDT or sbix) carries no outlines.",
             ),
             (
                 Plat::Linux,
-                "fontconfig knows no face with the glyph; Noto Color Emoji is bitmap-only, Noto \
-                 Emoji or Symbola provide outlines.",
+                "fontconfig knows no face with the glyph; Noto Color Emoji is bitmap-only \
+                 (CBDT), Noto Emoji or Symbola provide outlines.",
             ),
             (
                 Plat::MacOs,
-                "Apple Color Emoji carries no outlines; install Noto Emoji for emoji letters.",
+                "Apple Color Emoji is bitmap-only (sbix); install Noto Emoji for emoji letters.",
             ),
         ],
     },
     Entry {
-        id: "RH-DSN-708",
-        area: Area::Designer,
-        title: "the SVG could not be imported",
-        fix: "Use an SVG with filled or stroked paths; convert text to paths before exporting it.",
-        patterns: &["svg"],
-        causes: &[(
-            Plat::Any,
-            "usvg could not parse the file, or it holds only text, images or paths without fill \
-             and stroke. Text is not imported because the font would be resolved on the \
-             reader's machine, not the author's.",
-        )],
-    },
-    Entry {
         id: "RH-DSN-709",
         area: Area::Designer,
-        title: "the design file could not be read or written",
+        title: "a file could not be read or written",
         fix: "Choose a folder you can write to, or close the program holding the file; a moved file leaves the recent list on the next open.",
         patterns: &["os error", "denied"],
         causes: &[
@@ -1162,6 +1150,19 @@ pub static CODES: &[Entry] = &[
                  colon.",
             ),
         ],
+    },
+    Entry {
+        id: "RH-DSN-708",
+        area: Area::Designer,
+        title: "the SVG could not be imported",
+        fix: "Use an SVG with filled or stroked paths; convert text to paths before exporting it.",
+        patterns: &["svg"],
+        causes: &[(
+            Plat::Any,
+            "usvg could not parse the file, or it holds only text, images or paths without fill \
+             and stroke. Text is not imported because the font would be resolved on the \
+             reader's machine, not the author's.",
+        )],
     },
     Entry {
         id: "RH-DSN-700",
@@ -1215,7 +1216,7 @@ pub static CODES: &[Entry] = &[
             Plat::Any,
             "framework.json carries a non-empty DataPath. What it relocates (profiles, skins or \
              both) is not known, so the kit refuses rather than write where the game may never \
-             look. The owner's value is empty, so this is a rare setup.",
+             look; a default installation leaves the value empty.",
         )],
     },
     Entry {
@@ -1586,6 +1587,10 @@ mod tests {
                 "RH-DSN-705",
             ),
             ("design file damaged: missing field `parts`", "RH-DSN-705"),
+            ("not a skin archive", "RH-DSN-705"),
+            // A read failure on an SVG is a file problem, not an SVG problem.
+            ("SVG: Permission denied (os error 13)", "RH-DSN-709"),
+            ("type a character first", "RH-DSN-707"),
             (
                 "this skin carries no editable design: only skins saved by rhythr's Note \
                  Designer open here",
@@ -1663,6 +1668,25 @@ mod tests {
         assert_eq!(
             classify("Error opening output /home/x/out.mp4: Permission denied").id,
             "RH-OUT-301"
+        );
+        // Inside the designer area the file rows come before the SVG row:
+        // an SVG that cannot be read is a file problem, a damaged design
+        // file with an os error inside is still a damaged design file.
+        assert_eq!(
+            classify_in(
+                Area::Designer,
+                "SVG: No such file or directory (os error 2)"
+            )
+            .id,
+            "RH-DSN-709"
+        );
+        assert_eq!(
+            classify_in(
+                Area::Designer,
+                "design file damaged: EOF while parsing (os error 2)"
+            )
+            .id,
+            "RH-DSN-705"
         );
     }
 

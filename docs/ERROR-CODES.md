@@ -351,12 +351,12 @@ Shown to the user: Move the part closer to the centre or make it smaller.
 - **all systems**: A part sits or reaches beyond 64 note units from the centre, outside the geometry grid. The editor keeps transforms far inside that, so this is a hand-edited or damaged design file.
 - Recognised by: `reaches too far`
 
-### RH-DSN-705 the file is not a design
+### RH-DSN-705 the file is not a design or a skin the designer can open
 
-Shown to the user: Open a .rhs saved by rhythr's Note Designer or a .rhsd design file.
+Shown to the user: Open a .rhs saved by rhythr's Note Designer or a .rhsd design file; a damaged or truncated copy needs the original.
 
-- **all systems**: The file is not JSON, not a version 2 design and not an old designer document (no P key): another program's file, a truncated copy, a .rhs renamed to .rhsd, or a design whose fields were edited by hand.
-- Recognised by: `not a design file`, `design file damaged`
+- **all systems**: The file is not JSON, not a version 2 design and not an old designer document (no P key), or the .rhs is not a readable zip archive: another program's file, a truncated copy, a .rhs renamed to .rhsd, or a design whose fields were edited by hand.
+- Recognised by: `not a design file`, `design file damaged`, `not a skin archive`
 
 ### RH-DSN-706 the skin carries no editable design
 
@@ -367,21 +367,14 @@ Shown to the user: Only skins saved by the Note Designer carry their design; reb
 
 ### RH-DSN-707 no installed font has an outline for that character
 
-Shown to the user: Type a letter, digit or symbol an installed font covers; colour emoji fonts have no outlines.
+Shown to the user: Type a letter, digit or symbol an installed font covers; bitmap emoji fonts have no outlines.
 
-- **Windows**: No installed font covers the character. Segoe UI Emoji carries bitmaps, not outlines, so an emoji is found only through a font with monochrome outlines (Segoe UI Symbol, Noto Emoji).
-- **Linux**: fontconfig knows no face with the glyph; Noto Color Emoji is bitmap-only, Noto Emoji or Symbola provide outlines.
-- **macOS**: Apple Color Emoji carries no outlines; install Noto Emoji for emoji letters.
-- Recognised by: `no installed font`, `type a letter`
+- **Windows**: No installed face covers the character; Segoe UI Emoji and Segoe UI Symbol cover most, with monochrome outlines the import can read. A bitmap-only emoji font (CBDT or sbix) carries no outlines.
+- **Linux**: fontconfig knows no face with the glyph; Noto Color Emoji is bitmap-only (CBDT), Noto Emoji or Symbola provide outlines.
+- **macOS**: Apple Color Emoji is bitmap-only (sbix); install Noto Emoji for emoji letters.
+- Recognised by: `no installed font`, `type a character`
 
-### RH-DSN-708 the SVG could not be imported
-
-Shown to the user: Use an SVG with filled or stroked paths; convert text to paths before exporting it.
-
-- **all systems**: usvg could not parse the file, or it holds only text, images or paths without fill and stroke. Text is not imported because the font would be resolved on the reader's machine, not the author's.
-- Recognised by: `svg`
-
-### RH-DSN-709 the design file could not be read or written
+### RH-DSN-709 a file could not be read or written
 
 Shown to the user: Choose a folder you can write to, or close the program holding the file; a moved file leaves the recent list on the next open.
 
@@ -389,6 +382,13 @@ Shown to the user: Choose a folder you can write to, or close the program holdin
 - **Linux**: Permissions, a read-only mount, or a folder owned by another user (a Flatpak or snap sandbox hides the real path); a moved recent file reads as os error 2.
 - **all systems**: The operating system refused the read or the write; its own words follow the colon.
 - Recognised by: `os error`, `denied`
+
+### RH-DSN-708 the SVG could not be imported
+
+Shown to the user: Use an SVG with filled or stroked paths; convert text to paths before exporting it.
+
+- **all systems**: usvg could not parse the file, or it holds only text, images or paths without fill and stroke. Text is not imported because the font would be resolved on the reader's machine, not the author's.
+- Recognised by: `svg`
 
 ### RH-DSN-700 the note could not be built
 
@@ -411,7 +411,7 @@ Shown to the user: Start the game once so its folder exists, or set RHYTHR_GAME_
 
 Shown to the user: Save the .rhs and import it in the game; the kit does not follow a relocated data folder.
 
-- **all systems**: framework.json carries a non-empty DataPath. What it relocates (profiles, skins or both) is not known, so the kit refuses rather than write where the game may never look. The owner's value is empty, so this is a rare setup.
+- **all systems**: framework.json carries a non-empty DataPath. What it relocates (profiles, skins or both) is not known, so the kit refuses rather than write where the game may never look; a default installation leaves the value empty.
 - Recognised by: `moves its data to`
 
 ### RH-GAM-803 a file in the game folder could not be written
