@@ -47,16 +47,28 @@ export function mountPresets({ button, panel }, { invoke, onPick }) {
     }
     return presets;
   }
+  // The panel opens under its button but never past the window's edges:
+  // the button sits in the right-hand group, so in a wide window the
+  // panel is pulled left until it fits (measured once it is visible).
+  const EDGE = 8;
+  const place = () => {
+    const r = button.getBoundingClientRect();
+    const width = panel.offsetWidth;
+    const left = Math.max(EDGE, Math.min(Math.round(r.left), window.innerWidth - width - EDGE));
+    panel.style.top = `${Math.round(r.bottom + 6)}px`;
+    panel.style.left = `${left}px`;
+  };
   const show = async () => {
     if (!loaded) loaded = build();
     await loaded;
-    const r = button.getBoundingClientRect();
-    panel.style.top = `${Math.round(r.bottom + 6)}px`;
-    panel.style.left = `${Math.round(r.left)}px`;
     open = true;
     panel.hidden = false;
     button.classList.add("on");
+    place();
   };
+  window.addEventListener("resize", () => {
+    if (open) place();
+  });
   button.addEventListener("click", () => (open ? close() : show()));
   document.addEventListener("pointerdown", (e) => {
     if (open && !panel.contains(e.target) && !button.contains(e.target)) close();

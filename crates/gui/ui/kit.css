@@ -12,7 +12,7 @@
 #kt-previews.on, #kt-turntable.on, #kt-presets.on { outline: 2px solid var(--accent); }
 /* The Presets popover: placed under its button by the script (fixed, so
    the wrapping toolbar's height does not matter), five tiles in a row. */
-.kt-popover { position: fixed; z-index: 20; display: grid; grid-template-columns: repeat(5, auto); gap: 0.5rem; padding: 0.6rem; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45); }
+.kt-popover { position: fixed; z-index: 20; display: flex; flex-wrap: wrap; gap: 0.5rem; padding: 0.6rem; max-width: calc(100vw - 16px); box-sizing: border-box; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45); }
 .kt-popover[hidden] { display: none; }
 .kt-preset { display: flex; flex-direction: column; align-items: center; gap: 0.3rem; padding: 0.4rem; background: transparent; border: 1px solid transparent; border-radius: var(--radius-sm); color: inherit; font: inherit; cursor: pointer; }
 .kt-preset:hover, .kt-preset:focus-visible { border-color: var(--accent); outline: none; }

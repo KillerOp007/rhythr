@@ -969,6 +969,23 @@ async function presets({ page, h }) {
   await openPanel();
   const tiles = await page.evaluate(() => [...document.querySelectorAll("#kt-presets-panel .kt-preset span")].map((el) => el.textContent));
   check("the panel lists five tiles in order", tiles.join("|") === "Target|Hex frame|Crosshair|Diamond frame|Notched ring", tiles.join("|"));
+  // In a wide window the toolbar is one row and the Presets button sits far
+  // right; the panel must not run past the window's edge (the fifth tile
+  // was cut off on the owner's screen).
+  await keys("Escape");
+  await page.setViewportSize({ width: 1700, height: 760 });
+  await settle(200);
+  await openPanel();
+  const box = await page.evaluate(() => {
+    const r = document.getElementById("kt-presets-panel").getBoundingClientRect();
+    const b = document.getElementById("kt-presets").getBoundingClientRect();
+    return { left: Math.round(r.left), right: Math.round(r.right), width: Math.round(r.width), button: Math.round(b.left), innerWidth: window.innerWidth };
+  });
+  check("the panel stays inside the window", box.button > 900 && box.right <= box.innerWidth && box.left >= 0 && box.width > 300, JSON.stringify(box));
+  await keys("Escape");
+  await page.setViewportSize({ width: 1100, height: 760 });
+  await settle(200);
+  await openPanel();
   await page.waitForTimeout(600);
   const drawn = await page.evaluate(() =>
     [...document.querySelectorAll("#kt-presets-panel canvas")].map((c) => {
