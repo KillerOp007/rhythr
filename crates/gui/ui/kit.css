@@ -9,7 +9,15 @@
 #kt-toolbar .group { display: flex; gap: 0.3rem; align-items: center; }
 #kt-toolbar .group.grow { flex: 1 1 auto; }
 #kt-toolbar .label { color: var(--muted); font-size: var(--fs-sm); margin-right: 0.2rem; }
-#kt-previews.on, #kt-turntable.on { outline: 2px solid var(--accent); }
+#kt-previews.on, #kt-turntable.on, #kt-presets.on { outline: 2px solid var(--accent); }
+/* The Presets popover: placed under its button by the script (fixed, so
+   the wrapping toolbar's height does not matter), five tiles in a row. */
+.kt-popover { position: fixed; z-index: 20; display: grid; grid-template-columns: repeat(5, auto); gap: 0.5rem; padding: 0.6rem; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45); }
+.kt-popover[hidden] { display: none; }
+.kt-preset { display: flex; flex-direction: column; align-items: center; gap: 0.3rem; padding: 0.4rem; background: transparent; border: 1px solid transparent; border-radius: var(--radius-sm); color: inherit; font: inherit; cursor: pointer; }
+.kt-preset:hover, .kt-preset:focus-visible { border-color: var(--accent); outline: none; }
+.kt-preset canvas { width: 96px; height: 96px; background: #0b0e12; border-radius: var(--radius-sm); }
+.kt-preset span { font-size: var(--fs-sm); }
 #kt-tt-canvas { flex: 1 1 auto; min-height: 0; width: 100%; display: block; border: 1px solid var(--border); border-radius: var(--radius); background: #0b0e12; touch-action: none; cursor: grab; }
 #kt-turntable-bar { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; color: var(--muted); font-size: var(--fs-sm); }
 #kt-turntable-bar label { display: flex; align-items: center; gap: 0.25rem; }

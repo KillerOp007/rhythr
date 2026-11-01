@@ -15,6 +15,7 @@ export const HELP = [
       ["3D", "Show the note turned, to judge its depth (3)."],
       ["Help", "This table (F1 or ?)."],
       ["New", "Start a fresh note; asks first when there are unsaved changes."],
+      ["Presets", "Five finished notes in the rim style (Target, Hex frame, Crosshair, Diamond frame, Notched ring): a click replaces the note with it as plain parts, asking first when there are unsaved changes."],
       ["Open", "Open a skin saved by rhythr's editors (.rhs) or a design file (.rhsd) (Ctrl+O)."],
       ["Recent", "Reopen one of the last six files."],
       ["Save .rhs", "Write the one file that is the skin for rhythr and the game with your design inside (Ctrl+S). A design the kernel cannot build is not written; the status says why."],

@@ -7,6 +7,7 @@ import { render, POINT_HELP } from "./render.js";
 import { mountPreviews } from "./preview.js";
 import { mountTurntable } from "./turntable.js";
 import { renderHelp } from "./help.js";
+import { mountPresets } from "./presets.js";
 import {
   makeRecent,
   autosave,
@@ -302,6 +303,15 @@ async function boot() {
     const r = await invoke("kit_send_to_game", { design: store.state.design });
     store.setStatus(r.message);
   });
+  // A preset is a complete design and replaces the note like a loaded file:
+  // the same prompt about unsaved changes, no path, nothing dirty yet.
+  actions.loadPreset = exclusive(async (preset) => {
+    if (!(await discardOk("Preset"))) return;
+    const next = parseDesign(JSON.stringify(preset.design));
+    store.load(next, null);
+    store.setStatus(`Preset ${preset.name}: ${next.parts.length} parts, all editable`);
+  });
+  mountPresets({ button: $("kt-presets"), panel: $("kt-presets-panel") }, { invoke, onPick: (p) => actions.loadPreset(p) });
   const importOld = exclusive(async () => {
     const next = await importOldDesigner(storage, invoke);
     if (!(await discardOk("From old designer"))) return;

@@ -928,7 +928,70 @@ async function send({ page, h }) {
   check("a refused design is not sent", s.err && s.status.startsWith("Not sent, the skin would not load in the game") && fs.statSync(objPath).mtimeMs === mtime, s.status);
 }
 
-const GROUPS = { files, imports, points, depth, turntable, help, groups, effects, snap, send };
+async function presets({ page, h }) {
+  const { check, settle, S, dlg, click, keys } = h;
+  const panelHidden = () => page.evaluate(() => document.getElementById("kt-presets-panel").hidden);
+  const openPanel = async () => {
+    await click("kt-presets");
+    await page.waitForSelector("#kt-presets-panel .kt-preset");
+    await settle(200);
+  };
+  const pick = async (id) => {
+    await page.click(`#kt-presets-panel .kt-preset[data-id="${id}"]`);
+    await settle();
+  };
+  await openPanel();
+  const tiles = await page.evaluate(() => [...document.querySelectorAll("#kt-presets-panel .kt-preset span")].map((el) => el.textContent));
+  check("the panel lists five tiles in order", tiles.join("|") === "Target|Hex frame|Crosshair|Diamond frame|Notched ring", tiles.join("|"));
+  await page.waitForTimeout(600);
+  const drawn = await page.evaluate(() =>
+    [...document.querySelectorAll("#kt-presets-panel canvas")].map((c) => {
+      const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+      let n = 0;
+      for (let i = 3; i < d.length; i += 4) if (d[i] > 0) n++;
+      return n;
+    }),
+  );
+  check("thumbnails are drawn", drawn.length === 5 && drawn.every((n) => n > 200), JSON.stringify(drawn));
+  await pick("target");
+  let s = await S();
+  const name = await page.evaluate(() => window.kitStore.state.design.name);
+  check(
+    "a preset replaces a clean note",
+    s.parts.map((p) => p.name).join() === "Outer ring,Inner ring,Dot" && s.path === null && s.dirty === false && name === "Target" && s.status.startsWith("Preset Target: 3 parts") && (await panelHidden()),
+    `${s.status} | ${s.parts.map((p) => p.name).join()}`,
+  );
+  await h.store(`s.updatePart("p1", "move", (p) => (p.transform.x = 0.2))`);
+  await settle();
+  await dlg({ ask: false });
+  await openPanel();
+  await pick("hex-frame");
+  s = await S();
+  check("a dirty note asks first", s.parts.length === 3 && s.dirty === true, JSON.stringify({ parts: s.parts.length, dirty: s.dirty }));
+  await dlg({ ask: true });
+  await openPanel();
+  await pick("hex-frame");
+  s = await S();
+  check("after Discard the preset loads", s.parts.length === 2 && s.parts[0].name === "Frame" && s.dirty === false, s.parts.map((p) => p.name).join());
+  await openPanel();
+  const openBefore = !(await panelHidden());
+  await keys("Escape");
+  const closedByEsc = await panelHidden();
+  check("escape closes the panel", openBefore && closedByEsc && (await S()).selected !== null, JSON.stringify({ openBefore, closedByEsc }));
+  await openPanel();
+  await page.mouse.click(600, 700);
+  await settle(100);
+  check("an outside click closes the panel", await panelHidden());
+  await page.click('[data-role="to-points"]');
+  await settle();
+  const editing = (await S()).pointEdit;
+  await openPanel();
+  await pick("crosshair");
+  s = await S();
+  check("a preset picked during point editing ends it", editing !== null && s.pointEdit === null && s.parts.length === 3 && s.parts[1].name === "Ticks", JSON.stringify({ editing, after: s.pointEdit }));
+}
+
+const GROUPS = { files, imports, points, depth, turntable, help, groups, effects, snap, send, presets };
 
 // ---- main
 

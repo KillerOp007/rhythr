@@ -200,6 +200,11 @@ export function snapAngle(deg, tolDeg = 3) {
 // reads as such head-on. A drop of DEPTH_FULL_SHADE note units is the
 // strongest shade.
 export const DEPTH_FULL_SHADE = 0.6;
+// The game draws every material after the first at a fixed alpha
+// (measured in play, probe 7a of 24.10.); the front view and the
+// thumbnails fill glass with it.
+export const GLASS_ALPHA = 0.57;
+
 export function depthShade(hex, z, top) {
   const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(String(hex || ""));
   const rgb = m ? [1, 2, 3].map((i) => parseInt(m[i], 16)) : [255, 255, 255];

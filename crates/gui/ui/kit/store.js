@@ -461,6 +461,13 @@ export function createStore(design, opts = {}) {
       s.redo.length = 0;
       s.last = noLast();
       s.selected = topId(next);
+      // A loaded design (a file, a preset) may reuse the ids of the old one,
+      // so no editing state carries over: group selection, folds and point
+      // editing all belong to the design that is gone.
+      s.selectedGroup = null;
+      s.ui.pointEdit = null;
+      s.ui.pointSel = null;
+      s.ui.folded = [];
       emit();
     },
     setEvaluated(ev) {

@@ -111,6 +111,8 @@ async function invoke(name, args) {
     }
     case "kit_default_doc":
       return await run(["--default"]);
+    case "kit_presets":
+      return JSON.parse(await run(["--presets"]));
     case "kit_preview":
       return PNG_1x1;
     case "kit_doc_load": {

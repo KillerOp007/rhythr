@@ -26,6 +26,24 @@ test("a_drag_is_one_undo_step", () => {
   assert.equal(s.part("p1").transform.rotation, 10);
 });
 
+test("load_resets_the_editing_state", () => {
+  const s = createStore(design());
+  s.addPart("square");
+  s.createGroup("p2", "Badge");
+  s.toggleFold("g1");
+  s.selectGroup("g1");
+  s.setPointEdit("p1");
+  s.selectPoint({ loop: 0, index: 0 });
+  // A preset reuses the ids p1 to p3, so nothing of the old editing state
+  // may carry over into the new design.
+  s.load(design(), null);
+  assert.equal(s.state.ui.pointEdit, null);
+  assert.equal(s.state.ui.pointSel, null);
+  assert.equal(s.state.selectedGroup, null);
+  assert.deepEqual(s.state.ui.folded, []);
+  assert.equal(s.state.selected, "p1");
+});
+
 test("add_duplicate_remove_keep_ids_unique_and_selection_valid", () => {
   const s = createStore(design());
   const id = s.addPart("star");
