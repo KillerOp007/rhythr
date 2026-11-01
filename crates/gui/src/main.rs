@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager};
 
+mod game_data;
 mod imports;
 mod kit_commands;
 mod live;
@@ -2302,25 +2303,6 @@ async fn set_game_assets(
     .map_err(err_str)?
 }
 
-/// Steam's install path from the registry (custom install drives). Read
-/// via the registry API, not `reg query`: reg.exe writes piped output in
-/// the legacy OEM/ANSI codepage, which mangles non-ASCII install paths
-/// (D:\Spiele\…, D:\Игры\…) into U+FFFD and breaks the whole scan.
-#[cfg(windows)]
-fn windows_steam_path() -> Option<PathBuf> {
-    let key = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER)
-        .open_subkey(r"Software\Valve\Steam")
-        .ok()?;
-    let path: String = key.get_value("SteamPath").ok()?;
-    let path = path.trim();
-    (!path.is_empty()).then(|| PathBuf::from(path.replace('/', "\\")))
-}
-
-#[cfg(not(windows))]
-fn windows_steam_path() -> Option<PathBuf> {
-    None
-}
-
 /// Finds the game binary across every Steam library (registry/default
 /// roots plus libraryfolders.vdf). Works for Windows installs, Proton
 /// installs and the native Linux build alike: the extraction is
@@ -2338,41 +2320,7 @@ async fn detect_game() -> Option<String> {
 }
 
 fn detect_game_scan() -> Option<String> {
-    let mut roots: Vec<PathBuf> = Vec::new();
-    if cfg!(windows) {
-        // The registry knows custom install locations Steam was moved to.
-        if let Some(p) = windows_steam_path() {
-            roots.push(p);
-        }
-        for base in ["C:\\Program Files (x86)\\Steam", "C:\\Program Files\\Steam"] {
-            roots.push(PathBuf::from(base));
-        }
-    } else if let Some(home) = dirs::home_dir() {
-        for rel in [
-            ".local/share/Steam",
-            ".steam/steam",
-            ".steam/root",
-            ".var/app/com.valvesoftware.Steam/.local/share/Steam",
-            "snap/steam/common/.local/share/Steam",
-        ] {
-            roots.push(home.join(rel));
-        }
-    }
-    // Extra Steam libraries.
-    let mut libs: Vec<PathBuf> = Vec::new();
-    for root in &roots {
-        let vdf = root.join("steamapps").join("libraryfolders.vdf");
-        if let Ok(text) = std::fs::read_to_string(vdf) {
-            for line in text.lines() {
-                let line = line.trim();
-                if let Some(rest) = line.strip_prefix("\"path\"") {
-                    let p = rest.trim().trim_matches('"').replace("\\\\", "\\");
-                    libs.push(PathBuf::from(p));
-                }
-            }
-        }
-    }
-    roots.extend(libs);
+    let roots = game_data::steam_library_roots();
     // Scan every library's steamapps/common for a folder that mentions
     // the game, then take the largest plausible game binary inside it:
     // rhythia.exe under Windows/Proton, an extensionless ELF for the
@@ -6476,6 +6424,7 @@ fn main() {
             kit_commands::kit_doc_load,
             kit_commands::kit_export,
             kit_commands::kit_shape_to_points,
+            kit_commands::kit_send_to_game,
             kit_preview,
             open_kit_window,
             designer_export,

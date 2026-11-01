@@ -3,6 +3,7 @@
 //! editor's own words.
 
 use rhythia_render::kit::doc::{Design, Shape};
+use rhythia_render::kit::game::{self, SendError, SendReport};
 use rhythia_render::kit::geom::Shapes;
 use rhythia_render::kit::{
     export, levels, mesh, migrate, points, validate, KitError, MAX_TRIANGLES,
@@ -277,6 +278,38 @@ pub async fn kit_export(design: Design, path: String) -> Result<String, String> 
     )
 }
 
+/// A failed send as one sentence for the status line: the kernel's
+/// refusal in the window's words, a write failure with its path, or the
+/// relocated data folder the kit does not follow.
+pub fn send_error_text(e: SendError) -> String {
+    match e {
+        SendError::Design(k) => format!(
+            "Not sent, the skin would not load in the game: {}",
+            user_message(&k)
+        ),
+        SendError::Io { path, error } => format!("Could not write {}: {error}", path.display()),
+        SendError::DataPath(p) => format!(
+            "Not sent: the game's framework.json moves its data to {p}, which Send to game does not follow yet. Save the .rhs and import it once."
+        ),
+    }
+}
+
+/// Writes the design into the game's data folder (see `kit::game`); the
+/// folder search and the writes run off the UI thread like `kit_export`.
+#[tauri::command]
+pub async fn kit_send_to_game(design: Design) -> Result<SendReport, String> {
+    join(
+        tauri::async_runtime::spawn_blocking(move || {
+            let dir = crate::game_data::game_data_dir().map_err(|tried| {
+                let list: Vec<String> = tried.iter().map(|p| p.display().to_string()).collect();
+                format!("Game folder not found. Looked in: {}", list.join("; "))
+            })?;
+            game::send_to_game(&design, &dir).map_err(send_error_text)
+        })
+        .await,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -288,6 +321,20 @@ mod tests {
     const OLD_DESIGNER_FIXTURE: &str = r##"{"P":{"shape":"ngon","n":6,"round":0.3,"hollow":true,
       "thick":0.22,"depth":0.05,"waves":5,"waveDepth":0.25,"waveform":"spike","twist":30},
       "free":null,"symmetry":4,"mirror":false,"colors":["#ff5d6c","#2fd6d0"],"imported":null}"##;
+
+    #[test]
+    fn send_errors_read_as_sentences() {
+        use rhythia_render::kit::game::SendError;
+        assert!(send_error_text(SendError::Design(KitError::Empty))
+            .starts_with("Not sent, the skin would not load in the game:"));
+        assert!(send_error_text(SendError::Io {
+            path: "x".into(),
+            error: "denied".into()
+        })
+        .starts_with("Could not write "));
+        assert!(send_error_text(SendError::DataPath("D:\\d".into()))
+            .starts_with("Not sent: the game's framework.json moves its data to "));
+    }
 
     #[test]
     fn the_default_note_evaluates_to_one_band() {
