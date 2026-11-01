@@ -31,6 +31,9 @@ const SHOTS = process.env.SHOTS || "";
 const URL_KIT = `http://127.0.0.1:${PORT}/kit.html`;
 const WORK = path.join(os.tmpdir(), "rhythr-kit-scenarios");
 const HARNESS_WORK = path.join(os.tmpdir(), "rhythr-kit-harness");
+// A stand-in for the game's data folder; the harness child inherits it.
+const GAME_DIR = path.join(WORK, "game");
+process.env.RHYTHR_GAME_DATA_DIR = GAME_DIR;
 
 if (!fs.existsSync(BIN)) {
   console.error(`missing ${BIN}: run cargo build -p rhythia-render --example kit_eval_json first`);
@@ -140,6 +143,11 @@ function writeFixtures() {
   fs.writeFileSync(path.join(WORK, "badge.svg"), "<svg/>");
   fs.writeFileSync(path.join(WORK, "cloud.svg"), "<svg/>");
   for (const f of ["s1.rhs", "s2.rhs", "s3.rhs", "r4.rhs"]) fs.rmSync(path.join(HARNESS_WORK, f), { force: true });
+  // The game folder: framework.json names the active profile, which has a
+  // few of the game's keys so the copy can be checked key by key.
+  fs.mkdirSync(GAME_DIR, { recursive: true });
+  fs.writeFileSync(path.join(GAME_DIR, "framework.json"), '{"CurrentGameProfile":{"Value":"p1.json"},"DataPath":{"Value":""}}');
+  fs.writeFileSync(path.join(GAME_DIR, "p1.json"), '{"ApproachRate":{"Value":3.25},"NoteSkin":{"Value":"x"},"ColorSet":{"Value":"y"},"FpsCap":{"Value":360}}');
 }
 
 // ---- harness lifecycle
@@ -889,7 +897,38 @@ async function snap({ page, h }) {
   check("snap back on", s.snap === true && s.snapBtnOn);
 }
 
-const GROUPS = { files, imports, points, depth, turntable, help, groups, effects, snap };
+async function send({ page, h }) {
+  const { check, settle, S, click } = h;
+  const objPath = path.join(GAME_DIR, "skins", "notes", "rhythr-kit.obj");
+  const mtlPath = path.join(GAME_DIR, "skins", "notes", "rhythr-kit.mtl");
+  const csPath = path.join(GAME_DIR, "skins", "colorsets", "rhythr-kit.txt");
+  const profilePath = path.join(GAME_DIR, "rhythr-kit.json");
+  await click("kt-send");
+  await settle();
+  let s = await S();
+  const obj = fs.existsSync(objPath) ? fs.readFileSync(objPath, "utf8") : "";
+  const profile = fs.existsSync(profilePath) ? JSON.parse(fs.readFileSync(profilePath, "utf8")) : null;
+  check(
+    "first send creates files and profile",
+    s.status.startsWith("Sent to the game: ") && s.status.includes("Pick the profile rhythr-kit") && !s.err && obj.split("\n")[1] === "mtllib rhythr-kit.mtl" && fs.existsSync(mtlPath) && fs.existsSync(csPath) && profile !== null && String(profile.NoteSkin.Value).endsWith("rhythr-kit.obj") && String(profile.ColorSet.Value).endsWith("rhythr-kit.txt") && profile.ApproachRate.Value === 3.25 && profile.FpsCap.Value === 360,
+    `${s.status} | ${obj.split("\n")[1]} | ${JSON.stringify(profile)}`,
+  );
+  const before = fs.readFileSync(profilePath, "utf8");
+  await click("kt-send");
+  await settle();
+  s = await S();
+  check("second send leaves the profile alone", s.status.startsWith("Sent to the game. Apply the profile") && fs.readFileSync(profilePath, "utf8") === before, s.status);
+  check("the document is untouched", s.path === null && s.dirty === false, JSON.stringify({ path: s.path, dirty: s.dirty }));
+  const mtime = fs.statSync(objPath).mtimeMs;
+  await h.store(`s.updatePart("p1", "visible", (p) => (p.visible = false))`);
+  await settle();
+  await click("kt-send");
+  await settle();
+  s = await S();
+  check("a refused design is not sent", s.err && s.status.startsWith("Not sent, the skin would not load in the game") && fs.statSync(objPath).mtimeMs === mtime, s.status);
+}
+
+const GROUPS = { files, imports, points, depth, turntable, help, groups, effects, snap, send };
 
 // ---- main
 

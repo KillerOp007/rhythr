@@ -130,6 +130,11 @@ async function invoke(name, args) {
       if (!fs.existsSync(args.path)) throw new Error(`not a readable SVG: ${args.path}`);
       if (path.basename(args.path).includes("badge")) return SVG_LAYERS_BADGE;
       return [{ contours: SVG_OUTLINE, mode: "add", paint: "#000000" }];
+    case "kit_send_to_game": {
+      const out = JSON.parse(await run(["--send", process.env.RHYTHR_GAME_DATA_DIR || ""], JSON.stringify(args.design)));
+      if (out.error) throw new Error(out.error);
+      return out;
+    }
     case "kit_mesh": {
       const out = JSON.parse(await run(["--mesh"], JSON.stringify(args.design)));
       if (out.error) throw new Error(out.error);

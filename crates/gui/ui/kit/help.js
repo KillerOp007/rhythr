@@ -19,6 +19,7 @@ export const HELP = [
       ["Recent", "Reopen one of the last six files."],
       ["Save .rhs", "Write the one file that is the skin for rhythr and the game with your design inside (Ctrl+S). A design the kernel cannot build is not written; the status says why."],
       ["Save as", "Write to a new .rhs file (Ctrl+Shift+S)."],
+      ["Send to game", "Writes the note into the game's skin folders as the profile rhythr-kit: pick that profile once in the game's settings; after later sends apply it again. No import, no file dialog."],
       ["From old designer", "Bring in the note from the old Note Designer's autosave."],
     ],
   },

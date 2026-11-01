@@ -295,6 +295,13 @@ async function boot() {
     if (!path) return;
     await writeDoc(path);
   });
+  // Send to game writes the baked note into the game's own folders (one
+  // profile, three files, see kit::game); the backend words every outcome,
+  // success and refusal alike, so the status shows its sentence as is.
+  const sendToGame = exclusive(async () => {
+    const r = await invoke("kit_send_to_game", { design: store.state.design });
+    store.setStatus(r.message);
+  });
   const importOld = exclusive(async () => {
     const next = await importOldDesigner(storage, invoke);
     if (!(await discardOk("From old designer"))) return;
@@ -349,6 +356,7 @@ async function boot() {
   $("kt-load").addEventListener("click", openDoc);
   $("kt-save").addEventListener("click", saveDoc);
   $("kt-save-as").addEventListener("click", saveAsDoc);
+  $("kt-send").addEventListener("click", sendToGame);
   $("kt-import-old").addEventListener("click", importOld);
   $("kt-add-svg").addEventListener("click", addSvg);
   $("kt-add-glyph").addEventListener("click", addGlyph);
