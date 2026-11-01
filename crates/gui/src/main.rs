@@ -578,23 +578,15 @@ struct Shared {
     frame_jobs: std::sync::atomic::AtomicUsize,
     /// Join handle of the active render thread (used on app exit).
     render_thread: Mutex<Option<std::thread::JoinHandle<()>>>,
-    /// The note designer's preview renderer, created on first use and kept:
+    /// The Note Designer's preview renderer, created on first use and kept:
     /// a fresh wgpu device per preview call put a device-init pause between
-    /// a slider drag and its picture, which is the difference between a
-    /// live preview and a slideshow.
-    designer_renderer: Mutex<Option<rhythia_render::Renderer>>,
-    /// Prepared designer skin keyed by shape hash: the animation loop
-    /// renders many frames of the SAME shape, and rebuilding mesh plus
-    /// GPU textures per frame was the preview's whole cost.
-    designer_skin: Mutex<
-        Option<(
-            u64,
-            rhythia_render::config::SkinConfig,
-            rhythia_render::renderer::SkinTextures,
-        )>,
-    >,
-    /// The kit window's prepared skin keyed by the design's JSON hash; it
-    /// shares `designer_renderer` so one wgpu device serves both windows.
+    /// an edit and its picture, which is the difference between a live
+    /// preview and a slideshow.
+    preview_renderer: Mutex<Option<rhythia_render::Renderer>>,
+    /// The kit window's prepared skin keyed by the design's JSON hash: the
+    /// animation loop renders many frames of the SAME design, and
+    /// rebuilding the baked note plus GPU textures per frame was the
+    /// preview's whole cost.
     kit_skin: Mutex<
         Option<(
             u64,
@@ -4255,161 +4247,15 @@ fn save_analyze_rect(handle: &tauri::AppHandle) {
     }
 }
 
-/// Opens (or focuses) the note designer: a small window where an outline
-/// becomes a mesh note skin, previewed through the real renderer.
-#[tauri::command]
-async fn open_designer_window(app_handle: tauri::AppHandle) -> Result<(), String> {
-    use tauri::{WebviewUrl, WebviewWindowBuilder};
-    if let Some(w) = app_handle.get_webview_window("designer") {
-        let _ = w.unminimize();
-        let _ = w.show();
-        let _ = w.set_focus();
-        return Ok(());
-    }
-    // The main window owns the app: when it goes, this window goes too,
-    // instead of keeping the process alive headless.
-    if let Some(main) = app_handle.get_webview_window("main") {
-        let handle = app_handle.clone();
-        main.on_window_event(move |e| {
-            if matches!(e, tauri::WindowEvent::Destroyed) {
-                if let Some(w) = handle.get_webview_window("designer") {
-                    let _ = w.close();
-                }
-            }
-        });
-    }
-    let built = WebviewWindowBuilder::new(
-        &app_handle,
-        "designer",
-        WebviewUrl::App("designer.html".into()),
-    )
-    .title("rhythr · Note Designer")
-    .inner_size(1380.0, 860.0)
-    .min_inner_size(1000.0, 660.0)
-    .build();
-    if let Ok(w) = &built {
-        // The cached preview renderer holds a wgpu device; the window
-        // going away is the moment to let it go.
-        let handle = app_handle.clone();
-        w.on_window_event(move |e| {
-            if matches!(e, tauri::WindowEvent::Destroyed) {
-                if let Some(app) = handle.try_state::<App>() {
-                    // Renderer first, then the skins, all held until the
-                    // renderer is gone: the preview's own lock order
-                    // (renderer, then skin), so this cannot deadlock against
-                    // a frame in flight. A frame that lands between the
-                    // steps would otherwise rebuild a skin on the old
-                    // device that the next, new renderer would then reuse.
-                    // The kit skin is prepared on this same renderer, so it
-                    // must not outlive it either.
-                    // A poisoned lock is recovered as the previews do, so a
-                    // poisoned skin can never outlive its renderer.
-                    let mut slot = app
-                        .designer_renderer
-                        .lock()
-                        .unwrap_or_else(|p| p.into_inner());
-                    let mut designer_skin =
-                        app.designer_skin.lock().unwrap_or_else(|p| p.into_inner());
-                    *designer_skin = None;
-                    let mut kit_skin = app.kit_skin.lock().unwrap_or_else(|p| p.into_inner());
-                    *kit_skin = None;
-                    *slot = None;
-                }
-            }
-        });
-    }
-    if let Err(e) = built {
-        // A double-click races the existence check against the build; the
-        // second build fails on the duplicate label. That is the focus
-        // case, not an error.
-        if let Some(w) = app_handle.get_webview_window("designer") {
-            let _ = w.set_focus();
-            return Ok(());
-        }
-        return Err(err_str(e));
-    }
-    Ok(())
-}
-
-/// What the designer window sends: the outline it drew plus the choices
-/// around it.
-#[derive(Deserialize)]
-struct DesignerShape {
-    outline: Vec<[f32; 2]>,
-    /// Freeform control points; when present, the backend builds the
-    /// outline itself (spline flattening), and `outline` is ignored.
-    #[serde(default)]
-    control: Option<Vec<rhythia_render::designer::ControlPoint>>,
-    /// Imported contours (SVG or glyph), orientation encoding holes.
-    /// Wins over `control` and `outline` when present.
-    #[serde(default)]
-    import: Option<Vec<Vec<[f32; 2]>>>,
-    /// None = filled silhouette; Some(t) = hollow rim of thickness t.
-    hollow: Option<f32>,
-    depth: f32,
-    colors: Vec<String>,
-}
-
-impl DesignerShape {
-    /// The dense contours the geometry pipeline runs on: the import when
-    /// one is loaded, else the flattened control spline, else the
-    /// parametric outline verbatim.
-    fn resolved_contours(&self) -> Vec<Vec<[f32; 2]>> {
-        if let Some(imp) = &self.import {
-            if imp.iter().any(|c| c.len() >= 3) {
-                return imp.clone();
-            }
-        }
-        match &self.control {
-            Some(c) if c.len() >= 3 => {
-                vec![rhythia_render::designer::flatten_controls(c)]
-            }
-            _ => vec![self.outline.clone()],
-        }
-    }
-
-    /// A stable hash over everything that changes the prepared skin, so
-    /// the preview only rebuilds mesh and textures when the shape truly
-    /// changed instead of once per animation frame.
-    fn skin_hash(&self) -> u64 {
-        use std::hash::{Hash, Hasher};
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        for p in &self.outline {
-            p[0].to_bits().hash(&mut h);
-            p[1].to_bits().hash(&mut h);
-        }
-        if let Some(c) = &self.control {
-            for p in c {
-                p.x.to_bits().hash(&mut h);
-                p.y.to_bits().hash(&mut h);
-                p.smooth.hash(&mut h);
-            }
-        }
-        if let Some(imp) = &self.import {
-            for c in imp {
-                c.len().hash(&mut h);
-                for p in c {
-                    p[0].to_bits().hash(&mut h);
-                    p[1].to_bits().hash(&mut h);
-                }
-            }
-        }
-        self.hollow.map(|t| t.to_bits()).hash(&mut h);
-        self.depth.to_bits().hash(&mut h);
-        self.colors.hash(&mut h);
-        h.finish()
-    }
-}
-
 /// The preview's gameplay loop in ms: nine notes on a steady beat, one
 /// over every cell of the grid, so every colour of a colorset up to nine
 /// entries shows within one pass and the mesh is seen at every position.
-pub const DESIGNER_LOOP_MS: f64 = 9.0 * 300.0;
+pub const PREVIEW_LOOP_MS: f64 = 9.0 * 300.0;
 
 /// A synthetic scene for the preview: a nine-note snake over the whole
 /// grid on a steady beat. The animation clock wraps over
-/// [`DESIGNER_LOOP_MS`]; colours cycle per note exactly like the game.
-fn designer_scene() -> (rhythia_formats::map::Map, rhythia_formats::rhr::Replay) {
+/// [`PREVIEW_LOOP_MS`]; colours cycle per note exactly like the game.
+fn preview_scene() -> (rhythia_formats::map::Map, rhythia_formats::rhr::Replay) {
     let mut map = rhythia_formats::map::Map::default();
     const SNAKE: [(f32, f32); 9] = [
         (0.0, 0.0),
@@ -4427,7 +4273,7 @@ fn designer_scene() -> (rhythia_formats::map::Map, rhythia_formats::rhr::Replay)
         // always has approaching notes in the window.
         for lap in 0..2 {
             map.notes.push(rhythia_formats::map::Note {
-                time_ms: 500 + i as i64 * 300 + lap * DESIGNER_LOOP_MS as i64,
+                time_ms: 500 + i as i64 * 300 + lap * PREVIEW_LOOP_MS as i64,
                 x,
                 y,
             });
@@ -4496,91 +4342,12 @@ async fn hitsound_preview(state: tauri::State<'_, App>) -> Result<String, String
     .map_err(err_str)?
 }
 
-/// The cleaned contours the canvas draws: the SAME cleanup, normalise and
-/// inset the mesh build runs, served from one place so the note being
-/// edited and the note being rendered are the same note. Pure maths,
-/// sub-millisecond, called live while dragging.
-#[tauri::command]
-fn designer_outline(shape: DesignerShape) -> Result<rhythia_render::designer::NotePlan, String> {
-    rhythia_render::designer::plan_note_multi(&shape.resolved_contours(), shape.hollow)
-        .map_err(|_| "the outline encloses no area - draw a bigger shape".to_string())
-}
-
-const DESIGNER_PREVIEW_W: u32 = 960;
-const DESIGNER_PREVIEW_H: u32 = 560;
-
-/// Renders the designed note through the REAL pipeline and returns the
-/// picture as a data URL. The renderer is created once and kept on the
-/// shared state: the preview follows a slider drag live, and a wgpu
-/// device init per frame would turn that into a slideshow.
-#[tauri::command]
-async fn designer_preview(
-    state: tauri::State<'_, App>,
-    shape: DesignerShape,
-    time_ms: f64,
-    still: Option<bool>,
-) -> Result<String, String> {
-    let app = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let hash = shape.skin_hash();
-        let mut slot = app
-            .designer_renderer
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
-        if slot.is_none() {
-            let cfg = rhythia_render::config::SkinConfig::default();
-            *slot = Some(
-                rhythia_render::Renderer::new(
-                    DESIGNER_PREVIEW_W,
-                    DESIGNER_PREVIEW_H,
-                    cfg.hud_fonts().as_slice(),
-                )
-                .map_err(|e| e.to_string())?,
-            );
-        }
-        let renderer = slot.as_ref().expect("just created");
-        let mut cache = app.designer_skin.lock().unwrap_or_else(|p| p.into_inner());
-        let stale = cache.as_ref().map(|(h, _, _)| *h != hash).unwrap_or(true);
-        if stale {
-            let mesh = rhythia_render::designer::build_note_mesh_multi(
-                &shape.resolved_contours(),
-                shape.hollow,
-                shape.depth,
-            )
-            .map_err(|_| "the outline encloses no area - draw a bigger shape".to_string())?;
-            let obj = rhythia_render::designer::to_obj(&mesh, "preview");
-            let mut cfg = rhythia_render::config::SkinConfig::default();
-            cfg.note_mesh = Some(obj.into_bytes());
-            let hex: String = shape.colors.iter().fold(String::new(), |mut a, c| {
-                a.push_str(c);
-                a.push('\n');
-                a
-            });
-            let cs = rhythia_render::config::parse_colorset(&hex);
-            if !cs.is_empty() {
-                cfg.colorset = cs;
-            }
-            // A tele lens on the standard camera: the preview's job is to
-            // show THE NOTE (material, depth, colours), and at the gameplay
-            // FOV a single note is a stamp in a dark field. Narrowing the
-            // FOV is a legitimate config-driven zoom, no distortion.
-            cfg.camera_fov = 34.0;
-            // The note is the subject; the synthetic cursor only covers it.
-            cfg.cursor_opacity = 0.0;
-            cfg.cursor_trail_enabled = false;
-            let skin = renderer.prepare_skin(&cfg);
-            *cache = Some((hash, cfg, skin));
-        }
-        let (_, cfg, skin) = cache.as_ref().expect("just filled");
-        preview_frame(renderer, cfg, skin, time_ms, still.unwrap_or(false))
-    })
-    .await
-    .map_err(err_str)?
-}
+const NOTE_PREVIEW_W: u32 = 960;
+const NOTE_PREVIEW_H: u32 = 560;
 
 /// One preview frame: the gameplay loop at `time_ms`, or the still scene
-/// (three notes side by side at staggered depths) when `still`. Shared by
-/// the old designer and the kit window so the two can never drift.
+/// (three notes side by side at staggered depths) when `still`. The one
+/// frame function for every picture the designer shows.
 fn preview_frame(
     renderer: &rhythia_render::Renderer,
     cfg: &rhythia_render::config::SkinConfig,
@@ -4602,21 +4369,21 @@ fn preview_frame(
                 y: 1.0,
             });
         }
-        (map, designer_scene().1)
+        (map, preview_scene().1)
     } else {
-        designer_scene()
+        preview_scene()
     };
     // The clock wraps over the loop; the map carries two laps so the
     // seam always has notes in the approach window.
     let t = if still {
         300.0
     } else {
-        500.0 + time_ms.rem_euclid(DESIGNER_LOOP_MS)
+        500.0 + time_ms.rem_euclid(PREVIEW_LOOP_MS)
     };
     let px = renderer
         .render_still(&params, cfg, skin, &replay, &map, t, None)
         .map_err(|e| e.to_string())?;
-    let bytes = png_bytes(&px, DESIGNER_PREVIEW_W, DESIGNER_PREVIEW_H)?;
+    let bytes = png_bytes(&px, NOTE_PREVIEW_W, NOTE_PREVIEW_H)?;
     use base64::Engine as _;
     Ok(format!(
         "data:image/png;base64,{}",
@@ -4656,8 +4423,8 @@ fn kit_skin_for(
     Ok((cfg, skin))
 }
 
-/// Renders the kit's note through the same cached renderer and frame
-/// function as the old designer, and returns the picture as a data URL.
+/// Renders the kit's note through the cached preview renderer and the
+/// frame function above, and returns the picture as a data URL.
 #[tauri::command]
 async fn kit_preview(
     state: tauri::State<'_, App>,
@@ -4676,15 +4443,15 @@ async fn kit_preview(
             h.finish()
         };
         let mut slot = app
-            .designer_renderer
+            .preview_renderer
             .lock()
             .unwrap_or_else(|p| p.into_inner());
         if slot.is_none() {
             let cfg = rhythia_render::config::SkinConfig::default();
             *slot = Some(
                 rhythia_render::Renderer::new(
-                    DESIGNER_PREVIEW_W,
-                    DESIGNER_PREVIEW_H,
+                    NOTE_PREVIEW_W,
+                    NOTE_PREVIEW_H,
                     cfg.hud_fonts().as_slice(),
                 )
                 .map_err(|e| e.to_string())?,
@@ -4739,9 +4506,8 @@ async fn open_kit_window(app_handle: tauri::AppHandle) -> Result<(), String> {
         })
         .build();
     if let Ok(w) = &built {
-        // The prepared kit skin holds GPU textures; the window going away
-        // is the moment to let it go. The renderer is shared with the old
-        // designer, so it is released only when that window is gone too.
+        // The prepared kit skin holds GPU textures and the renderer owns
+        // the device; the window going away is the moment to let both go.
         let handle = app_handle.clone();
         w.on_window_event(move |e| {
             if matches!(e, tauri::WindowEvent::Destroyed) {
@@ -4751,20 +4517,12 @@ async fn open_kit_window(app_handle: tauri::AppHandle) -> Result<(), String> {
                     // it is using goes. A poisoned lock is recovered as the
                     // previews do.
                     let mut slot = app
-                        .designer_renderer
+                        .preview_renderer
                         .lock()
                         .unwrap_or_else(|p| p.into_inner());
                     let mut kit_skin = app.kit_skin.lock().unwrap_or_else(|p| p.into_inner());
                     *kit_skin = None;
-                    if handle.get_webview_window("designer").is_none() {
-                        // A designer frame queued after its window's
-                        // Destroyed may have prepared a skin on this
-                        // renderer; it must not meet the next device.
-                        let mut designer_skin =
-                            app.designer_skin.lock().unwrap_or_else(|p| p.into_inner());
-                        *designer_skin = None;
-                        *slot = None;
-                    }
+                    *slot = None;
                 }
             }
         });
@@ -4791,8 +4549,8 @@ mod kit_preview_tests {
         let design = rhythia_render::kit::doc::Design::default_note();
         let cfg = rhythia_render::config::SkinConfig::default();
         let renderer = rhythia_render::Renderer::new(
-            DESIGNER_PREVIEW_W,
-            DESIGNER_PREVIEW_H,
+            NOTE_PREVIEW_W,
+            NOTE_PREVIEW_H,
             cfg.hud_fonts().as_slice(),
         )
         .unwrap();
@@ -4811,122 +4569,6 @@ mod kit_preview_tests {
         assert!(red_url.starts_with("data:image/png;base64,"));
         assert_ne!(url, red_url, "the note's colour never reached the frame");
     }
-}
-
-/// Reads a local image as a data URL for the tracing underlay. The file
-/// never leaves the machine; the canvas just needs something drawable.
-#[tauri::command]
-async fn designer_read_image(path: String) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
-        if bytes.len() > 24 * 1024 * 1024 {
-            return Err("image too large (24 MB limit)".into());
-        }
-        let mime = match std::path::Path::new(&path)
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|e| e.to_ascii_lowercase())
-            .as_deref()
-        {
-            Some("png") => "image/png",
-            Some("jpg") | Some("jpeg") => "image/jpeg",
-            Some("webp") => "image/webp",
-            Some("gif") => "image/gif",
-            Some("bmp") => "image/bmp",
-            _ => return Err("use a png, jpg, webp, gif or bmp image".into()),
-        };
-        use base64::Engine as _;
-        Ok(format!(
-            "data:{mime};base64,{}",
-            base64::engine::general_purpose::STANDARD.encode(bytes)
-        ))
-    })
-    .await
-    .map_err(err_str)?
-}
-
-/// Saves the EDITABLE design document (the designer's own state, not the
-/// baked mesh) so a note can be reopened and reworked any time. Plain
-/// JSON on disk, picked through the save dialog.
-#[tauri::command]
-async fn designer_doc_save(path: String, json: String) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        std::fs::write(&path, json.as_bytes()).map_err(|e| e.to_string())?;
-        Ok(path)
-    })
-    .await
-    .map_err(err_str)?
-}
-
-/// Loads a design document saved by [`designer_doc_save`], or the one
-/// embedded in a .rhs written by [`designer_export`]. A skin saved by the
-/// Note Kit carries the kit's format, which this editor cannot show.
-#[tauri::command]
-async fn designer_doc_load(path: String) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
-        let data = if bytes.starts_with(b"PK") {
-            rhythia_render::kit::export::embedded_design(&bytes)
-                .map_err(|_| "not a skin archive".to_string())?
-                .ok_or_else(|| {
-                    "this skin carries no editable design: only skins saved by rhythr's editors open here"
-                        .to_string()
-                })?
-        } else {
-            String::from_utf8(bytes).map_err(|_| "not a design file".to_string())?
-        };
-        // A quick shape check so a wrong file errors here instead of
-        // half-applying in the editor.
-        let value: serde_json::Value = serde_json::from_str(&data).map_err(|e| e.to_string())?;
-        if value.get("version").and_then(|v| v.as_u64()) == Some(2) {
-            return Err(
-                "this design was made in the Note Kit; open it there (Note Kit in the main window)"
-                    .into(),
-            );
-        }
-        Ok(data)
-    })
-    .await
-    .map_err(err_str)?
-}
-
-/// Writes the designed note as a complete .rhs pack at `path` (picked by
-/// the user through the save dialog), with the editor's document embedded
-/// when `doc` is given, so the file opens again here or in the Note Kit.
-/// Loadable by rhythr and importable by the game, mtl always bundled.
-#[tauri::command]
-async fn designer_export(
-    shape: DesignerShape,
-    path: String,
-    doc: Option<String>,
-) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let mesh = rhythia_render::designer::build_note_mesh_multi(
-            &shape.resolved_contours(),
-            shape.hollow,
-            shape.depth,
-        )
-        .map_err(|_| "the outline encloses no area".to_string())?;
-        let stem = Path::new(&path)
-            .file_stem()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "note".into());
-        let name: String = stem
-            .chars()
-            .map(|c| if c.is_alphanumeric() { c } else { '_' })
-            .collect();
-        let pack = rhythia_render::designer::export_rhs_with_design(
-            &mesh,
-            &name,
-            &shape.colors,
-            doc.as_deref(),
-        )
-        .map_err(|e| e.to_string())?;
-        std::fs::write(&path, pack).map_err(err_str)?;
-        Ok(path)
-    })
-    .await
-    .map_err(err_str)?
 }
 
 /// Opens (or focuses) the Analyze window: a second webview showing the
@@ -6068,8 +5710,7 @@ fn main() {
         segment: Mutex::new(SegmentState::default()),
         segment_gen: std::sync::atomic::AtomicU64::new(0),
         render_thread: Mutex::new(None),
-        designer_renderer: Mutex::new(None),
-        designer_skin: Mutex::new(None),
+        preview_renderer: Mutex::new(None),
         kit_skin: Mutex::new(None),
         renders_done: std::sync::atomic::AtomicU64::new(0),
         last_render: Mutex::new(None),
@@ -6407,16 +6048,9 @@ fn main() {
             set_preview_quality,
             open_analyze_window,
             toggle_analyze_fullscreen,
-            open_designer_window,
             hitsound_preview,
-            designer_outline,
-            designer_doc_save,
-            designer_doc_load,
-            imports::designer_import_svg,
-            imports::designer_import_glyph,
             imports::kit_import_svg,
-            designer_read_image,
-            designer_preview,
+            imports::kit_import_glyph,
             kit_commands::kit_evaluate,
             kit_commands::kit_mesh,
             kit_commands::kit_default_doc,
@@ -6428,7 +6062,6 @@ fn main() {
             kit_commands::kit_presets,
             kit_preview,
             open_kit_window,
-            designer_export,
             set_clip,
             clear_clip,
             add_clip_bookmark,

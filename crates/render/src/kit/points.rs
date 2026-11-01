@@ -7,10 +7,10 @@
 //! convert the same way, holes and islands included: every loop of the
 //! source is a loop of points.
 
-use crate::designer::ControlPoint;
 use crate::kit::doc::Shape;
 use crate::kit::geom::{signed_area, Contour};
 use crate::kit::shapes::base_contours;
+use crate::kit::v1::ControlPoint;
 use crate::kit::KitError;
 
 /// Simplification tolerance in note units (half-extent 1): below what the

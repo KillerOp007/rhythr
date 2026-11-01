@@ -5,7 +5,6 @@
   "windows": [
     "main",
     "analyze",
-    "designer",
     "kit"
   ],
   "permissions": [

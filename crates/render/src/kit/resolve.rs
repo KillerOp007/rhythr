@@ -324,7 +324,7 @@ mod tests {
     fn rotation_is_counterclockwise() {
         // A triangle with its apex up: turned 90 degrees counterclockwise
         // the apex points left, so x never exceeds zero.
-        let ctrl = |x: f32, y: f32| crate::designer::ControlPoint {
+        let ctrl = |x: f32, y: f32| crate::kit::v1::ControlPoint {
             x,
             y,
             smooth: false,
@@ -345,7 +345,7 @@ mod tests {
         // A three-point source keeps this cheap: the caps are what is
         // under test, not the geometry. Never run this against code
         // without the caps.
-        let ctrl = |x: f32, y: f32| crate::designer::ControlPoint {
+        let ctrl = |x: f32, y: f32| crate::kit::v1::ControlPoint {
             x,
             y,
             smooth: false,

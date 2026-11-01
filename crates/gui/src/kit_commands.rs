@@ -164,7 +164,9 @@ pub fn load_document(text: &str) -> Result<Loaded, String> {
         });
     }
     if value.get("P").is_none() {
-        return Err("not a design file: neither a kit design nor an old designer document".into());
+        return Err(
+            "not a design file: neither a current design nor one in the older format".into(),
+        );
     }
     let d = migrate::from_v1(text).map_err(|e| user_message(&e))?;
     let json = serde_json::to_string(&d).map_err(|e| e.to_string())?;
@@ -184,7 +186,7 @@ pub fn load_bytes(bytes: &[u8]) -> Result<Loaded, String> {
         let text = export::embedded_design(bytes)
             .map_err(|e| user_message(&e))?
             .ok_or_else(|| {
-                "this skin carries no editable design: only skins saved by rhythr's Note Kit or Note Designer open here"
+                "this skin carries no editable design: only skins saved by rhythr's Note Designer open here"
                     .to_string()
             })?;
         return load_document(&text);
@@ -329,6 +331,19 @@ mod tests {
       "thick":0.22,"depth":0.05,"waves":5,"waveDepth":0.25,"waveform":"spike","twist":30},
       "free":null,"symmetry":4,"mirror":false,"colors":["#ff5d6c","#2fd6d0"],"imported":null}"##;
 
+    /// A skin archive with stored entries, enough for the kit's reader.
+    fn stored_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        use std::io::Write as _;
+        let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        for (name, bytes) in entries {
+            zw.start_file(*name, opts).unwrap();
+            zw.write_all(bytes).unwrap();
+        }
+        zw.finish().unwrap().into_inner()
+    }
+
     #[test]
     fn send_errors_read_as_sentences() {
         use rhythia_render::kit::game::SendError;
@@ -444,16 +459,13 @@ mod tests {
             design
         );
         // The old designer's skin carries its own document, which converts.
-        let square = vec![[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]];
-        let mesh = rhythia_render::designer::build_note_mesh(&square, None, 0.05).unwrap();
-        let colors = vec!["#ffffff".to_string()];
-        let old = rhythia_render::designer::export_rhs_with_design(
-            &mesh,
-            "old",
-            &colors,
-            Some(OLD_DESIGNER_FIXTURE),
-        )
-        .unwrap();
+        let obj = b"# old\nmtllib note.mtl\no old\nv 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n";
+        let old = stored_zip(&[
+            ("config", b"{}"),
+            ("noteSkin/old.obj", obj),
+            ("noteSkin/note.mtl", b"newmtl Material.001\n"),
+            ("rhythr/design.json", OLD_DESIGNER_FIXTURE.as_bytes()),
+        ]);
         let loaded = load_bytes(&old).unwrap();
         assert!(loaded.migrated);
         assert_eq!(
@@ -464,7 +476,11 @@ mod tests {
             1
         );
         // A plain game skin has nothing to edit.
-        let plain = rhythia_render::designer::export_rhs(&mesh, "plain", &colors).unwrap();
+        let plain = stored_zip(&[
+            ("config", b"{}"),
+            ("noteSkin/plain.obj", obj),
+            ("noteSkin/note.mtl", b"newmtl Material.001\n"),
+        ]);
         assert!(load_bytes(&plain)
             .unwrap_err()
             .starts_with("this skin carries no editable design"));

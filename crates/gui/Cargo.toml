@@ -39,6 +39,10 @@ tiny-skia-path = "0.12"
 # codepage-encoded and mangles non-ASCII paths.
 winreg = "0.55"
 
+[dev-dependencies]
+# Test fixtures build small skin archives by hand (the v1 exporter is gone).
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
 [[bin]]
 name = "rhythr"
 path = "src/main.rs"

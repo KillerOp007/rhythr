@@ -1,7 +1,7 @@
 //! The design document: the one JSON shape that undo snapshots, autosave,
 //! the .rhsd file and the IPC payload all share.
 
-use crate::designer::ControlPoint;
+use crate::kit::v1::ControlPoint;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

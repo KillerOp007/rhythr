@@ -11,9 +11,9 @@
 //! shows as a hole, in the game too), the old designer takes every layer
 //! merged into one outline.
 
-use rhythia_render::designer::clean_contours;
 use rhythia_render::kit::doc::Mode;
 use rhythia_render::kit::import::layer_modes;
+use rhythia_render::kit::v1::clean_contours;
 use serde::Serialize;
 
 /// One colour of an SVG as the kit receives it.
@@ -342,17 +342,6 @@ pub fn glyph_contours(ch: &str) -> Result<Vec<Vec<[f32; 2]>>, String> {
     Err(format!("no installed font has an outline for '{c}'"))
 }
 
-/// The old designer's SVG import: one merged outline.
-#[tauri::command]
-pub async fn designer_import_svg(path: String) -> Result<Vec<Vec<[f32; 2]>>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let data = std::fs::read(&path).map_err(err_str)?;
-        svg_to_contours(&data)
-    })
-    .await
-    .map_err(err_str)?
-}
-
 /// The kit's SVG import: one layer per colour, each a part.
 #[tauri::command]
 pub async fn kit_import_svg(path: String) -> Result<Vec<SvgLayer>, String> {
@@ -364,8 +353,9 @@ pub async fn kit_import_svg(path: String) -> Result<Vec<SvgLayer>, String> {
     .map_err(err_str)?
 }
 
+/// The kit's Letter import: the glyph's outline, counters as holes.
 #[tauri::command]
-pub async fn designer_import_glyph(ch: String) -> Result<Vec<Vec<[f32; 2]>>, String> {
+pub async fn kit_import_glyph(ch: String) -> Result<Vec<Vec<[f32; 2]>>, String> {
     tauri::async_runtime::spawn_blocking(move || glyph_contours(&ch))
         .await
         .map_err(err_str)?
@@ -374,6 +364,18 @@ pub async fn designer_import_glyph(ch: String) -> Result<Vec<Vec<[f32; 2]>>, Str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A kit design with the imported contours as its one part, the way
+    /// the window adds an SVG or a letter.
+    fn contours_design(contours: Vec<Vec<[f32; 2]>>) -> rhythia_render::kit::doc::Design {
+        use rhythia_render::kit::doc::{Design, Shape};
+        let mut d = Design::default_note();
+        d.parts[0].shape = Shape::Contours {
+            contours,
+            label: String::new(),
+        };
+        d
+    }
 
     fn area(c: &[[f32; 2]]) -> f32 {
         let mut a = 0.0;
@@ -421,11 +423,12 @@ mod tests {
         // Centred and unit-scaled: the extent must touch 1.
         let m = extent(&contours);
         assert!((0.99..=1.01).contains(&m), "extent {m}");
-        // And the geometry pipeline accepts it with the hole intact.
-        let plan = rhythia_render::designer::plan_note_multi(&contours, None).unwrap();
+        // And the kit accepts it as a part with the hole intact: the
+        // evaluated outline keeps more than one contour.
+        let ev = rhythia_render::kit::levels::evaluate(&contours_design(contours)).unwrap();
         assert!(
-            plan.shapes.iter().any(|s| !s.holes.is_empty()),
-            "the donut hole vanished in the plan"
+            ev.parts[0].shapes.iter().any(|s| s.len() > 1),
+            "the donut hole vanished in the evaluation"
         );
     }
 
@@ -580,9 +583,9 @@ mod tests {
             return;
         };
         assert!(!contours.is_empty());
-        let plan = rhythia_render::designer::plan_note_multi(&contours, None).unwrap();
+        let ev = rhythia_render::kit::levels::evaluate(&contours_design(contours)).unwrap();
         // The letter A encloses a triangular counter: it must be a hole.
-        assert!(plan.shapes.iter().any(|s| !s.holes.is_empty()));
+        assert!(ev.parts[0].shapes.iter().any(|s| s.len() > 1));
     }
 
     /// Probe for real files: `RHYTHR_SVG_PROBE=/some/dir cargo test -p

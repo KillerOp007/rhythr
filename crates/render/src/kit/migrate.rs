@@ -2,10 +2,10 @@
 //! designs: one Add part carrying the same shape, effects and symmetry,
 //! so nothing anyone saved is lost.
 
-use crate::designer::ControlPoint;
 use crate::kit::doc::*;
 use crate::kit::geom::extent;
 use crate::kit::resolve::{resolve_part, MAX_REPEAT};
+use crate::kit::v1::ControlPoint;
 use crate::kit::KitError;
 
 /// One stored v1 freeform point, read in f64 as the editor held it.

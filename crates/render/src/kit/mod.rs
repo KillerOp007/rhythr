@@ -16,6 +16,7 @@ pub mod points;
 pub mod presets;
 pub mod resolve;
 pub mod shapes;
+pub mod v1;
 pub mod validate;
 
 pub use doc::*;
