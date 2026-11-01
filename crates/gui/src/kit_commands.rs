@@ -226,6 +226,32 @@ fn join<T>(r: Result<Result<T, String>, tauri::Error>) -> Result<T, String> {
     r.map_err(|e| e.to_string())?
 }
 
+/// A failure of a designer action (save, open, import) with its code, so
+/// the status line and the diagnostics file can be searched for it. The
+/// live evaluate while editing is feedback, not a failure, and stays bare.
+fn designer_err(msg: String) -> String {
+    rhythia_errcode::stamp_in(rhythia_errcode::Area::Designer, &msg)
+}
+
+/// A failure of Send to game with its code.
+fn game_err(msg: String) -> String {
+    rhythia_errcode::stamp_in(rhythia_errcode::Area::Game, &msg)
+}
+
+/// One line about a design for the diagnostics report.
+fn design_summary(design: &Design, went: &str) -> String {
+    format!(
+        "{}: {} parts, {} groups, {went}",
+        design.name,
+        design.parts.len(),
+        design.groups.len()
+    )
+}
+
+fn remember_design(app: &crate::App, line: String) {
+    *app.last_design.lock().unwrap_or_else(|p| p.into_inner()) = Some(line);
+}
+
 #[tauri::command]
 pub async fn kit_evaluate(design: Design) -> Result<Evaluated, String> {
     join(tauri::async_runtime::spawn_blocking(move || evaluate_design(&design)).await)
@@ -245,8 +271,11 @@ pub fn kit_default_doc() -> Result<String, String> {
 pub async fn kit_doc_load(path: String) -> Result<Loaded, String> {
     join(
         tauri::async_runtime::spawn_blocking(move || {
-            let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
-            load_bytes(&bytes)
+            let loaded: Result<Loaded, String> = (|| {
+                let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+                load_bytes(&bytes)
+            })();
+            loaded.map_err(designer_err)
         })
         .await,
     )
@@ -256,7 +285,7 @@ pub async fn kit_doc_load(path: String) -> Result<Loaded, String> {
 /// kernel thins the outline to the points that carry its form.
 #[tauri::command]
 pub fn kit_shape_to_points(shape: Shape) -> Result<Shape, String> {
-    points::to_points(&shape).map_err(|e| user_message(&e))
+    points::to_points(&shape).map_err(|e| designer_err(user_message(&e)))
 }
 
 /// The editor's Save: bakes the design into a skin archive at `path` with
@@ -264,12 +293,21 @@ pub fn kit_shape_to_points(shape: Shape) -> Result<Shape, String> {
 /// that opens again. A design that cannot be built is not written (the
 /// game could not load it), and the error says why.
 #[tauri::command]
-pub async fn kit_export(design: Design, path: String) -> Result<String, String> {
+pub async fn kit_export(
+    state: tauri::State<'_, crate::App>,
+    design: Design,
+    path: String,
+) -> Result<String, String> {
+    let app = state.inner().clone();
     join(
         tauri::async_runtime::spawn_blocking(move || {
             let name = skin_name_from(&path);
-            let bytes = export::export_rhs(&design, &name).map_err(|e| user_message(&e))?;
-            std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
+            let written: Result<(), String> = (|| {
+                let bytes = export::export_rhs(&design, &name).map_err(|e| user_message(&e))?;
+                std::fs::write(&path, bytes).map_err(|e| e.to_string())
+            })();
+            written.map_err(designer_err)?;
+            remember_design(&app, design_summary(&design, &format!("saved to {path}")));
             Ok(path)
         })
         .await,
@@ -301,12 +339,33 @@ pub fn send_error_text(e: SendError) -> String {
 /// Writes the design into the game's data folder (see `kit::game`); the
 /// folder search and the writes run off the UI thread like `kit_export`.
 #[tauri::command]
-pub async fn kit_send_to_game(design: Design) -> Result<SendReport, String> {
+pub async fn kit_send_to_game(
+    state: tauri::State<'_, crate::App>,
+    design: Design,
+) -> Result<SendReport, String> {
+    let app = state.inner().clone();
     join(
         tauri::async_runtime::spawn_blocking(move || {
             let dir = crate::game_data::game_data_dir()
-                .map_err(|tried| crate::game_data::not_found_text(&tried))?;
-            game::send_to_game(&design, &dir).map_err(send_error_text)
+                .map_err(|tried| game_err(crate::game_data::not_found_text(&tried)))?;
+            let report = game::send_to_game(&design, &dir).map_err(|e| {
+                // A refused design is the designer's failure, everything
+                // else the game folder's.
+                let of_design = matches!(e, SendError::Design(_));
+                let text = send_error_text(e);
+                if of_design {
+                    designer_err(text)
+                } else {
+                    game_err(text)
+                }
+            })?;
+            *app.last_send.lock().unwrap_or_else(|p| p.into_inner()) =
+                Some((std::time::Instant::now(), report.message.clone()));
+            remember_design(
+                &app,
+                design_summary(&design, &format!("sent to {}", report.folder.display())),
+            );
+            Ok(report)
         })
         .await,
     )

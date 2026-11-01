@@ -602,6 +602,12 @@ struct Shared {
     /// diagnostics report. It used to be printed in the window after every
     /// render; this is where it belongs.
     last_render: Mutex<Option<String>>,
+    /// The Note Designer's last outcome of Send to game (when, and the
+    /// sentence it showed), for the diagnostics report.
+    last_send: Mutex<Option<(std::time::Instant, String)>>,
+    /// The design the Note Designer last saved or sent: name, part and
+    /// group counts, and where it went. Redacted when printed.
+    last_design: Mutex<Option<String>>,
 }
 
 impl Shared {
@@ -1456,6 +1462,13 @@ fn diagnostics_report(app: &App) -> String {
             for line in redact_path(&e.message).lines() {
                 let _ = writeln!(s, "      {}", line.trim_end());
             }
+            // The table's next step, so the file alone gets a person moving.
+            if let Some(fix) = rhythia_errcode::find(&e.code)
+                .map(|entry| entry.fix)
+                .filter(|f| !f.is_empty())
+            {
+                let _ = writeln!(s, "      try: {fix}");
+            }
         }
     }
 
@@ -1593,6 +1606,48 @@ fn diagnostics_report(app: &App) -> String {
         }
     }
 
+    // The Note Designer: what was last saved or sent, then the game's folder
+    // as the kit sees it, which is the first question when Send to game
+    // did not show up in play.
+    let _ = writeln!(s, "\nnote designer");
+    match app.last_design.lock().ok().and_then(|g| g.clone()) {
+        Some(d) => {
+            let _ = writeln!(s, "  last design: {}", redact_path(&d));
+        }
+        None => {
+            let _ = writeln!(s, "  last design: none this session");
+        }
+    }
+    match app.last_send.lock().ok().and_then(|g| g.clone()) {
+        Some((at, msg)) => {
+            let _ = writeln!(
+                s,
+                "  last send ({}s ago): {}",
+                at.elapsed().as_secs(),
+                redact_path(&msg)
+            );
+        }
+        None => {
+            let _ = writeln!(s, "  last send: none this session");
+        }
+    }
+    let _ = writeln!(s, "\ngame");
+    s.push_str(&game_section(&game_data::all_candidates()));
+    let libraries: Vec<String> = game_data::steam_library_roots()
+        .iter()
+        .filter(|r| r.exists())
+        .map(|r| redact_path(&r.display().to_string()))
+        .collect();
+    let _ = writeln!(
+        s,
+        "  steam libraries: {}",
+        if libraries.is_empty() {
+            "none found".to_string()
+        } else {
+            libraries.join("; ")
+        }
+    );
+
     // Settings that differ from a fresh install. Three lines here beat
     // re-reading the whole block above looking for the one odd value.
     let d = Settings::default();
@@ -1653,6 +1708,86 @@ fn diagnostics_report(app: &App) -> String {
         }
     }
 
+    s
+}
+
+/// The game's folder as the diagnostics report shows it: every candidate
+/// the kit would try, in order, and for the first that is the game's the
+/// active profile, DataPath and the four files the kit owns there. Reads
+/// only; nothing is created or probed by writing.
+fn game_section(candidates: &[PathBuf]) -> String {
+    use std::fmt::Write as _;
+    let mut s = String::new();
+    let mut found: Option<&PathBuf> = None;
+    for c in candidates {
+        let is_game = game_data::is_game_data_dir(c);
+        let state = if is_game {
+            "found"
+        } else if c.exists() {
+            "exists, not the game's"
+        } else {
+            "not there"
+        };
+        let _ = writeln!(s, "  {}: {state}", redact_path(&c.display().to_string()));
+        if is_game && found.is_none() {
+            found = Some(c);
+        }
+    }
+    let Some(dir) = found else {
+        let _ = writeln!(s, "  game folder: none found");
+        return s;
+    };
+    let framework = std::fs::read(dir.join("framework.json"))
+        .ok()
+        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok());
+    match framework {
+        Some(fw) => {
+            let value = |key: &str| {
+                fw.get(key)
+                    .and_then(|v| v.get("Value"))
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string)
+            };
+            let _ = writeln!(
+                s,
+                "  active profile: {}",
+                value("CurrentGameProfile").unwrap_or_else(|| "(unset)".into())
+            );
+            let data_path = value("DataPath").unwrap_or_default();
+            let _ = writeln!(
+                s,
+                "  DataPath: {}",
+                if data_path.is_empty() {
+                    "(empty)".to_string()
+                } else {
+                    redact_path(&data_path)
+                }
+            );
+        }
+        None => {
+            let _ = writeln!(s, "  framework.json: missing or unreadable");
+        }
+    }
+    for rel in [
+        "rhythr-kit.json",
+        "skins/notes/rhythr-kit.obj",
+        "skins/notes/rhythr-kit.mtl",
+        "skins/colorsets/rhythr-kit.txt",
+    ] {
+        match std::fs::metadata(dir.join(rel)) {
+            Ok(m) => {
+                let minutes = m
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.elapsed().ok())
+                    .map_or(0, |d| d.as_secs() / 60);
+                let _ = writeln!(s, "  {rel}: present ({} bytes, {minutes} min ago)", m.len());
+            }
+            Err(_) => {
+                let _ = writeln!(s, "  {rel}: missing");
+            }
+        }
+    }
     s
 }
 
@@ -5714,6 +5849,8 @@ fn main() {
         kit_skin: Mutex::new(None),
         renders_done: std::sync::atomic::AtomicU64::new(0),
         last_render: Mutex::new(None),
+        last_send: Mutex::new(None),
+        last_design: Mutex::new(None),
     });
 
     // Restore the last config; load a replay passed as CLI arg (file
@@ -6409,7 +6546,7 @@ mod settings_migration_tests {
 
 #[cfg(test)]
 mod diagnostics_tests {
-    use super::{diagnostics_report, err_str, redact_path, App, Shared};
+    use super::{diagnostics_report, err_str, game_section, redact_path, App, Shared};
     use std::sync::Arc;
 
     /// The report exists to be sent to a stranger, so the test that matters
@@ -6458,6 +6595,74 @@ mod diagnostics_tests {
                 "the report leaked the home path:\n{text}"
             );
         }
+    }
+
+    /// The designer and the game writer get their own sections: what was
+    /// last saved or sent, and what the kit finds in the game's folder.
+    #[test]
+    fn the_report_has_the_designer_and_game_sections() {
+        let app: App = Arc::new(Shared::default());
+        let text = diagnostics_report(&app);
+        assert!(text.contains("\nnote designer\n"), "{text}");
+        assert!(text.contains("\ngame\n"), "{text}");
+        assert!(text.contains("last design: none this session"), "{text}");
+        assert!(text.contains("last send: none this session"), "{text}");
+        *app.last_design.lock().unwrap() =
+            Some("Target: 3 parts, 0 groups, saved to /tmp/x.rhs".into());
+        *app.last_send.lock().unwrap() = Some((
+            std::time::Instant::now(),
+            "Sent to the game: /tmp/g. Pick the profile rhythr-kit in the game's settings.".into(),
+        ));
+        let text = diagnostics_report(&app);
+        assert!(text.contains("last design: Target: 3 parts"), "{text}");
+        assert!(
+            text.contains("last send (") && text.contains("Sent to the game: /tmp/g"),
+            "{text}"
+        );
+    }
+
+    /// Every recorded code carries the next thing to try, so the file alone
+    /// gets a person moving before anyone answers.
+    #[test]
+    fn a_recorded_error_comes_with_what_to_try() {
+        let app: App = Arc::new(Shared::default());
+        let stamped = rhythia_errcode::stamp_in(
+            rhythia_errcode::Area::Designer,
+            "nothing to show: every part is hidden or cut away",
+        );
+        assert!(stamped.contains("[RH-DSN-701-"), "{stamped}");
+        let text = diagnostics_report(&app);
+        assert!(text.contains("RH-DSN-701-"), "{text}");
+        assert!(text.contains("try: Show a hidden part again"), "{text}");
+    }
+
+    /// The game section names every folder tried and, for the one found,
+    /// the active profile, DataPath and the four files the kit owns.
+    #[test]
+    fn the_game_section_reads_the_folder_it_finds() {
+        let missing = std::env::temp_dir().join("rhythr-no-such-folder-for-diagnostics");
+        let t = tempfile::tempdir().unwrap();
+        std::fs::write(
+            t.path().join("framework.json"),
+            r#"{"CurrentGameProfile":{"Value":"p1.json"},"DataPath":{"Value":""}}"#,
+        )
+        .unwrap();
+        std::fs::write(t.path().join("p1.json"), "{}").unwrap();
+        let text = game_section(&[missing, t.path().to_path_buf()]);
+        assert!(text.contains("not there"), "{text}");
+        assert!(text.contains(": found"), "{text}");
+        assert!(text.contains("active profile: p1.json"), "{text}");
+        assert!(text.contains("DataPath: (empty)"), "{text}");
+        assert!(text.contains("rhythr-kit.json: missing"), "{text}");
+        rhythia_render::kit::game::send_to_game(
+            &rhythia_render::kit::doc::Design::default_note(),
+            t.path(),
+        )
+        .unwrap();
+        let text = game_section(&[t.path().to_path_buf()]);
+        assert!(text.contains("rhythr-kit.json: present ("), "{text}");
+        assert!(text.contains("rhythr-kit.obj: present ("), "{text}");
+        assert!(text.contains("rhythr-kit.txt: present ("), "{text}");
     }
 
     /// The report is written to be sent to a stranger, and on Windows every

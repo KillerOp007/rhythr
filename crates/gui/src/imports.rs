@@ -335,23 +335,32 @@ pub fn glyph_contours(ch: &str) -> Result<Vec<Vec<[f32; 2]>>, String> {
     Err(format!("no installed font has an outline for '{c}'"))
 }
 
+/// A failed import with its code (the Note Designer's area), for the status
+/// line and the diagnostics file.
+fn designer_err(msg: String) -> String {
+    rhythia_errcode::stamp_in(rhythia_errcode::Area::Designer, &msg)
+}
+
 /// The kit's SVG import: one layer per colour, each a part.
 #[tauri::command]
 pub async fn kit_import_svg(path: String) -> Result<Vec<SvgLayer>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let data = std::fs::read(&path).map_err(err_str)?;
+    let layers: Result<Vec<SvgLayer>, String> = tauri::async_runtime::spawn_blocking(move || {
+        let data = std::fs::read(&path).map_err(|e| format!("SVG: {e}"))?;
         svg_layers(&data)
     })
     .await
-    .map_err(err_str)?
+    .map_err(err_str)?;
+    layers.map_err(designer_err)
 }
 
 /// The kit's Letter import: the glyph's outline, counters as holes.
 #[tauri::command]
 pub async fn kit_import_glyph(ch: String) -> Result<Vec<Vec<[f32; 2]>>, String> {
-    tauri::async_runtime::spawn_blocking(move || glyph_contours(&ch))
-        .await
-        .map_err(err_str)?
+    let contours: Result<Vec<Vec<[f32; 2]>>, String> =
+        tauri::async_runtime::spawn_blocking(move || glyph_contours(&ch))
+            .await
+            .map_err(err_str)?;
+    contours.map_err(designer_err)
 }
 
 #[cfg(test)]

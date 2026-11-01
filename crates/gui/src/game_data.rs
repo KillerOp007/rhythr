@@ -129,9 +129,9 @@ pub fn not_found_text(tried: &[PathBuf]) -> String {
     format!("Game folder not found. Looked in: {}.", list.join("; "))
 }
 
-/// The game folder on this machine: the candidates in their order, the
-/// first that counts.
-pub fn game_data_dir() -> Result<PathBuf, Vec<PathBuf>> {
+/// Every folder this machine would be searched in, in order: what the
+/// diagnostics report lists and what `game_data_dir` picks from.
+pub fn all_candidates() -> Vec<PathBuf> {
     let env_override = std::env::var_os(ENV_OVERRIDE)
         .filter(|s| !s.is_empty())
         .map(PathBuf::from);
@@ -145,7 +145,13 @@ pub fn game_data_dir() -> Result<PathBuf, Vec<PathBuf>> {
             .collect();
         (None, steam_library_roots(), xdg)
     };
-    pick(candidates(env_override, roaming, &steam, &xdg))
+    candidates(env_override, roaming, &steam, &xdg)
+}
+
+/// The game folder on this machine: the candidates in their order, the
+/// first that counts.
+pub fn game_data_dir() -> Result<PathBuf, Vec<PathBuf>> {
+    pick(all_candidates())
 }
 
 #[cfg(test)]

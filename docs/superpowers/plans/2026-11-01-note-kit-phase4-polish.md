@@ -601,3 +601,34 @@ git commit -m "Ledger: note kit phase 4 execution and the owner's probe round"
 - [ ] **Step 5: Release candidate (only after the owner's Go; nothing here is pushed before it)**
 
 Version 0.7.0 in `Cargo.toml` and `crates/gui/tauri.conf.json`, `## v0.7.0 (date)` in the changelog with the Unreleased entries, `bash scripts/preflight.sh 0.7.0`, the Linux build through `scripts/build-linux.sh`, the Windows build, `latest.json`, then the GitHub release and AUR exactly as for 0.6.3 (the AUR push script runs on the owner's side).
+
+---
+
+## Owner test round 1 (01.11., 20:12, testbuild kit8)
+
+The owner found the Presets panel running past the window's right edge (fixed in 88f9c0a: the panel is pulled inside the window and wraps in narrow ones, pinned by the scenario check "the panel stays inside the window" at 1700 px), asked for a grouped, uniform toolbar with colour per group (variant A of the mockups of 20:30: labelled groups Add, Import, Edit, View, File, Game; one button style; Send to game filled), and for the diagnostics and the error code table to cover the designer and the game, with the fix for each code in the table and in the diagnostics file. Rulings: the live evaluate error in the status line is feedback, not a failure, and stays unstamped; everything a button does (save, open, import, send) stamps.
+
+### Task 11: Toolbar, variant A
+
+**Files:** `crates/gui/ui/kit.html` (the header), `crates/gui/ui/kit.css`, `crates/gui/ui/kit/tests/scenarios.mjs` (`files`: the toolbar check), `docs/USER-GUIDE.md` (one sentence in the designer bullet).
+
+**Produces:** six groups in the toolbar in this order, each `div.group` with a class and a `span.label`: `add` ("Add": the six shapes), `import` ("Import": SVG, the Letter field, Letter), `edit` ("Edit": Undo, Redo), `view` ("View": Previews, 3D, Help), the `grow` spacer, `file` ("File": New, Presets, Open, Recent, Save .rhs, Save as), `game` ("Game": Send to game). Every toolbar button is `btn small` without `ghost`; the colour sits on the group: label and button borders tinted (add: accent, import: `#c8a3ff`, view: `--warn`, game: `--ok`; edit and file neutral); `#kt-send` carries `game` and is filled with `--ok` and dark text; a 1 px separator between groups; the `.on` outline stays. The scenario check `toolbar` asserts the labels in order, no `ghost` button in the toolbar, `#kt-send` filled (computed background not transparent) and `scrollW <= 1100`.
+
+- [ ] Step 1: extend the `files` toolbar check (labels, ghost count, send fill); run `node crates/gui/ui/kit/tests/scenarios.mjs files`, expected FAIL.
+- [ ] Step 2: rewrite the header markup and the styles; run again, expected PASS; run `presets` and `send` too (they click toolbar buttons).
+- [ ] Step 3: the guide sentence; preflight; commit `kit: the toolbar in six labelled groups, one button style, colour per group`.
+
+### Task 12: Error codes and diagnostics for the designer and the game
+
+**Files:** `crates/errcode/src/lib.rs` (two areas, fourteen entries, tests), `docs/ERROR-CODES.md` (regenerated), `crates/gui/src/kit_commands.rs`, `crates/gui/src/imports.rs` (stamping, the last send and last design records), `crates/gui/src/main.rs` (`App` fields, the diagnostics sections, tests), `docs/USER-GUIDE.md` ("Reporting a problem").
+
+**Produces:**
+- `Area::Designer` (tag `DSN`, title "Note Designer", fallback `RH-DSN-700`) with `RH-DSN-701` nothing to show (`nothing to show`), `702` too detailed (`too detailed`), `703` too complex (`too complex`), `704` reaches too far (`reaches too far`), `705` not a design file (`not a design file`, `design file damaged`), `706` no editable design (`carries no editable design`), `707` no font (`no installed font`, `type a letter`), `708` SVG (`svg`), `709` the skin file could not be written (`os error`, `denied`); `Area::Game` (tag `GAM`, title "Sending to the game", fallback `RH-GAM-800`) with `RH-GAM-801` folder not found (`game folder not found`), `802` relocated (`moves its data to`), `803` could not write (`could not write`). Each entry has a `fix` sentence and causes per system. The fallback test and the markdown area list include both areas; `real_messages_land_on_the_right_code` gains one case per new entry with the real wording.
+- Stamping: `kit_export`, `kit_doc_load`, `kit_shape_to_points`, `kit_import_svg`, `kit_import_glyph` wrap their `Err` with `stamp_in(Area::Designer, ..)`; `kit_send_to_game` stamps `SendError::Design` in the Designer area and everything else (the not-found sentence included) in the Game area. `kit_evaluate` and `kit_mesh` stay unstamped.
+- `App` gains `last_send: Mutex<Option<(std::time::Instant, String)>>` and `last_design: Mutex<Option<String>>` (name, parts, groups, triangles, and the path or "sent"); `kit_export` and `kit_send_to_game` set them.
+- `diagnostics_report`: under each recorded error a line `      try: <fix>` from `rhythia_errcode::find`; a section `note designer` (last design, last save or send with "n s ago"); a section `game` built by `game_section(candidates: &[PathBuf]) -> String`: one line per candidate (`found` or `not there`), and for the first found folder `active profile: <file name>`, `DataPath: (empty)` or the value redacted, and `rhythr-kit.json`, `skins/notes/rhythr-kit.obj`, `.mtl`, `skins/colorsets/rhythr-kit.txt` each as `present (<bytes> bytes, <n> min ago)` or `missing`; Steam libraries found, redacted. Tests: `game_section` over a temp fixture (found, active profile, DataPath empty, files missing then present after a `send_to_game`), the `try:` line after a stamped designer error, the two new section titles in the report.
+- Guide: the "Reporting a problem" paragraph names the two new areas and the two new sections.
+
+- [ ] Step 1: errcode tests first (fallback list, classifier cases); `cargo test -p rhythia-errcode`, expected FAIL; the entries; PASS; `RHYTHR_UPDATE_DOCS=1 cargo test -p rhythia-errcode`; commit `errcode: codes for the Note Designer and for sending to the game`.
+- [ ] Step 2: diagnostics tests first (`cargo test -p rhythia-gui diagnostics`), expected FAIL; the fields, the stamping, the sections; PASS; the full gui suite and the scenario groups `files`, `imports`, `send` (the status prefixes still hold with a code appended); preflight; commit `gui: designer and game errors carry codes; the diagnostics file shows the game folder, the last send and what to try`.
+- [ ] Step 3: the guide paragraph; preflight; commit; testbuild kit9.

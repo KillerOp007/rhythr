@@ -39,6 +39,16 @@ Deferred minors: a failed temp-file write leaves `rhythr-kit.<ext>.tmp` behind (
 
 Rulings on what the reviewer set aside: profile keys come out sorted (values unchanged, the game does not read order); "mesh skins" in the changelog is the community's term; `MSG_AGAIN` and the two-key fallback belong to the probe round; mixed separators under a forward-slash override are accepted by Windows; a canvas pointerdown closes the popover and starts the gesture; the harness duplicates the error sentences by necessity; the thumbnail model is a parallel of the canvas painter by the plan's design; `createGroup`'s empty undo step for an unknown part is a Phase 3 deferred minor; a design emptied of colours after a send keeps the old colorset referenced; a rename blocked by the running game is reported, not retried; a malformed embedded preset panics by design; `WAVES_DEPTH_MAX` mirrors the kernel clamp by comment; the testbuild copy script is fixed with the release step.
 
+## Owner test round 1 (01.11., 20:12, kit8)
+
+Three findings, all built the same evening on the branch (plan addendum "Owner test round 1", Tasks 11 and 12):
+
+- The Presets panel ran past the window's right edge in a wide window (the button sits in the right-hand group): the panel is now pulled inside the window and wraps in narrow ones; pinned by the scenario check "the panel stays inside the window" at a 1700 px viewport (88f9c0a).
+- The toolbar was a mix of filled and ghost buttons with SVG and Letter glued to the shapes: it is six labelled groups now (Add, Import, Edit, View, File, Game), one button style, the colour on the group's label and borders, Send to game filled; the owner chose this variant (A) from two mockups; pinned by the `files` toolbar check (73fa8e4).
+- No designer or game failure carried a code or reached the diagnostics file: two new areas in the code table, `RH-DSN-7xx` Note Designer (nine entries) and `RH-GAM-8xx` Sending to the game (three entries), each with the next step and causes per system; the save, open, import, to-points and send commands stamp their failures (the live evaluate stays unstamped, a ruling: it is feedback while editing, not a failure); the diagnostics file prints `try: <fix>` under every recorded code and gains the sections `note designer` (last design, last send) and `game` (every folder tried, the active profile, DataPath, the kit's four files); `docs/ERROR-CODES.md` regenerated, the guide's "Reporting a problem" paragraph extended (094d4b5 and the commit after it). Tests: errcode 9 (one per new entry with the real wording), gui 43 (three diagnostics tests), scenario groups files, imports, send, presets green, preflight, Windows check.
+
+Testbuild kit9 follows for the owner's probe round.
+
 ## Release candidate
 
 Not cut in this phase. After the owner's probe round and its fixes: version 0.7.0 in `Cargo.toml` and `crates/gui/tauri.conf.json`, `## v0.7.0 (date)` in the changelog with the Unreleased entries, `bash scripts/preflight.sh 0.7.0`, the Linux build through `scripts/build-linux.sh`, the Windows build, `latest.json`, then the GitHub release and AUR as for 0.6.3, all after the owner's Go; nothing is pushed before it.

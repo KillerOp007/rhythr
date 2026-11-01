@@ -427,20 +427,24 @@ The replay fills the window; the gear (or `O`) opens an options drawer.
 
 Every error ends with a code in brackets, like `RH-FFM-101-L`. Quote it.
 The letters say which part failed (encoding, graphics, writing the file,
-replays and maps, downloads, the app), the number says which failure,
-and the last letter is your system: `W`indows, `L`inux, `M`acOS. The
-same failure has a different cause on each, which is why it is part of
-the code.
+replays and maps, downloads, the app, the Note Designer, sending to the
+game), the number says which failure, and the last letter is your
+system: `W`indows, `L`inux, `M`acOS. The same failure has a different
+cause on each, which is why it is part of the code. Every code has a
+row in `docs/ERROR-CODES.md` with the next thing to try.
 
 For anything that is not obvious from the message, open **Advanced** and
 use **Diagnostics**: **Save to file** writes a text report, **Copy**
 puts the same thing on your clipboard. It contains the app version,
 your system and processor, your GPU and driver, which ffmpeg was found
 and which encoders it offers, what is loaded, your last render's
-timings, the settings you changed from default, and the codes of
-everything that went wrong this session. Your home folder is written as
-`~`, so it carries no account name, and nothing is sent anywhere: you
-choose where the file goes and can read it first.
+timings, the Note Designer's last save and send, what the designer finds
+in the game's folder (every folder it tried, the active profile, and
+whether its own files are there), the settings you changed from default,
+and the codes of everything that went wrong this session, each with the
+next thing to try under it. Your home folder is written as `~`, so it
+carries no account name, and nothing is sent anywhere: you choose where
+the file goes and can read it first.
 
 - **Antivirus complains**: the installer is new and unsigned, so
   reputation-based scanners are cautious. The file is open source and
