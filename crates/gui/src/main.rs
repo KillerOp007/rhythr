@@ -4495,7 +4495,7 @@ async fn open_kit_window(app_handle: tauri::AppHandle) -> Result<(), String> {
         });
     }
     let built = WebviewWindowBuilder::new(&app_handle, "kit", WebviewUrl::App("kit.html".into()))
-        .title("rhythr · Note Kit")
+        .title("rhythr · Note Designer")
         .inner_size(1380.0, 860.0)
         .min_inner_size(1000.0, 660.0)
         // The kit window takes no file drops, and HTML5 drag reorder needs the native handler off on Windows.
@@ -6054,7 +6054,6 @@ fn main() {
             kit_commands::kit_evaluate,
             kit_commands::kit_mesh,
             kit_commands::kit_default_doc,
-            kit_commands::kit_migrate_v1,
             kit_commands::kit_doc_load,
             kit_commands::kit_export,
             kit_commands::kit_shape_to_points,

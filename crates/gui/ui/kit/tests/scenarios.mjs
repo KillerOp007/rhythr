@@ -1,4 +1,4 @@
-// Headless scenario runner for the Note Kit window. It starts the browser
+// Headless scenario runner for the Note Designer window. It starts the browser
 // harness (harness.mjs, real kernel through the kit_eval_json example),
 // drives kit.html in headless Chrome through playwright-core and prints one
 // PASS or FAIL line per check, grouped by scenario. Not a unit test (no
@@ -316,11 +316,12 @@ async function files({ page, h }) {
   let s = await S();
   const tb = await page.evaluate(() => ({
     exportGone: !document.getElementById("kt-export"),
+    importOldGone: !document.getElementById("kt-import-old"),
     save: document.getElementById("kt-save").textContent,
     saveGhost: document.getElementById("kt-save").classList.contains("ghost"),
     hint: document.getElementById("kt-canvas-hint").textContent.includes("one .rhs file"),
   }));
-  check("toolbar", tb.exportGone && tb.save === "Save .rhs" && !tb.saveGhost && s.scrollW <= 1100 && tb.hint, JSON.stringify(tb));
+  check("toolbar", tb.exportGone && tb.importOldGone && tb.save === "Save .rhs" && !tb.saveGhost && s.scrollW <= 1100 && tb.hint, JSON.stringify(tb));
 
   await dlg({ save: `${HARNESS_WORK}/s1.rhs` });
   await keys("Control+s");
@@ -354,7 +355,7 @@ async function files({ page, h }) {
   await click("kt-load");
   await settle();
   s = await S();
-  check("old designer skin converts without a path", s.parts.length === 1 && s.parts[0].kind === "polygon" && s.path === null && s.status.includes("converted from the old designer") && s.status.includes("new .rhs file"), `${s.status} | ${JSON.stringify(s.parts.map((p) => p.kind))}`);
+  check("old designer skin converts without a path", s.parts.length === 1 && s.parts[0].kind === "polygon" && s.path === null && s.status.includes("converted from an older design format") && s.status.includes("new .rhs file"), `${s.status} | ${JSON.stringify(s.parts.map((p) => p.kind))}`);
   await keys("Control+s");
   await settle();
   s = await S();
@@ -369,7 +370,7 @@ async function files({ page, h }) {
   await click("kt-load");
   await settle();
   s = await S();
-  check("old rhsd converts", s.parts.length === 1 && s.parts[0].kind === "circle" && s.path === null && s.status.includes("converted from the old designer: old.rhsd"), s.status);
+  check("old rhsd converts", s.parts.length === 1 && s.parts[0].kind === "circle" && s.path === null && s.status.includes("converted from an older design format: old.rhsd"), s.status);
 
   await dlg({ open: `${WORK}/plain.rhs` });
   await click("kt-load");

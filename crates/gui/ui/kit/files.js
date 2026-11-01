@@ -5,7 +5,6 @@
 // functions, so this module loads under node without a DOM.
 export const DOC_KEY = "rhythr.kit.doc";
 export const RECENT_KEY = "rhythr.kit.recent";
-export const OLD_DOC_KEY = "rhythr.designer.doc";
 export const RECENT_LIMIT = 6;
 export const AUTOSAVE_MS = 600;
 
@@ -97,14 +96,8 @@ export async function startupDesign(storage, invoke) {
   return newDesign(invoke);
 }
 
-export async function importOldDesigner(storage, invoke) {
-  const old = storage.getItem(OLD_DOC_KEY);
-  if (!old) throw new Error("nothing saved in the old Note Designer on this machine");
-  return parseDesign(await invoke("kit_migrate_v1", { json: old }));
-}
-
 // The path a loaded file keeps for Save. Only a skin archive (.rhs) is
-// written back in place: a converted old designer document must never be
+// written back in place: a document converted from the older format must never be
 // overwritten, and a plain .rhsd (either editor's design text) would turn
 // into an archive under the wrong name, so Save asks for a new file.
 export function docPathFor(path, migrated) {

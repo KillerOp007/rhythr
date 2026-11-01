@@ -1,10 +1,10 @@
 // crates/gui/ui/kit/tests/files.test.mjs
 import test from "node:test";
 import assert from "node:assert/strict";
+import * as files from "../files.js";
 import {
   makeRecent,
   startupDesign,
-  importOldDesigner,
   isTextEntry,
   ownsArrows,
   bindKeys,
@@ -12,7 +12,6 @@ import {
   glyphOf,
   RECENT_LIMIT,
   DOC_KEY,
-  OLD_DOC_KEY,
 } from "../files.js";
 import { createStore } from "../store.js";
 
@@ -75,15 +74,11 @@ test("startup_prefers_the_autosave_and_falls_back_to_the_default", async () => {
   assert.deepEqual(calls, ["kit_default_doc"]);
 });
 
-test("the_old_designer_autosave_migrates_through_the_backend", async () => {
-  const old = '{"P":{},"free":null,"symmetry":4,"mirror":false,"colors":["#ffffff"]}';
-  const invoke = async (name, args) => {
-    assert.equal(name, "kit_migrate_v1");
-    assert.equal(args.json, old);
-    return JSON.stringify({ version: 2, name: "migrated", colors: ["#ffffff"], parts: [], groups: [] });
-  };
-  assert.equal((await importOldDesigner(storage({ [OLD_DOC_KEY]: old }), invoke)).name, "migrated");
-  await assert.rejects(importOldDesigner(storage(), invoke), /nothing saved/);
+test("the_module_exports_no_old_designer_import", () => {
+  // The v1 window is gone, and with it the import of its autosave; old
+  // files still convert through Open.
+  assert.equal(files.importOldDesigner, undefined);
+  assert.equal(files.OLD_DOC_KEY, undefined);
 });
 
 test("text_entry_and_arrow_ownership_are_told_apart", () => {

@@ -592,5 +592,5 @@ export function render(store, actions = {}) {
   $("kt-undo").disabled = s.undo.length === 0;
   $("kt-redo").disabled = s.redo.length === 0;
   $("kt-previews").classList.toggle("on", s.ui.previews);
-  document.title = `rhythr · Note Kit${s.dirty ? " *" : ""}${s.path ? ` · ${s.path.split(/[\\/]/).pop()}` : ""}`;
+  document.title = `rhythr · Note Designer${s.dirty ? " *" : ""}${s.path ? ` · ${s.path.split(/[\\/]/).pop()}` : ""}`;
 }

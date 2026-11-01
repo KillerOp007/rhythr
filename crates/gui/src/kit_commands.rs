@@ -242,11 +242,6 @@ pub fn kit_default_doc() -> Result<String, String> {
 }
 
 #[tauri::command]
-pub fn kit_migrate_v1(json: String) -> Result<String, String> {
-    load_document(&json).map(|l| l.json)
-}
-
-#[tauri::command]
 pub async fn kit_doc_load(path: String) -> Result<Loaded, String> {
     join(
         tauri::async_runtime::spawn_blocking(move || {

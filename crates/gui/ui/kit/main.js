@@ -14,7 +14,6 @@ import {
   startupDesign,
   hasAutosave,
   newDesign,
-  importOldDesigner,
   parseDesign,
   fileStem,
   docPathFor,
@@ -219,7 +218,7 @@ async function boot() {
     });
   }
   // What the backend read ({ json, migrated }) becomes the design. Only a
-  // skin archive keeps its path: a file converted from the old designer or
+  // skin archive keeps its path: a file converted from the older format or
   // a plain .rhsd makes Save ask for a new .rhs, so nothing saved before is
   // overwritten with another format.
   async function openLoaded(path, loaded) {
@@ -230,7 +229,7 @@ async function boot() {
     store.load(next, keep);
     recent.add(path);
     if (loaded.migrated) {
-      store.setStatus(`Opened and converted from the old designer: ${fileName(path)}; Save will ask for a new .rhs file`);
+      store.setStatus(`Opened and converted from an older design format: ${fileName(path)}; Save will ask for a new .rhs file`);
     } else if (!keep) {
       store.setStatus(`Opened: ${fileName(path)}; Save will ask for a .rhs file`);
     } else {
@@ -312,12 +311,6 @@ async function boot() {
     store.setStatus(`Preset ${preset.name}: ${next.parts.length} parts, all editable`);
   });
   mountPresets({ button: $("kt-presets"), panel: $("kt-presets-panel") }, { invoke, onPick: (p) => actions.loadPreset(p) });
-  const importOld = exclusive(async () => {
-    const next = await importOldDesigner(storage, invoke);
-    if (!(await discardOk("From old designer"))) return;
-    store.load(next, null);
-    store.setStatus("Imported the note from the old Note Designer");
-  });
   // Imports become parts: the backend resolves the file or the font once
   // and the outline is stored in the design, so the kernel never touches
   // either. Both land centred at the box size, like a shape from Add. An
@@ -358,7 +351,7 @@ async function boot() {
       store.setStatus("Type a letter, a digit or an emoji first", true);
       return;
     }
-    const contours = await invoke("designer_import_glyph", { ch });
+    const contours = await invoke("kit_import_glyph", { ch });
     store.addContours(contours, ch);
     store.setStatus(`Added "${ch}" as a part`);
   });
@@ -367,7 +360,6 @@ async function boot() {
   $("kt-save").addEventListener("click", saveDoc);
   $("kt-save-as").addEventListener("click", saveAsDoc);
   $("kt-send").addEventListener("click", sendToGame);
-  $("kt-import-old").addEventListener("click", importOld);
   $("kt-add-svg").addEventListener("click", addSvg);
   $("kt-add-glyph").addEventListener("click", addGlyph);
   glyphField.addEventListener("keydown", (e) => {

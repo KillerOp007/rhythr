@@ -1244,9 +1244,6 @@ function initHudEdit() {
       loadNote(String(e));
     }
   };
-  $("btn-designer").addEventListener("click", () => {
-    call(() => invoke("open_designer_window"));
-  });
   $("btn-kit").addEventListener("click", () => {
     call(() => invoke("open_kit_window"));
   });
