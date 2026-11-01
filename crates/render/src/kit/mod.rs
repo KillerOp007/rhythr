@@ -6,6 +6,7 @@
 
 pub mod doc;
 pub mod export;
+pub mod game;
 pub mod geom;
 pub mod import;
 pub mod levels;

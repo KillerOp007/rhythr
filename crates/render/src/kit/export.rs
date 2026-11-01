@@ -27,6 +27,20 @@ pub fn mtl_text() -> String {
     s
 }
 
+/// The colorset file as the game reads it: one `#rrggbb` per line with
+/// CRLF line ends, colours that are not six hex digits dropped; empty when
+/// nothing valid remains (the archive then carries no colorset entry).
+pub fn colorset_text(colors: &[String]) -> String {
+    colors
+        .iter()
+        .filter(|c| {
+            let h = c.trim().trim_start_matches('#');
+            h.len() == 6 && h.chars().all(|ch| ch.is_ascii_hexdigit())
+        })
+        .map(|c| format!("#{}\r\n", c.trim().trim_start_matches('#')))
+        .collect()
+}
+
 /// Longest accepted skin name, in characters.
 const MAX_NAME_CHARS: usize = 64;
 
@@ -78,9 +92,11 @@ fn check_name(name: &str) -> Result<(), KitError> {
 /// unescaped: callers must pass one that `export_rhs` accepts (ASCII
 /// letters, digits, spaces, `_` and `-`, 1 to 64 characters, no space at
 /// either end).
-pub fn to_obj(mesh: &KitMesh, name: &str) -> String {
+pub fn to_obj(mesh: &KitMesh, name: &str, mtl_file: &str) -> String {
     let mut s = String::with_capacity(mesh.positions.len() * 36 + mesh.indices.len() * 8);
-    s.push_str("# rhythr note kit\nmtllib note.mtl\n");
+    // `mtl_file` is the file the obj's neighbour carries: `note.mtl` inside
+    // an archive, the skin's own name when written into the game's folder.
+    let _ = writeln!(s, "# rhythr note kit\nmtllib {mtl_file}");
     let _ = writeln!(s, "o {name}");
     for p in &mesh.positions {
         let _ = writeln!(s, "v {:.6} {:.6} {:.6}", p[0], p[1], p[2]);
@@ -108,16 +124,8 @@ pub fn export_rhs(design: &Design, name: &str) -> Result<Vec<u8>, KitError> {
     let design_json =
         serde_json::to_string(design).map_err(|e| KitError::Invalid(format!("design: {e}")))?;
     let mesh = build_mesh(&evaluate(design)?)?;
-    let obj = to_obj(&mesh, name);
-    let colorset: String = design
-        .colors
-        .iter()
-        .filter(|c| {
-            let h = c.trim().trim_start_matches('#');
-            h.len() == 6 && h.chars().all(|ch| ch.is_ascii_hexdigit())
-        })
-        .map(|c| format!("#{}\r\n", c.trim().trim_start_matches('#')))
-        .collect();
+    let obj = to_obj(&mesh, name, "note.mtl");
+    let colorset = colorset_text(&design.colors);
     let config =
         format!(r#"{{"NoteSkin":{{"Value":"{name}.obj"}},"ColorSet":{{"Value":"{name}"}}}}"#);
     let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
@@ -172,9 +180,9 @@ mod tests {
     fn obj_has_one_object_and_a_section_per_material() {
         let ev = crate::kit::levels::evaluate(&glass_design()).unwrap();
         let m = crate::kit::mesh::build_mesh(&ev).unwrap();
-        let obj = to_obj(&m, "note");
+        let obj = to_obj(&m, "note", "rhythr-kit.mtl");
         assert_eq!(obj.matches("\no ").count(), 1);
-        assert!(obj.contains("mtllib note.mtl\n"));
+        assert!(obj.contains("mtllib rhythr-kit.mtl\n"));
         assert_eq!(obj.matches("usemtl Material.001\n").count(), 1);
         assert_eq!(obj.matches("usemtl Transparent\n").count(), 1);
         assert_eq!(obj.matches("\nf ").count(), m.indices.len() / 3);
@@ -189,6 +197,13 @@ mod tests {
         assert!(mtl.contains("newmtl Material.001"));
         assert!(mtl.contains("newmtl Transparent"));
         assert!(mtl.find("Material.001") < mtl.find("Transparent"));
+    }
+
+    #[test]
+    fn colorset_text_keeps_valid_colours_only() {
+        let t = colorset_text(&["#ffffff".into(), "bad".into(), " a2e0ff ".into()]);
+        assert_eq!(t, "#ffffff\r\n#a2e0ff\r\n");
+        assert_eq!(colorset_text(&[]), "");
     }
 
     #[test]
@@ -306,7 +321,7 @@ mod tests {
     fn sections_carry_their_own_ranges_in_order() {
         let ev = crate::kit::levels::evaluate(&glass_design()).unwrap();
         let m = crate::kit::mesh::build_mesh(&ev).unwrap();
-        let obj = to_obj(&m, "note");
+        let obj = to_obj(&m, "note", "note.mtl");
         let solid_at = obj.find("usemtl Material.001\n").unwrap();
         let glass_at = obj.find("usemtl Transparent\n").unwrap();
         assert!(solid_at < glass_at);
@@ -323,7 +338,7 @@ mod tests {
         d.parts[0].material = Material::Glass;
         let ev = crate::kit::levels::evaluate(&d).unwrap();
         let m = crate::kit::mesh::build_mesh(&ev).unwrap();
-        let obj = to_obj(&m, "note");
+        let obj = to_obj(&m, "note", "note.mtl");
         assert!(!obj.contains("usemtl Material.001"));
         assert_eq!(obj.matches("usemtl Transparent\n").count(), 1);
     }

@@ -6,9 +6,11 @@
 //! a .rhs or .rhsd; `--save <file>` bakes the design on stdin into a .rhs
 //! like `kit_export` and prints {path}; `--points` reads a shape on stdin
 //! and prints it as freeform points like `kit_shape_to_points`; `--mesh`
-//! prints the baked note like `kit_mesh` (positions, indices, ranges).
-//! Errors print as {error}.
-//! Usage: kit_eval_json [--default | --load <file> | --save <file> | --points | --mesh] < design.json
+//! prints the baked note like `kit_mesh` (positions, indices, ranges);
+//! `--send <dir>` writes the design into `<dir>` as `kit_send_to_game`
+//! does into the game's data folder and prints the report
+//! ({folder, profile_created, message}). Errors print as {error}.
+//! Usage: kit_eval_json [--default | --load <file> | --save <file> | --points | --mesh | --send <dir>] < design.json
 
 use rhythia_render::kit::doc::{Design, Shape};
 use rhythia_render::kit::{
@@ -49,6 +51,21 @@ fn message(e: &KitError) -> String {
         }
         KitError::Scale(_) => "a part reaches too far from the centre".into(),
         KitError::Doc(m) | KitError::Invalid(m) => m.clone(),
+    }
+}
+
+/// The same sentences the desktop command shows for a failed send.
+fn send_error_text(e: rhythia_render::kit::game::SendError) -> String {
+    use rhythia_render::kit::game::SendError;
+    match e {
+        SendError::Design(k) => format!(
+            "Not sent, the skin would not load in the game: {}",
+            message(&k)
+        ),
+        SendError::Io { path, error } => format!("Could not write {}: {error}", path.display()),
+        SendError::DataPath(p) => format!(
+            "Not sent: the game's framework.json moves its data to {p}, which Send to game does not follow yet. Save the .rhs and import it once."
+        ),
     }
 }
 
@@ -152,6 +169,18 @@ fn main() {
         match save(args.get(1).expect("--save <file>"), &design) {
             Ok(v) => println!("{}", serde_json::to_string(&v).unwrap()),
             Err(e) => print_error(e),
+        }
+        return;
+    }
+    if args.first().map(String::as_str) == Some("--send") {
+        let dir = args.get(1).map(String::as_str).unwrap_or("");
+        if dir.is_empty() {
+            print_error("--send needs the game's data folder".into());
+            return;
+        }
+        match rhythia_render::kit::game::send_to_game(&design, std::path::Path::new(dir)) {
+            Ok(r) => println!("{}", serde_json::to_string(&r).unwrap()),
+            Err(e) => print_error(send_error_text(e)),
         }
         return;
     }

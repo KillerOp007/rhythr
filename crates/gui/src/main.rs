@@ -4692,7 +4692,7 @@ fn kit_skin_for(
         .map_err(|e| kit_commands::user_message(&e))?;
     let mesh =
         rhythia_render::kit::mesh::build_mesh(&ev).map_err(|e| kit_commands::user_message(&e))?;
-    let obj = rhythia_render::kit::export::to_obj(&mesh, "preview");
+    let obj = rhythia_render::kit::export::to_obj(&mesh, "preview", "note.mtl");
     let mut cfg = rhythia_render::config::SkinConfig {
         note_mesh: Some(obj.into_bytes()),
         ..Default::default()
