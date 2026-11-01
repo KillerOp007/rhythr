@@ -163,59 +163,50 @@ endorsed by Rhythia or Capo Games.
   where it goes and can read it first; it deliberately leaves out the
   player name and any path the window does not already show, so sending
   it gives away no more than a screenshot would.
-- **Note Designer** (button in the toolbar): design your own note skin
-  without any modelling tools. Start from sliders (shape, rounding,
-  hollow rim, depth), bend it with wave and twist modifiers (a wavy
-  circle is two sliders), or convert to points and drag the outline
-  freehand: with radial symmetry on, you edit one wedge and the rest
-  follows. Pick the colors the note cycles through, watch the preview
-  (rendered by the real renderer, so it is the truth), and save as a
-  `.rhs` pack that works in rhythr's Config slot and imports into the
-  game. The material file is always bundled, so exports from here never
-  trip the game's missing-mtl crash.
-- **Note Kit (beta)** (button next to the Note Designer): the next
-  designer, built from parts. Add discs, squares, polygons, stars, rings
-  and pills, move, scale and rotate them on the canvas, switch a part to
-  Cut to carve into the others, give each part its own Depth band so
-  the note gets real relief, and mark parts as Glass to draw them
-  translucent like the game does. SVG and Letter bring an SVG file or a
-  typed letter, digit or emoji (any installed font) in as parts of their
-  own: an SVG's strokes count as much as its fills (line icons work), and
-  every colour becomes a part of its own, a colour drawn on another
-  coming in as a Cut so a two-tone badge keeps its figure. Double-click
-  any part (or press To points in the inspector) to edit its outline
-  point by point: drag a point, click the outline to add one, double-click
-  a point to switch between smooth and corner, right-click or Delete
-  removes it, Esc finishes. The canvas shows exactly the outline
-  the export will have: a part keeps its size while you move it, and the
-  solid square is the note box, which never changes. Whatever a part puts
-  outside the box is cut off, nothing is ever rescaled. Parts at the same
-  depth merge into one flat surface, in the game too; give a part a higher
-  Front to make it stand out, and the canvas draws the lower parts darker
-  so you can see what lies above what. Save writes one
-  `.rhs` file: the skin for rhythr and the game, with your editable design
-  inside, so Open brings it straight back; a skin saved by the old Note
-  Designer opens here too and is converted. Import the saved file into
-  the game from a local folder. The previews
-  (still and gameplay loop through
-  the real renderer) start hidden; the Previews button or the P key
-  shows them, and the choice is remembered. 3D (or the 3 key) shows the
-  baked note turned, up to 60 degrees each way, so you can judge the
-  depth you are building: Shaded lights the faces so relief reads (the
-  game draws the note flat and shows relief only on the approach), Fade
-  draws it translucent like the approach fade. Designs autosave in the
-  window. "From old designer" brings your current Note Designer note in
-  as one part. Help (F1) lists every button, mouse action and key; the
-  same table is at the end of this section. Groups gather parts: a Cut
-  part inside a group carves only that group's Add parts, and a Cut group
-  carves everything outside it; the Group field of a part or a drop on a
-  group's row in the list puts it in, the group's row folds its parts
-  away. Effects sit on each part as switches: Waves ripple the outline
-  inward, Round softens corners, Rim keeps only the outline band; Mirror
-  reflects the part across the axes and Repeat turns copies around the
-  centre. Snap (next to the zoom button) pulls moves, sizes, turns and
-  points to a 0.05 grid and the box lines while the pointer is near one.
-  The Note Designer stays until the kit is complete.
+- **Note Designer** (button in the toolbar): design your own note from
+  parts, no modelling tools needed. Add discs, squares, polygons, stars,
+  rings and pills, move, scale and rotate them on the canvas, switch a
+  part to Cut to carve into the others, give each part its own Depth
+  band so the note gets real relief, and mark parts as Glass to draw
+  them translucent like the game does. Presets opens five finished
+  notes in the rim style (Target, Hex frame, Crosshair, Diamond frame,
+  Notched ring): one click replaces the note with it as plain parts,
+  asking first when there are unsaved changes. SVG and Letter bring an
+  SVG file or a typed letter, digit or emoji (any installed font) in as
+  parts of their own: an SVG's strokes count as much as its fills (line
+  icons work), and every colour becomes a part of its own, a colour
+  drawn on another coming in as a Cut so a two-tone badge keeps its
+  figure. Double-click any part (or press To points in the inspector)
+  to edit its outline point by point: drag a point, click the outline
+  to add one, double-click a point to switch between smooth and corner,
+  right-click or Delete removes it, Esc finishes. The canvas shows
+  exactly the outline the export will have: a part keeps its size while
+  you move it, and the solid square is the note box, which never
+  changes. Whatever a part puts outside the box is cut off, nothing is
+  ever rescaled. Parts at the same depth merge into one flat surface, in
+  the game too; give a part a higher Front to make it stand out, and the
+  canvas draws the lower parts darker so you can see what lies above
+  what. Groups gather parts: a Cut part inside a group carves only that
+  group's Add parts, and a Cut group carves everything outside it; the
+  Group field of a part or a drop on a group's row in the list puts it
+  in, the group's row folds its parts away. Effects sit on each part as
+  switches: Waves ripple the outline inward, Round softens corners, Rim
+  keeps only the outline band; Mirror reflects the part across the axes
+  and Repeat turns copies around the centre. Snap (next to the zoom
+  button) pulls moves, sizes, turns and points to a 0.05 grid and the
+  box lines while the pointer is near one. The previews (still and
+  gameplay loop through the real renderer) start hidden; the Previews
+  button or the P key shows them, and the choice is remembered. 3D (or
+  the 3 key) shows the baked note turned, up to 60 degrees each way, so
+  you can judge the depth you are building: Shaded lights the faces so
+  relief reads (the game draws the note flat and shows relief only on
+  the approach), Fade draws it translucent like the approach fade.
+  Designs autosave in the window. Save writes one `.rhs` file: the skin
+  for rhythr and the game, with your editable design inside, so Open
+  brings it straight back; a file saved by the older designer opens here
+  too and is converted. Send to game writes the note straight into the
+  game's own folders instead (see below). Help (F1) lists every button,
+  mouse action and key; the same table is at the end of this section.
 - **Hit sound choice**: under the Hit sounds slider, pick the game's
   default or one of its four alternative packs (Bass, Creamy, Pick,
   Vulnus), or choose your own audio file: anything your ffmpeg reads is
@@ -227,6 +218,18 @@ endorsed by Rhythia or Capo Games.
   broken or missing mesh falls back to the regular note look rather than
   failing the render: notably, rhythr does not care when a skin's `.mtl`
   file was not bundled, which the game itself currently crashes on.
+- **Testing a note in the game**: press Send to game in the Note
+  Designer. It writes the note into the game's data folder
+  (`%APPDATA%\CapoRhythia`, or the game's Proton prefix on Linux) as
+  the files `skins\notes\rhythr-kit.obj` and `.mtl` plus
+  `skins\colorsets\rhythr-kit.txt`, and once creates a profile named
+  `rhythr-kit`, a copy of your active profile with that note and
+  colorset. Pick that profile in the game's settings once; after every
+  later send, apply it again (switch to another profile and back) and
+  the new note loads. No import dialog, no file to find. If the folder
+  cannot be found the status says where it looked; if the game's
+  `framework.json` relocates its data, the kit does not follow and asks
+  for a manual import instead.
 - **Importing a skin into the game**: copy the `.rhs` file to any folder
   on a local drive, such as a subfolder of your user folder on C:, and
   import it from there. The game refuses to read a skin from a network
@@ -241,10 +244,10 @@ endorsed by Rhythia or Capo Games.
   usually means it is not the chart that was played; load the right one
   before doubting the run.
 
-### Note Kit controls
+### Note Designer controls
 
-The same table the kit shows under Help (F1): every button, mouse
-action and key of the Note Kit window.
+The same table the designer shows under Help (F1): every button, mouse
+action and key of the Note Designer window.
 
 **Toolbar**
 
@@ -258,11 +261,12 @@ action and key of the Note Kit window.
 | 3D | Show the note turned, to judge its depth (3). |
 | Help | This table (F1 or ?). |
 | New | Start a fresh note; asks first when there are unsaved changes. |
+| Presets | Five finished notes in the rim style (Target, Hex frame, Crosshair, Diamond frame, Notched ring): a click replaces the note with it as plain parts, asking first when there are unsaved changes. |
 | Open | Open a skin saved by rhythr's editors (.rhs) or a design file (.rhsd) (Ctrl+O). |
 | Recent | Reopen one of the last six files. |
 | Save .rhs | Write the one file that is the skin for rhythr and the game with your design inside (Ctrl+S). A design the kernel cannot build is not written; the status says why. |
 | Save as | Write to a new .rhs file (Ctrl+Shift+S). |
-| From old designer | Bring in the note from the old Note Designer's autosave. |
+| Send to game | Writes the note into the game's skin folders as the profile rhythr-kit: pick that profile once in the game's settings; after later sends apply it again. No import, no file dialog. |
 
 **Parts list**
 

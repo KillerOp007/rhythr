@@ -399,14 +399,22 @@ because the game could not load it.
    group's header folds its members as editor state; Snap is on by
    default (0.05 grid, the box lines, 15 degree steps within 3 degrees,
    a 6 px radius; Shift keeps its meanings). Testbuild kit7.
-4. Polish and acceptance: presets, reference underlay, user guide,
-   in-game probe round, removal of the v1 designer (imports as parts and
-   the one-file save landed early, in the Phase 2 test rounds). Release
-   candidate.
+4. Polish and acceptance (built 01.11., design document
+   `2026-11-01-note-kit-phase4-polish-design.md`): Send to game (the
+   note written into the game's data folder as the profile rhythr-kit),
+   five presets in the rim style, the removal of the v1 designer (the
+   kit is the Note Designer), the guide and changelog, the review polish
+   (imports as parts and the one-file save landed early, in the Phase 2
+   test rounds). The reference underlay was dropped by the owner. The
+   owner's probe round in the game and the release candidate 0.7.0
+   follow.
 
-## 9. Decisions still open for the owner
+## 9. Decisions (closed)
 
-- Depth range: keep [-2.0, 0.5] (the built-in cube's reach) or narrower.
-- Whether the v1 slider mode survives as a "quick shape" preset only,
-  or as a separate simple mode next to the kit.
-- The default of the new-part depth band ([-0.1, 0.1] proposed).
+- Depth range: [-2.0, 0.5] (the built-in cube's reach), decided 24.10.
+- The v1 slider mode survives only as the quick-shape buttons; the
+  migration turns an old design into one part with the same shape.
+- A new part spans [-0.1, 0.1].
+- 01.11.: no reference underlay, no Twist, no wedge editing with radial
+  symmetry; the v1 designer is removed entirely and the kit carries the
+  name Note Designer.
