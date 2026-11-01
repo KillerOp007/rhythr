@@ -3,7 +3,9 @@
 //! editor's own words.
 
 use rhythia_render::kit::doc::{Design, Shape};
+use rhythia_render::kit::game::{self, SendError, SendReport};
 use rhythia_render::kit::geom::Shapes;
+use rhythia_render::kit::presets::{presets, Preset};
 use rhythia_render::kit::{
     export, levels, mesh, migrate, points, validate, KitError, MAX_TRIANGLES,
 };
@@ -162,7 +164,9 @@ pub fn load_document(text: &str) -> Result<Loaded, String> {
         });
     }
     if value.get("P").is_none() {
-        return Err("not a design file: neither a kit design nor an old designer document".into());
+        return Err(
+            "not a design file: neither a current design nor one in the older format".into(),
+        );
     }
     let d = migrate::from_v1(text).map_err(|e| user_message(&e))?;
     let json = serde_json::to_string(&d).map_err(|e| e.to_string())?;
@@ -182,7 +186,7 @@ pub fn load_bytes(bytes: &[u8]) -> Result<Loaded, String> {
         let text = export::embedded_design(bytes)
             .map_err(|e| user_message(&e))?
             .ok_or_else(|| {
-                "this skin carries no editable design: only skins saved by rhythr's Note Kit or Note Designer open here"
+                "this skin carries no editable design: only skins saved by rhythr's Note Designer open here"
                     .to_string()
             })?;
         return load_document(&text);
@@ -222,6 +226,32 @@ fn join<T>(r: Result<Result<T, String>, tauri::Error>) -> Result<T, String> {
     r.map_err(|e| e.to_string())?
 }
 
+/// A failure of a designer action (save, open, import) with its code, so
+/// the status line and the diagnostics file can be searched for it. The
+/// live evaluate while editing is feedback, not a failure, and stays bare.
+fn designer_err(msg: String) -> String {
+    rhythia_errcode::stamp_in(rhythia_errcode::Area::Designer, &msg)
+}
+
+/// A failure of Send to game with its code.
+fn game_err(msg: String) -> String {
+    rhythia_errcode::stamp_in(rhythia_errcode::Area::Game, &msg)
+}
+
+/// One line about a design for the diagnostics report.
+fn design_summary(design: &Design, went: &str) -> String {
+    format!(
+        "{}: {} parts, {} groups, {went}",
+        design.name,
+        design.parts.len(),
+        design.groups.len()
+    )
+}
+
+fn remember_design(app: &crate::App, line: String) {
+    *app.last_design.lock().unwrap_or_else(|p| p.into_inner()) = Some(line);
+}
+
 #[tauri::command]
 pub async fn kit_evaluate(design: Design) -> Result<Evaluated, String> {
     join(tauri::async_runtime::spawn_blocking(move || evaluate_design(&design)).await)
@@ -238,16 +268,14 @@ pub fn kit_default_doc() -> Result<String, String> {
 }
 
 #[tauri::command]
-pub fn kit_migrate_v1(json: String) -> Result<String, String> {
-    load_document(&json).map(|l| l.json)
-}
-
-#[tauri::command]
 pub async fn kit_doc_load(path: String) -> Result<Loaded, String> {
     join(
         tauri::async_runtime::spawn_blocking(move || {
-            let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
-            load_bytes(&bytes)
+            let loaded: Result<Loaded, String> = (|| {
+                let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+                load_bytes(&bytes)
+            })();
+            loaded.map_err(designer_err)
         })
         .await,
     )
@@ -257,7 +285,7 @@ pub async fn kit_doc_load(path: String) -> Result<Loaded, String> {
 /// kernel thins the outline to the points that carry its form.
 #[tauri::command]
 pub fn kit_shape_to_points(shape: Shape) -> Result<Shape, String> {
-    points::to_points(&shape).map_err(|e| user_message(&e))
+    points::to_points(&shape).map_err(|e| designer_err(user_message(&e)))
 }
 
 /// The editor's Save: bakes the design into a skin archive at `path` with
@@ -265,13 +293,79 @@ pub fn kit_shape_to_points(shape: Shape) -> Result<Shape, String> {
 /// that opens again. A design that cannot be built is not written (the
 /// game could not load it), and the error says why.
 #[tauri::command]
-pub async fn kit_export(design: Design, path: String) -> Result<String, String> {
+pub async fn kit_export(
+    state: tauri::State<'_, crate::App>,
+    design: Design,
+    path: String,
+) -> Result<String, String> {
+    let app = state.inner().clone();
     join(
         tauri::async_runtime::spawn_blocking(move || {
             let name = skin_name_from(&path);
-            let bytes = export::export_rhs(&design, &name).map_err(|e| user_message(&e))?;
-            std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
+            let written: Result<(), String> = (|| {
+                let bytes = export::export_rhs(&design, &name).map_err(|e| user_message(&e))?;
+                std::fs::write(&path, bytes).map_err(|e| e.to_string())
+            })();
+            written.map_err(designer_err)?;
+            remember_design(&app, design_summary(&design, &format!("saved to {path}")));
             Ok(path)
+        })
+        .await,
+    )
+}
+
+/// The five presets, complete designs the window loads as documents.
+#[tauri::command]
+pub fn kit_presets() -> Vec<Preset> {
+    presets()
+}
+
+/// A failed send as one sentence for the status line: the kernel's
+/// refusal in the window's words, a write failure with its path, or the
+/// relocated data folder the kit does not follow.
+pub fn send_error_text(e: SendError) -> String {
+    match e {
+        SendError::Design(k) => format!(
+            "Not sent, the skin would not load in the game: {}",
+            user_message(&k)
+        ),
+        SendError::Io { path, error } => format!("Could not write {}: {error}", path.display()),
+        SendError::DataPath(p) => format!(
+            "Not sent: the game's framework.json moves its data to {p}, which Send to game does not follow yet. Save the .rhs and import it once."
+        ),
+    }
+}
+
+/// Writes the design into the game's data folder (see `kit::game`); the
+/// folder search and the writes run off the UI thread like `kit_export`.
+#[tauri::command]
+pub async fn kit_send_to_game(
+    state: tauri::State<'_, crate::App>,
+    design: Design,
+) -> Result<SendReport, String> {
+    let app = state.inner().clone();
+    join(
+        tauri::async_runtime::spawn_blocking(move || {
+            let dir = crate::game_data::game_data_dir()
+                .map_err(|tried| game_err(crate::game_data::not_found_text(&tried)))?;
+            let report = game::send_to_game(&design, &dir).map_err(|e| {
+                // A refused design is the designer's failure, everything
+                // else the game folder's.
+                let of_design = matches!(e, SendError::Design(_));
+                let text = send_error_text(e);
+                if of_design {
+                    designer_err(text)
+                } else {
+                    game_err(text)
+                }
+            })?;
+            *app.last_send.lock().unwrap_or_else(|p| p.into_inner()) =
+                Some((std::time::Instant::now(), report.message.clone()));
+            remember_design(
+                &app,
+                design_summary(&design, &format!("sent to {}", report.folder.display())),
+            );
+            Ok(report)
         })
         .await,
     )
@@ -288,6 +382,33 @@ mod tests {
     const OLD_DESIGNER_FIXTURE: &str = r##"{"P":{"shape":"ngon","n":6,"round":0.3,"hollow":true,
       "thick":0.22,"depth":0.05,"waves":5,"waveDepth":0.25,"waveform":"spike","twist":30},
       "free":null,"symmetry":4,"mirror":false,"colors":["#ff5d6c","#2fd6d0"],"imported":null}"##;
+
+    /// A skin archive with stored entries, enough for the kit's reader.
+    fn stored_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        use std::io::Write as _;
+        let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        for (name, bytes) in entries {
+            zw.start_file(*name, opts).unwrap();
+            zw.write_all(bytes).unwrap();
+        }
+        zw.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn send_errors_read_as_sentences() {
+        use rhythia_render::kit::game::SendError;
+        assert!(send_error_text(SendError::Design(KitError::Empty))
+            .starts_with("Not sent, the skin would not load in the game:"));
+        assert!(send_error_text(SendError::Io {
+            path: "x".into(),
+            error: "denied".into()
+        })
+        .starts_with("Could not write "));
+        assert!(send_error_text(SendError::DataPath("D:\\d".into()))
+            .starts_with("Not sent: the game's framework.json moves its data to "));
+    }
 
     #[test]
     fn the_default_note_evaluates_to_one_band() {
@@ -390,16 +511,13 @@ mod tests {
             design
         );
         // The old designer's skin carries its own document, which converts.
-        let square = vec![[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]];
-        let mesh = rhythia_render::designer::build_note_mesh(&square, None, 0.05).unwrap();
-        let colors = vec!["#ffffff".to_string()];
-        let old = rhythia_render::designer::export_rhs_with_design(
-            &mesh,
-            "old",
-            &colors,
-            Some(OLD_DESIGNER_FIXTURE),
-        )
-        .unwrap();
+        let obj = b"# old\nmtllib note.mtl\no old\nv 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n";
+        let old = stored_zip(&[
+            ("config", b"{}"),
+            ("noteSkin/old.obj", obj),
+            ("noteSkin/note.mtl", b"newmtl Material.001\n"),
+            ("rhythr/design.json", OLD_DESIGNER_FIXTURE.as_bytes()),
+        ]);
         let loaded = load_bytes(&old).unwrap();
         assert!(loaded.migrated);
         assert_eq!(
@@ -410,7 +528,11 @@ mod tests {
             1
         );
         // A plain game skin has nothing to edit.
-        let plain = rhythia_render::designer::export_rhs(&mesh, "plain", &colors).unwrap();
+        let plain = stored_zip(&[
+            ("config", b"{}"),
+            ("noteSkin/plain.obj", obj),
+            ("noteSkin/note.mtl", b"newmtl Material.001\n"),
+        ]);
         assert!(load_bytes(&plain)
             .unwrap_err()
             .starts_with("this skin carries no editable design"));

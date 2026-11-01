@@ -1,4 +1,4 @@
-// Browser harness for the Note Kit window: serves crates/gui/ui/ as the
+// Browser harness for the Note Designer window: serves crates/gui/ui/ as the
 // desktop app would and stands in for the Tauri IPC, so kit.html can be
 // driven in a plain browser (by hand or with Playwright) against the real
 // kernel. kit_evaluate, kit_doc_load, kit_export and kit_shape_to_points run
@@ -111,6 +111,8 @@ async function invoke(name, args) {
     }
     case "kit_default_doc":
       return await run(["--default"]);
+    case "kit_presets":
+      return JSON.parse(await run(["--presets"]));
     case "kit_preview":
       return PNG_1x1;
     case "kit_doc_load": {
@@ -123,13 +125,15 @@ async function invoke(name, args) {
       if (out.error) throw new Error(out.error);
       return out.path;
     }
-    case "designer_import_svg":
-      if (!fs.existsSync(args.path)) throw new Error(`not a readable SVG: ${args.path}`);
-      return SVG_OUTLINE;
     case "kit_import_svg":
       if (!fs.existsSync(args.path)) throw new Error(`not a readable SVG: ${args.path}`);
       if (path.basename(args.path).includes("badge")) return SVG_LAYERS_BADGE;
       return [{ contours: SVG_OUTLINE, mode: "add", paint: "#000000" }];
+    case "kit_send_to_game": {
+      const out = JSON.parse(await run(["--send", process.env.RHYTHR_GAME_DATA_DIR || ""], JSON.stringify(args.design)));
+      if (out.error) throw new Error(out.error);
+      return out;
+    }
     case "kit_mesh": {
       const out = JSON.parse(await run(["--mesh"], JSON.stringify(args.design)));
       if (out.error) throw new Error(out.error);
@@ -140,7 +144,7 @@ async function invoke(name, args) {
       if (out.error) throw new Error(out.error);
       return out;
     }
-    case "designer_import_glyph": {
+    case "kit_import_glyph": {
       const ch = String(args.ch || "").trim();
       if (!ch) throw new Error("type a character first");
       if (ch.startsWith("?")) throw new Error(`no installed font has an outline for '${ch}'`);

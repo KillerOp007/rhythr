@@ -19,8 +19,11 @@ const DISCRETE = new Set([
   "color-add", "color-remove", "color-reorder",
   "point-add", "point-remove", "point-smooth",
   "group", "group-add", "group-remove", "ungroup", "group-mode", "group-name",
-  "effect-waves", "effect-round", "effect-rim", "mirror", "repeat",
+  "effect-waves", "effect-round", "effect-rim", "mirror", "repeat", "waves.style",
 ]);
+// A label may carry the part id after a colon (`waves.style:p2`); the
+// discrete rule reads the part before it.
+const isDiscrete = (label) => DISCRETE.has(label) || DISCRETE.has(String(label).split(":")[0]);
 
 // A Points shape holds its first loop in `control` and the rest in `loops`;
 // the editor treats them as one list of loops.
@@ -161,7 +164,7 @@ export function createStore(design, opts = {}) {
       const before = snap();
       mutate(s.design);
       const t = now();
-      const merge = !DISCRETE.has(label) && label === s.last.label && t - s.last.at < COALESCE_MS;
+      const merge = !isDiscrete(label) && label === s.last.label && t - s.last.at < COALESCE_MS;
       if (!merge) {
         s.undo.push(before);
         if (s.undo.length > UNDO_LIMIT) s.undo.shift();
@@ -233,11 +236,17 @@ export function createStore(design, opts = {}) {
     // given its mode at once; more parts join from their inspector or by
     // a drop on the group's row.
     createGroup(partId, name) {
-      const id = api.nextGroupId();
-      const n = Number(id.slice(1));
+      let id = null;
       api.commit("group", (d) => {
         if (!d.parts.some((p) => p.id === partId)) return;
+        // Leave first: a sole member's old group dissolves here, and the
+        // new group takes the smallest id and name nobody uses after that.
         leaveGroup(d, partId);
+        const ids = new Set(d.groups.map((g) => g.id));
+        const names = new Set(d.groups.map((g) => g.name));
+        let n = 1;
+        while (ids.has(`g${n}`) || names.has(`Group ${n}`)) n++;
+        id = `g${n}`;
         d.groups.push({ id, name: String(name || "").trim() || `Group ${n}`, parts: [partId], mode: "add" });
         s.selectedGroup = id;
         s.selected = null;
@@ -461,6 +470,13 @@ export function createStore(design, opts = {}) {
       s.redo.length = 0;
       s.last = noLast();
       s.selected = topId(next);
+      // A loaded design (a file, a preset) may reuse the ids of the old one,
+      // so no editing state carries over: group selection, folds and point
+      // editing all belong to the design that is gone.
+      s.selectedGroup = null;
+      s.ui.pointEdit = null;
+      s.ui.pointSel = null;
+      s.ui.folded = [];
       emit();
     },
     setEvaluated(ev) {

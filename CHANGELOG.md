@@ -5,13 +5,21 @@ endorsed by Rhythia or Capo Games.
 
 ## Unreleased
 
-- **A note designer.** A new window (toolbar button) where an outline
-  becomes a note skin: shape sliders, wave/twist modifiers, freehand
-  point editing with radial symmetry, your own colorset, a preview
-  through the real renderer, and export as a `.rhs` pack usable in
-  rhythr and importable into the game. Exports always bundle their
-  material file, the thing whose absence crashes the game on other
-  people's mesh skins.
+- **A note designer.** A new window (toolbar button) where a note is
+  built from parts: discs, squares, polygons, stars, rings and pills,
+  SVG files and typed letters or emoji, each with its own depth band,
+  Add or Cut, Solid or Glass. Groups, effects (Waves, Round, Rim),
+  symmetry (Mirror, Repeat), snapping, point editing, a turned 3D view
+  and previews through the real renderer. Five presets in the rim style
+  open as editable notes. Save writes one `.rhs` that is both the skin
+  for rhythr and the game and the editable document; Send to game
+  writes the note straight into the game's own folders as the profile
+  `rhythr-kit`, so testing a change needs no import dialog. Exports
+  always bundle their material file, the thing whose absence crashes
+  the game on other people's mesh skins. Designer and game failures
+  carry codes (`RH-DSN`, `RH-GAM`) like the rest of the app, and the
+  diagnostics file shows what the designer finds in the game's folder,
+  with the next thing to try under every code.
 
 - **Pick your hit sound.** The game ships four alternative hit sounds
   next to the default (Bass, Creamy, Pick, Vulnus) and rhythr always used

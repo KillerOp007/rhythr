@@ -1,4 +1,4 @@
-// Headless scenario runner for the Note Kit window. It starts the browser
+// Headless scenario runner for the Note Designer window. It starts the browser
 // harness (harness.mjs, real kernel through the kit_eval_json example),
 // drives kit.html in headless Chrome through playwright-core and prints one
 // PASS or FAIL line per check, grouped by scenario. Not a unit test (no
@@ -31,6 +31,9 @@ const SHOTS = process.env.SHOTS || "";
 const URL_KIT = `http://127.0.0.1:${PORT}/kit.html`;
 const WORK = path.join(os.tmpdir(), "rhythr-kit-scenarios");
 const HARNESS_WORK = path.join(os.tmpdir(), "rhythr-kit-harness");
+// A stand-in for the game's data folder; the harness child inherits it.
+const GAME_DIR = path.join(WORK, "game");
+process.env.RHYTHR_GAME_DATA_DIR = GAME_DIR;
 
 if (!fs.existsSync(BIN)) {
   console.error(`missing ${BIN}: run cargo build -p rhythia-render --example kit_eval_json first`);
@@ -140,6 +143,11 @@ function writeFixtures() {
   fs.writeFileSync(path.join(WORK, "badge.svg"), "<svg/>");
   fs.writeFileSync(path.join(WORK, "cloud.svg"), "<svg/>");
   for (const f of ["s1.rhs", "s2.rhs", "s3.rhs", "r4.rhs"]) fs.rmSync(path.join(HARNESS_WORK, f), { force: true });
+  // The game folder: framework.json names the active profile, which has a
+  // few of the game's keys so the copy can be checked key by key.
+  fs.mkdirSync(GAME_DIR, { recursive: true });
+  fs.writeFileSync(path.join(GAME_DIR, "framework.json"), '{"CurrentGameProfile":{"Value":"p1.json"},"DataPath":{"Value":""}}');
+  fs.writeFileSync(path.join(GAME_DIR, "p1.json"), '{"ApproachRate":{"Value":3.25},"NoteSkin":{"Value":"x"},"ColorSet":{"Value":"y"},"FpsCap":{"Value":360}}');
 }
 
 // ---- harness lifecycle
@@ -308,11 +316,20 @@ async function files({ page, h }) {
   let s = await S();
   const tb = await page.evaluate(() => ({
     exportGone: !document.getElementById("kt-export"),
+    importOldGone: !document.getElementById("kt-import-old"),
     save: document.getElementById("kt-save").textContent,
     saveGhost: document.getElementById("kt-save").classList.contains("ghost"),
     hint: document.getElementById("kt-canvas-hint").textContent.includes("one .rhs file"),
+    // Six labelled groups in order, one button style, the game button filled.
+    labels: [...document.querySelectorAll("#kt-toolbar .group .label")].map((l) => l.textContent).join("|"),
+    ghosts: document.querySelectorAll("#kt-toolbar .btn.ghost").length,
+    sendFilled: getComputedStyle(document.getElementById("kt-send")).backgroundColor !== "rgba(0, 0, 0, 0)",
+    sendGroup: Boolean(document.querySelector("#kt-toolbar .group.game #kt-send")),
+    // The toolbar wraps at this width; a separator drawn by DOM adjacency
+    // would start the second row with a stray line, so there are none.
+    borders: [...document.querySelectorAll("#kt-toolbar .group")].filter((g) => getComputedStyle(g).borderLeftWidth !== "0px").length,
   }));
-  check("toolbar", tb.exportGone && tb.save === "Save .rhs" && !tb.saveGhost && s.scrollW <= 1100 && tb.hint, JSON.stringify(tb));
+  check("toolbar", tb.exportGone && tb.importOldGone && tb.save === "Save .rhs" && !tb.saveGhost && s.scrollW <= 1100 && tb.hint && tb.labels === "Add|Import|Edit|View|File|Game" && tb.ghosts === 0 && tb.sendFilled && tb.sendGroup && tb.borders === 0, JSON.stringify(tb));
 
   await dlg({ save: `${HARNESS_WORK}/s1.rhs` });
   await keys("Control+s");
@@ -346,7 +363,7 @@ async function files({ page, h }) {
   await click("kt-load");
   await settle();
   s = await S();
-  check("old designer skin converts without a path", s.parts.length === 1 && s.parts[0].kind === "polygon" && s.path === null && s.status.includes("converted from the old designer") && s.status.includes("new .rhs file"), `${s.status} | ${JSON.stringify(s.parts.map((p) => p.kind))}`);
+  check("old designer skin converts without a path", s.parts.length === 1 && s.parts[0].kind === "polygon" && s.path === null && s.status.includes("converted from an older design format") && s.status.includes("new .rhs file"), `${s.status} | ${JSON.stringify(s.parts.map((p) => p.kind))}`);
   await keys("Control+s");
   await settle();
   s = await S();
@@ -361,7 +378,7 @@ async function files({ page, h }) {
   await click("kt-load");
   await settle();
   s = await S();
-  check("old rhsd converts", s.parts.length === 1 && s.parts[0].kind === "circle" && s.path === null && s.status.includes("converted from the old designer: old.rhsd"), s.status);
+  check("old rhsd converts", s.parts.length === 1 && s.parts[0].kind === "circle" && s.path === null && s.status.includes("converted from an older design format: old.rhsd"), s.status);
 
   await dlg({ open: `${WORK}/plain.rhs` });
   await click("kt-load");
@@ -737,15 +754,28 @@ async function groups({ page, h }) {
 
   const serialBefore = await page.evaluate(() => window.kitStore.serialize());
   const undoBefore = s.undo;
+  const evalBefore = s.calls.filter((c) => c === "kit_evaluate").length;
   await page.click("#kt-parts .kt-group .fold");
   await settle();
   s = await S();
   const serialAfter = await page.evaluate(() => window.kitStore.serialize());
-  check("folding hides the members and changes nothing", s.folded.join() === "g1" && s.rows.length === 2 && !s.rows.some((r) => r.member) && serialAfter === serialBefore && s.undo === undoBefore, JSON.stringify(s.rows));
+  const evalAfter = s.calls.filter((c) => c === "kit_evaluate").length;
+  check("folding hides the members and changes nothing", s.folded.join() === "g1" && s.rows.length === 2 && !s.rows.some((r) => r.member) && serialAfter === serialBefore && s.undo === undoBefore && evalAfter === evalBefore, JSON.stringify({ rows: s.rows, evalBefore, evalAfter }));
   await page.click("#kt-parts .kt-group .fold");
   await settle();
   s = await S();
   check("unfold brings them back", s.folded.length === 0 && s.rows.length === 4);
+  // A member selected inside a folded group: its header carries the mark.
+  await h.store(`s.select("p3")`);
+  await page.click("#kt-parts .kt-group .fold");
+  await settle();
+  const markedFolded = await page.evaluate(() => document.querySelector("#kt-parts .kt-group").classList.contains("has-selected"));
+  await page.click("#kt-parts .kt-group .fold");
+  await settle();
+  const markedOpen = await page.evaluate(() => document.querySelector("#kt-parts .kt-group").classList.contains("has-selected"));
+  check("a folded header marks its selected member", markedFolded && !markedOpen, JSON.stringify({ markedFolded, markedOpen }));
+  await h.store(`s.selectGroup("g1")`);
+  await settle();
 
   await page.click('[data-role="leave"]');
   await settle();
@@ -781,6 +811,18 @@ async function effects({ page, h }) {
   await settle();
   s = await S();
   check("count follows the slider in one step", s.parts[1].effects.waves.count === 8 && s.undo === undo0 + 2);
+  const depthMax = await page.evaluate(() => {
+    const f = [...document.querySelectorAll("#kt-inspector-body .kt-field")].find((x) => x.querySelector("label") && x.querySelector("label").textContent === "Depth");
+    const r = f && f.querySelector('input[type="range"]');
+    return r ? r.max : null;
+  });
+  check("the depth slider reaches the kernel's limit", depthMax === "0.95", String(depthMax));
+  check("the style pick", await clickSeg("Style", "Spike"));
+  await settle();
+  check("the second style pick", await clickSeg("Style", "Pulse"));
+  await settle();
+  s = await S();
+  check("style picks are separate undo steps", s.parts[1].effects.waves.style === "pulse" && s.undo === undo0 + 4, JSON.stringify({ undo: s.undo, undo0 }));
   await page.click('[data-role="chip-round"]');
   await settle();
   s = await S();
@@ -889,7 +931,118 @@ async function snap({ page, h }) {
   check("snap back on", s.snap === true && s.snapBtnOn);
 }
 
-const GROUPS = { files, imports, points, depth, turntable, help, groups, effects, snap };
+async function send({ page, h }) {
+  const { check, settle, S, click } = h;
+  const objPath = path.join(GAME_DIR, "skins", "notes", "rhythr-kit.obj");
+  const mtlPath = path.join(GAME_DIR, "skins", "notes", "rhythr-kit.mtl");
+  const csPath = path.join(GAME_DIR, "skins", "colorsets", "rhythr-kit.txt");
+  const profilePath = path.join(GAME_DIR, "rhythr-kit.json");
+  await click("kt-send");
+  await settle();
+  let s = await S();
+  const obj = fs.existsSync(objPath) ? fs.readFileSync(objPath, "utf8") : "";
+  const profile = fs.existsSync(profilePath) ? JSON.parse(fs.readFileSync(profilePath, "utf8")) : null;
+  check(
+    "first send creates files and profile",
+    s.status.startsWith("Sent to the game: ") && s.status.includes("Pick the profile rhythr-kit") && !s.err && obj.split("\n")[1] === "mtllib rhythr-kit.mtl" && fs.existsSync(mtlPath) && fs.existsSync(csPath) && profile !== null && String(profile.NoteSkin.Value).endsWith("rhythr-kit.obj") && String(profile.ColorSet.Value).endsWith("rhythr-kit.txt") && profile.ApproachRate.Value === 3.25 && profile.FpsCap.Value === 360,
+    `${s.status} | ${obj.split("\n")[1]} | ${JSON.stringify(profile)}`,
+  );
+  const before = fs.readFileSync(profilePath, "utf8");
+  await click("kt-send");
+  await settle();
+  s = await S();
+  check("second send leaves the profile alone", s.status.startsWith("Sent to the game. Restart the game to load the new note") && fs.readFileSync(profilePath, "utf8") === before, s.status);
+  check("the document is untouched", s.path === null && s.dirty === false, JSON.stringify({ path: s.path, dirty: s.dirty }));
+  const mtime = fs.statSync(objPath).mtimeMs;
+  await h.store(`s.updatePart("p1", "visible", (p) => (p.visible = false))`);
+  await settle();
+  await click("kt-send");
+  await settle();
+  s = await S();
+  check("a refused design is not sent", s.err && s.status.startsWith("Not sent, the skin would not load in the game") && fs.statSync(objPath).mtimeMs === mtime, s.status);
+}
+
+async function presets({ page, h }) {
+  const { check, settle, S, dlg, click, keys } = h;
+  const panelHidden = () => page.evaluate(() => document.getElementById("kt-presets-panel").hidden);
+  const openPanel = async () => {
+    await click("kt-presets");
+    await page.waitForSelector("#kt-presets-panel .kt-preset");
+    await settle(200);
+  };
+  const pick = async (id) => {
+    await page.click(`#kt-presets-panel .kt-preset[data-id="${id}"]`);
+    await settle();
+  };
+  await openPanel();
+  const tiles = await page.evaluate(() => [...document.querySelectorAll("#kt-presets-panel .kt-preset span")].map((el) => el.textContent));
+  check("the panel lists five tiles in order", tiles.join("|") === "Target|Hex frame|Crosshair|Diamond frame|Notched ring", tiles.join("|"));
+  // In a wide window the toolbar is one row and the Presets button sits far
+  // right; the panel must not run past the window's edge (the fifth tile
+  // was cut off on the owner's screen).
+  await keys("Escape");
+  await page.setViewportSize({ width: 1700, height: 760 });
+  await settle(200);
+  await openPanel();
+  const box = await page.evaluate(() => {
+    const r = document.getElementById("kt-presets-panel").getBoundingClientRect();
+    const b = document.getElementById("kt-presets").getBoundingClientRect();
+    return { left: Math.round(r.left), right: Math.round(r.right), width: Math.round(r.width), button: Math.round(b.left), innerWidth: window.innerWidth };
+  });
+  check("the panel stays inside the window", box.button > 900 && box.right <= box.innerWidth && box.left >= 0 && box.width > 300, JSON.stringify(box));
+  await keys("Escape");
+  await page.setViewportSize({ width: 1100, height: 760 });
+  await settle(200);
+  await openPanel();
+  await page.waitForTimeout(600);
+  const drawn = await page.evaluate(() =>
+    [...document.querySelectorAll("#kt-presets-panel canvas")].map((c) => {
+      const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+      let n = 0;
+      for (let i = 3; i < d.length; i += 4) if (d[i] > 0) n++;
+      return n;
+    }),
+  );
+  check("thumbnails are drawn", drawn.length === 5 && drawn.every((n) => n > 200), JSON.stringify(drawn));
+  await pick("target");
+  let s = await S();
+  const name = await page.evaluate(() => window.kitStore.state.design.name);
+  check(
+    "a preset replaces a clean note",
+    s.parts.map((p) => p.name).join() === "Outer ring,Inner ring,Dot" && s.path === null && s.dirty === false && name === "Target" && s.status.startsWith("Preset Target: 3 parts") && (await panelHidden()),
+    `${s.status} | ${s.parts.map((p) => p.name).join()}`,
+  );
+  await h.store(`s.updatePart("p1", "move", (p) => (p.transform.x = 0.2))`);
+  await settle();
+  await dlg({ ask: false });
+  await openPanel();
+  await pick("hex-frame");
+  s = await S();
+  check("a dirty note asks first", s.parts.length === 3 && s.dirty === true, JSON.stringify({ parts: s.parts.length, dirty: s.dirty }));
+  await dlg({ ask: true });
+  await openPanel();
+  await pick("hex-frame");
+  s = await S();
+  check("after Discard the preset loads", s.parts.length === 2 && s.parts[0].name === "Frame" && s.dirty === false, s.parts.map((p) => p.name).join());
+  await openPanel();
+  const openBefore = !(await panelHidden());
+  await keys("Escape");
+  const closedByEsc = await panelHidden();
+  check("escape closes the panel", openBefore && closedByEsc && (await S()).selected !== null, JSON.stringify({ openBefore, closedByEsc }));
+  await openPanel();
+  await page.mouse.click(600, 700);
+  await settle(100);
+  check("an outside click closes the panel", await panelHidden());
+  await page.click('[data-role="to-points"]');
+  await settle();
+  const editing = (await S()).pointEdit;
+  await openPanel();
+  await pick("crosshair");
+  s = await S();
+  check("a preset picked during point editing ends it", editing !== null && s.pointEdit === null && s.parts.length === 3 && s.parts[1].name === "Ticks", JSON.stringify({ editing, after: s.pointEdit }));
+}
+
+const GROUPS = { files, imports, points, depth, turntable, help, groups, effects, snap, send, presets };
 
 // ---- main
 

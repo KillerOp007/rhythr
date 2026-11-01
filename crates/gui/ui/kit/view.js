@@ -15,12 +15,11 @@
 // smooth and corner, right-click removes, a click elsewhere finishes.
 import {
   makeView, unit, toPx, toWorld, zoomAt, partRect, rectCorners, rectContains, handleAt, scaleFrom, angleFrom, HITBOX,
-  unitToWorld, worldToUnit, nearestPoint, nearestSegment, snapUnit, depthShade,
+  unitToWorld, worldToUnit, nearestPoint, nearestSegment, snapUnit, depthShade, GLASS_ALPHA,
   snapValue, snapPosition, snapSize, snapAngle, snapTolerance,
 } from "./view-math.js";
 import { loopsOf } from "./store.js";
 
-const GLASS_ALPHA = 0.57;
 const HANDLE_PX = 7;
 const ROTATE_PX = 24;
 const POINT_PX = 9;

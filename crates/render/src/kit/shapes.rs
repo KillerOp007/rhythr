@@ -2,9 +2,9 @@
 //! and rounding have points to work with) and counterclockwise; imports
 //! pass through as stored.
 
-use crate::designer::flatten_controls;
 use crate::kit::doc::Shape;
 use crate::kit::geom::Contour;
+use crate::kit::v1::flatten_controls;
 use std::f32::consts::{PI, TAU};
 
 const SAMPLES: usize = 256;
@@ -245,7 +245,7 @@ mod tests {
 
     #[test]
     fn points_flatten_through_the_spline_and_contours_pass_through() {
-        let ctrl = |x: f32, y: f32| crate::designer::ControlPoint { x, y, smooth: true };
+        let ctrl = |x: f32, y: f32| crate::kit::v1::ControlPoint { x, y, smooth: true };
         let pts = base_contours(&Shape::Points {
             control: vec![
                 ctrl(-1.0, -1.0),

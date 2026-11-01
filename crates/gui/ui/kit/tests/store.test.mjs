@@ -26,6 +26,24 @@ test("a_drag_is_one_undo_step", () => {
   assert.equal(s.part("p1").transform.rotation, 10);
 });
 
+test("load_resets_the_editing_state", () => {
+  const s = createStore(design());
+  s.addPart("square");
+  s.createGroup("p2", "Badge");
+  s.toggleFold("g1");
+  s.selectGroup("g1");
+  s.setPointEdit("p1");
+  s.selectPoint({ loop: 0, index: 0 });
+  // A preset reuses the ids p1 to p3, so nothing of the old editing state
+  // may carry over into the new design.
+  s.load(design(), null);
+  assert.equal(s.state.ui.pointEdit, null);
+  assert.equal(s.state.ui.pointSel, null);
+  assert.equal(s.state.selectedGroup, null);
+  assert.deepEqual(s.state.ui.folded, []);
+  assert.equal(s.state.selected, "p1");
+});
+
 test("add_duplicate_remove_keep_ids_unique_and_selection_valid", () => {
   const s = createStore(design());
   const id = s.addPart("star");
@@ -218,6 +236,14 @@ test("toggles_never_merge", () => {
     s.commit(label, (d) => (d.name = "b"));
     assert.equal(s.state.undo.length, 2, `${label} merged`);
   }
+  // Chips, symmetry picks and the waves style pick carry the part id and
+  // are still discrete: two picks, two steps.
+  for (const label of ["effect-waves", "effect-round", "effect-rim", "mirror", "repeat", "waves.style:p1", "mirror:p1", "repeat:p1", "group", "ungroup"]) {
+    const s = createStore(design(), { now: () => 1000 });
+    s.commit(label, (d) => (d.name = "a"));
+    s.commit(label, (d) => (d.name = "b"));
+    assert.equal(s.state.undo.length, 2, `${label} merged`);
+  }
   // A picker drag is one gesture: same label, one step.
   let t = 1000;
   const s = createStore(design(), { now: () => t });
@@ -312,6 +338,21 @@ test("folding_is_editor_state_only", () => {
   s.toggleFold("g1");
   assert.deepEqual(s.state.ui.folded, []);
   assert.equal(s.state.ui.snap, true, "snapping starts on");
+});
+
+test("a_new_group_takes_the_smallest_free_name", () => {
+  const s = createStore(fourParts());
+  assert.equal(s.createGroup("p1"), "g1");
+  assert.equal(s.state.design.groups[0].name, "Group 1");
+  // The sole member regrouped: g1 dissolves with the move, so the new
+  // group is Group 1 again, not Group 2.
+  assert.equal(s.createGroup("p1"), "g1");
+  assert.deepEqual(s.state.design.groups.map((g) => g.name), ["Group 1"]);
+  assert.equal(s.createGroup("p2"), "g2");
+  assert.equal(s.state.design.groups[1].name, "Group 2");
+  s.ungroup("g1");
+  assert.equal(s.createGroup("p3"), "g1");
+  assert.deepEqual(s.state.design.groups.map((g) => g.name).sort(), ["Group 1", "Group 2"]);
 });
 
 test("list_rows_put_a_group_header_after_its_top_member_and_fold_hides_members", () => {

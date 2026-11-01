@@ -54,6 +54,15 @@ const KIND_LABELS = { circle: "Disc", square: "Square", polygon: "Polygon", star
 export const POINT_HELP = "Drag a point, click the outline to add one, double-click a point to switch smooth and corner, right-click or Delete removes it, Esc or a click elsewhere finishes.";
 
 export const EFFECT_DEFAULTS = { waves: { count: 6, depth: 0.15, style: "sine" }, round: 0.1, rim: 0.15 };
+// The kernel clamps a wave depth at 0.95; the slider reaches it, so a
+// migrated v1 depth never sits past the slider's end.
+export const WAVES_DEPTH_MAX = 0.95;
+
+// A folded group hides its members, so a selected member shows on the
+// header instead; an open group shows the member row itself.
+export function headerHasSelected(group, folded, selected) {
+  return Boolean(folded && selected && group.parts.includes(selected));
+}
 export const REPEAT_MAX = 12;
 
 // The Repeat field: below two copies there is nothing to repeat, so the
@@ -258,6 +267,7 @@ function renderParts(store) {
       if (!g) continue;
       const folded = s.ui.folded.includes(g.id);
       r.row.classList.toggle("selected", g.id === s.selectedGroup);
+      r.row.classList.toggle("has-selected", headerHasSelected(g, folded, s.selected));
       setText(r.fold, folded ? "▸" : "▾");
       r.fold.setAttribute("title", folded ? "Show the group's parts" : "Hide the group's parts");
       setText(r.name, g.name);
@@ -417,7 +427,7 @@ function buildInspector(store, body, p, actions) {
   };
   chip("waves", "Waves", [
     slider(p, "Count", (q) => q.effects.waves?.count ?? 6, 2, 16, 1, (v) => up(`waves.count:${id}`, (x) => { if (x.effects.waves) x.effects.waves.count = v; })),
-    slider(p, "Depth", (q) => q.effects.waves?.depth ?? 0.15, 0.02, 0.6, 0.01, (v) => up(`waves.depth:${id}`, (x) => { if (x.effects.waves) x.effects.waves.depth = v; })),
+    slider(p, "Depth", (q) => q.effects.waves?.depth ?? 0.15, 0.02, WAVES_DEPTH_MAX, 0.01, (v) => up(`waves.depth:${id}`, (x) => { if (x.effects.waves) x.effects.waves.depth = v; })),
     segmented(p, "Style", [["sine", "Sine"], ["spike", "Spike"], ["pulse", "Pulse"]], (q) => q.effects.waves?.style ?? "sine",
       (v) => { if (get()?.effects.waves?.style !== v) up(`waves.style:${id}`, (x) => { if (x.effects.waves) x.effects.waves.style = v; }); }),
   ]);
@@ -592,5 +602,5 @@ export function render(store, actions = {}) {
   $("kt-undo").disabled = s.undo.length === 0;
   $("kt-redo").disabled = s.redo.length === 0;
   $("kt-previews").classList.toggle("on", s.ui.previews);
-  document.title = `rhythr · Note Kit${s.dirty ? " *" : ""}${s.path ? ` · ${s.path.split(/[\\/]/).pop()}` : ""}`;
+  document.title = `rhythr · Note Designer${s.dirty ? " *" : ""}${s.path ? ` · ${s.path.split(/[\\/]/).pop()}` : ""}`;
 }

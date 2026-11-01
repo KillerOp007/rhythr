@@ -1,0 +1,99 @@
+{
+ "version": 2,
+ "name": "Target",
+ "colors": [
+  "#ffffff",
+  "#a2e0ff",
+  "#a2e0ff"
+ ],
+ "parts": [
+  {
+   "id": "p1",
+   "name": "Outer ring",
+   "visible": true,
+   "locked": false,
+   "shape": {
+    "kind": "circle"
+   },
+   "transform": {
+    "x": 0.0,
+    "y": 0.0,
+    "w": 1.0,
+    "h": 1.0,
+    "rotation": 0.0
+   },
+   "mode": "add",
+   "depth": {
+    "front": 0.1,
+    "back": -0.1
+   },
+   "material": "solid",
+   "effects": {
+    "waves": null,
+    "round": null,
+    "rim": 0.15,
+    "mirror": "none",
+    "repeat": null
+   }
+  },
+  {
+   "id": "p2",
+   "name": "Inner ring",
+   "visible": true,
+   "locked": false,
+   "shape": {
+    "kind": "circle"
+   },
+   "transform": {
+    "x": 0.0,
+    "y": 0.0,
+    "w": 0.56,
+    "h": 0.56,
+    "rotation": 0.0
+   },
+   "mode": "add",
+   "depth": {
+    "front": 0.0,
+    "back": -0.2
+   },
+   "material": "solid",
+   "effects": {
+    "waves": null,
+    "round": null,
+    "rim": 0.14,
+    "mirror": "none",
+    "repeat": null
+   }
+  },
+  {
+   "id": "p3",
+   "name": "Dot",
+   "visible": true,
+   "locked": false,
+   "shape": {
+    "kind": "circle"
+   },
+   "transform": {
+    "x": 0.0,
+    "y": 0.0,
+    "w": 0.16,
+    "h": 0.16,
+    "rotation": 0.0
+   },
+   "mode": "add",
+   "depth": {
+    "front": 0.1,
+    "back": -0.1
+   },
+   "material": "glass",
+   "effects": {
+    "waves": null,
+    "round": null,
+    "rim": null,
+    "mirror": "none",
+    "repeat": null
+   }
+  }
+ ],
+ "groups": []
+}

@@ -99,8 +99,8 @@ runtime log of 24.10. and the method names in the game binary.
 - The note mesh is uploaded to the GPU at game start and in the second a
   profile is imported or applied. A map start uploads nothing. So a
   changed file on disk shows after the profile is applied again, not
-  before. Whether re-selecting the same profile counts as applying is
-  unknown; the probe round answers it (section 8).
+  before. The owner's probe round (01.11.) confirmed it: a resent file
+  loads after a restart of the game, with the profile left selected.
 
 ## 4. Send to game
 
@@ -166,9 +166,10 @@ The status line on failure lists the candidates that were tried.
 - First send, profile created: "Sent to the game: <data folder>. Pick the
   profile rhythr-kit in the game's settings." The folder is named once,
   so a wrong target is visible instead of silent.
-- Later sends: "Sent to the game. Apply the profile rhythr-kit again
-  (switch away and back) to load it." The exact instruction follows the
-  probe round's finding on reloading.
+- Later sends: "Sent to the game. Restart the game to load the new note;
+  the profile rhythr-kit stays selected." (The owner's probe round of
+  01.11. found that a restart loads the resent file with the profile
+  left selected.)
 - Relocated data folder: "Not sent: the game's framework.json moves its
   data to <DataPath>, which Send to game does not follow yet. Save the
   .rhs and import it once."

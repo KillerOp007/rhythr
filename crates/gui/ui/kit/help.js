@@ -1,5 +1,5 @@
 // crates/gui/ui/kit/help.js
-// Every control of the Note Kit window in one table, shown by the Help
+// Every control of the Note Designer window in one table, shown by the Help
 // button (F1): what each button, mouse action and key does. The same table
 // is in docs/USER-GUIDE.md; keep the two in step.
 
@@ -15,11 +15,12 @@ export const HELP = [
       ["3D", "Show the note turned, to judge its depth (3)."],
       ["Help", "This table (F1 or ?)."],
       ["New", "Start a fresh note; asks first when there are unsaved changes."],
+      ["Presets", "Five finished notes in the rim style (Target, Hex frame, Crosshair, Diamond frame, Notched ring): a click replaces the note with it as plain parts, asking first when there are unsaved changes."],
       ["Open", "Open a skin saved by rhythr's editors (.rhs) or a design file (.rhsd) (Ctrl+O)."],
       ["Recent", "Reopen one of the last six files."],
       ["Save .rhs", "Write the one file that is the skin for rhythr and the game with your design inside (Ctrl+S). A design the kernel cannot build is not written; the status says why."],
       ["Save as", "Write to a new .rhs file (Ctrl+Shift+S)."],
-      ["From old designer", "Bring in the note from the old Note Designer's autosave."],
+      ["Send to game", "Writes the note into the game's skin folders as the profile rhythr-kit: pick that profile once in the game's settings; after later sends restart the game, the profile stays selected. No import, no file dialog."],
     ],
   },
   {

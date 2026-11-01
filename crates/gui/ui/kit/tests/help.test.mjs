@@ -31,6 +31,19 @@ test("the_table_covers_groups_effects_and_snapping", () => {
   }
 });
 
+test("the_toolbar_names_the_phase_4_buttons", () => {
+  const toolbar = HELP.find((s) => s.title === "Toolbar").rows;
+  const send = toolbar.find((r) => r[0] === "Send to game");
+  assert.ok(send, "Send to game row");
+  assert.ok(send[1].includes("rhythr-kit"), send && send[1]);
+  const presets = toolbar.find((r) => r[0] === "Presets");
+  assert.ok(presets, "Presets row");
+  assert.equal(toolbar.find((r) => r[0] === "From old designer"), undefined, "the v1 import row is gone");
+  for (const name of ["Target", "Hex frame", "Crosshair", "Diamond frame", "Notched ring"]) {
+    assert.ok(presets[1].includes(name), `Presets row names ${name}`);
+  }
+});
+
 test("the_markdown_mirrors_the_sections", () => {
   const md = helpMarkdown();
   assert.ok(md.includes("**Toolbar**"));

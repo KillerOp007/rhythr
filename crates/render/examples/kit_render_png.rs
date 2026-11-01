@@ -16,7 +16,7 @@ fn main() {
     let design: rhythia_render::kit::doc::Design = serde_json::from_str(&json).unwrap();
     let ev = rhythia_render::kit::levels::evaluate(&design).unwrap();
     let mesh = rhythia_render::kit::mesh::build_mesh(&ev).unwrap();
-    let obj = rhythia_render::kit::export::to_obj(&mesh, "preview");
+    let obj = rhythia_render::kit::export::to_obj(&mesh, "preview", "note.mtl");
     let cfg = rhythia_render::config::SkinConfig {
         note_mesh: Some(obj.into_bytes()),
         colorset: rhythia_render::config::parse_colorset(&design.colors.join("\n")),

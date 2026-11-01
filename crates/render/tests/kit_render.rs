@@ -32,7 +32,7 @@ fn glass_inlay_renders_at_the_game_alpha() {
     let design = ring_with_glass_inlay();
     let mesh = build_mesh(&evaluate(&design).unwrap()).unwrap();
     let cfg = rhythia_render::config::SkinConfig {
-        note_mesh: Some(to_obj(&mesh, "t").into_bytes()),
+        note_mesh: Some(to_obj(&mesh, "t", "note.mtl").into_bytes()),
         colorset: rhythia_render::config::parse_colorset("#ff0000"),
         camera_fov: 34.0,
         cursor_opacity: 0.0,

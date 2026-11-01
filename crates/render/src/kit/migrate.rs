@@ -2,10 +2,10 @@
 //! designs: one Add part carrying the same shape, effects and symmetry,
 //! so nothing anyone saved is lost.
 
-use crate::designer::ControlPoint;
 use crate::kit::doc::*;
 use crate::kit::geom::extent;
 use crate::kit::resolve::{resolve_part, MAX_REPEAT};
+use crate::kit::v1::ControlPoint;
 use crate::kit::KitError;
 
 /// One stored v1 freeform point, read in f64 as the editor held it.
@@ -336,8 +336,9 @@ mod tests {
     fn a_v1_design_is_fitted_to_the_box_once() {
         // The wedge's points reach 0.3; v1 showed the loop filling the
         // box, so the migrated part is sized to do the same. A slider
-        // shape with waves reached past the box in v1 and was shrunk to
-        // it; the part is sized down the same way.
+        // shape with waves is fitted the same way: the kit's waves run
+        // inward (crest on the outline), so the fitted part's outline
+        // meets the box exactly.
         let d = from_v1(WEDGE).unwrap();
         let p = &d.parts[0];
         assert!(

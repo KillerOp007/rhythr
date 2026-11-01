@@ -6,14 +6,17 @@
 
 pub mod doc;
 pub mod export;
+pub mod game;
 pub mod geom;
 pub mod import;
 pub mod levels;
 pub mod mesh;
 pub mod migrate;
 pub mod points;
+pub mod presets;
 pub mod resolve;
 pub mod shapes;
+pub mod v1;
 pub mod validate;
 
 pub use doc::*;

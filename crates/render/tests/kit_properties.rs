@@ -228,7 +228,7 @@ proptest! {
                 let cfg = rhythia_render::config::SkinConfig::from_rhs(&bytes).unwrap();
                 // export_rhs evaluates and builds on its own, so the archive's
                 // obj equals ours only if the kernel is deterministic.
-                let obj = to_obj(&m, "p");
+                let obj = to_obj(&m, "p", "note.mtl");
                 prop_assert_eq!(cfg.note_mesh.as_deref(), Some(obj.as_bytes()));
             }
         }

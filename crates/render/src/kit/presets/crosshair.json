@@ -1,0 +1,100 @@
+{
+ "version": 2,
+ "name": "Crosshair",
+ "colors": [
+  "#ffffff",
+  "#a2e0ff",
+  "#a2e0ff"
+ ],
+ "parts": [
+  {
+   "id": "p1",
+   "name": "Ring",
+   "visible": true,
+   "locked": false,
+   "shape": {
+    "kind": "circle"
+   },
+   "transform": {
+    "x": 0.0,
+    "y": 0.0,
+    "w": 1.0,
+    "h": 1.0,
+    "rotation": 0.0
+   },
+   "mode": "add",
+   "depth": {
+    "front": 0.1,
+    "back": -0.1
+   },
+   "material": "solid",
+   "effects": {
+    "waves": null,
+    "round": null,
+    "rim": 0.16,
+    "mirror": "none",
+    "repeat": null
+   }
+  },
+  {
+   "id": "p2",
+   "name": "Ticks",
+   "visible": true,
+   "locked": false,
+   "shape": {
+    "kind": "square",
+    "rounding": 0.0
+   },
+   "transform": {
+    "x": 0.0,
+    "y": 0.66,
+    "w": 0.07,
+    "h": 0.3,
+    "rotation": 0.0
+   },
+   "mode": "add",
+   "depth": {
+    "front": 0.1,
+    "back": -0.1
+   },
+   "material": "solid",
+   "effects": {
+    "waves": null,
+    "round": null,
+    "rim": null,
+    "mirror": "none",
+    "repeat": 4
+   }
+  },
+  {
+   "id": "p3",
+   "name": "Dot",
+   "visible": true,
+   "locked": false,
+   "shape": {
+    "kind": "circle"
+   },
+   "transform": {
+    "x": 0.0,
+    "y": 0.0,
+    "w": 0.14,
+    "h": 0.14,
+    "rotation": 0.0
+   },
+   "mode": "add",
+   "depth": {
+    "front": 0.1,
+    "back": -0.1
+   },
+   "material": "glass",
+   "effects": {
+    "waves": null,
+    "round": null,
+    "rim": null,
+    "mirror": "none",
+    "repeat": null
+   }
+  }
+ ],
+ "groups": []
+}
