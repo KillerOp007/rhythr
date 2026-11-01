@@ -24,3 +24,7 @@ No Critical, four Important, ten Minor. Re-graded by effect: two Minors became I
 Deferred minors: waves.style picks coalesce; migrated v1 wave depths above 0.6 sit past the Depth slider (kernel clamps at 0.95); a stale comment in the migrate fit test; `toggles_never_merge` lacks the new discrete labels; the fold scenario counts no evaluate calls; a selected member of a folded group shows no selection in the list; re-grouping the sole member of g1 yields "Group 2"; the addToGroup comment.
 
 Rulings on what the reviewer set aside: shortcuts do nothing while a group is selected (spec silent, stands); chip buttons read On/Off beside a plain label (stands); a hand-edited document with a missing group member cannot be ungrouped from the UI (never written by the editor, stands); the runner's default playwright-core path (env override, stands); finer flattening within the part budget (stands); static part names in the group inspector (cosmetic, stands).
+
+## Owner acceptance (01.11.2026)
+
+Testbuild kit7 (25.10., 08:22) tested by the owner against the 29 point list of 01.11. (groups, effect chips, symmetry, snapping, help, file round trip, in-game import, Phase 2 regression). Verdict: "passt alles soweit", no findings. The branch is accepted as built; the merge into master and the start of Phase 4 are the owner's next decisions. A dry-run merge onto master at 001f15e (after the 0.6.3 hotfix) reported no conflicts.
