@@ -8,7 +8,9 @@
 </head>
 <body id="kit-body">
   <header id="kt-toolbar">
-    <div class="group" id="kt-add">
+    <!-- Six groups, one button style; the colour sits on the group (label
+         and borders), so what a button does is read from where it stands. -->
+    <div class="group add" id="kt-add">
       <span class="label">Add</span>
       <button class="btn small" data-add="circle">Disc</button>
       <button class="btn small" data-add="square">Square</button>
@@ -16,30 +18,39 @@
       <button class="btn small" data-add="star">Star</button>
       <button class="btn small" data-add="ring">Ring</button>
       <button class="btn small" data-add="pill">Pill</button>
+    </div>
+    <div class="group import">
+      <span class="label">Import</span>
       <button class="btn small" id="kt-add-svg" title="Add an SVG file as parts: one per colour, strokes included; a colour drawn on another comes in as a Cut">SVG</button>
       <input id="kt-glyph" type="text" maxlength="8" placeholder="A or emoji" title="A letter, digit, symbol or emoji from an installed font; Enter or the Letter button adds it as a part" />
       <button class="btn small" id="kt-add-glyph" title="Add the typed letter or emoji as a part">Letter</button>
     </div>
-    <div class="group">
-      <button class="btn small ghost" id="kt-undo" title="Undo (Ctrl+Z)">Undo</button>
-      <button class="btn small ghost" id="kt-redo" title="Redo (Ctrl+Y)">Redo</button>
+    <div class="group edit">
+      <span class="label">Edit</span>
+      <button class="btn small" id="kt-undo" title="Undo (Ctrl+Z)">Undo</button>
+      <button class="btn small" id="kt-redo" title="Redo (Ctrl+Y)">Redo</button>
     </div>
-    <div class="group">
+    <div class="group view">
+      <span class="label">View</span>
       <button class="btn small" id="kt-previews" title="Show or hide the previews (P)">Previews</button>
       <button class="btn small" id="kt-turntable" title="Show the note turned, to judge its depth (3)">3D</button>
-      <button class="btn small ghost" id="kt-help-btn" title="Every button, mouse action and key (F1)">Help</button>
+      <button class="btn small" id="kt-help-btn" title="Every button, mouse action and key (F1)">Help</button>
     </div>
     <div class="group grow"></div>
-    <div class="group">
-      <button class="btn small ghost" id="kt-new" title="New design">New</button>
-      <button class="btn small ghost" id="kt-presets" title="Start from a finished note: five presets in the rim style">Presets</button>
-      <button class="btn small ghost" id="kt-load" title="Open a skin saved by rhythr's editors, or a design file (Ctrl+O)">Open</button>
+    <div class="group file">
+      <span class="label">File</span>
+      <button class="btn small" id="kt-new" title="New design">New</button>
+      <button class="btn small" id="kt-presets" title="Start from a finished note: five presets in the rim style">Presets</button>
+      <button class="btn small" id="kt-load" title="Open a skin saved by rhythr's editors, or a design file (Ctrl+O)">Open</button>
       <select id="kt-recent" title="Recently opened or saved skins" disabled>
         <option value="" disabled selected>Recent</option>
       </select>
       <button class="btn small" id="kt-save" title="Save as .rhs: the skin for rhythr and the game, with your design inside (Ctrl+S)">Save .rhs</button>
-      <button class="btn small ghost" id="kt-save-as" title="Save to a new .rhs file (Ctrl+Shift+S)">Save as</button>
-      <button class="btn small" id="kt-send" title="Write the note into the game's skin folders as the profile rhythr-kit; no import and no file dialog">Send to game</button>
+      <button class="btn small" id="kt-save-as" title="Save to a new .rhs file (Ctrl+Shift+S)">Save as</button>
+    </div>
+    <div class="group game">
+      <span class="label">Game</span>
+      <button class="btn small game" id="kt-send" title="Write the note into the game's skin folders as the profile rhythr-kit; no import and no file dialog">Send to game</button>
     </div>
   </header>
   <div id="kt-presets-panel" class="kt-popover" hidden></div>

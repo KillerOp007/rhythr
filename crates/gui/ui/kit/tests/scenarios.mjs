@@ -320,8 +320,13 @@ async function files({ page, h }) {
     save: document.getElementById("kt-save").textContent,
     saveGhost: document.getElementById("kt-save").classList.contains("ghost"),
     hint: document.getElementById("kt-canvas-hint").textContent.includes("one .rhs file"),
+    // Six labelled groups in order, one button style, the game button filled.
+    labels: [...document.querySelectorAll("#kt-toolbar .group .label")].map((l) => l.textContent).join("|"),
+    ghosts: document.querySelectorAll("#kt-toolbar .btn.ghost").length,
+    sendFilled: getComputedStyle(document.getElementById("kt-send")).backgroundColor !== "rgba(0, 0, 0, 0)",
+    sendGroup: Boolean(document.querySelector("#kt-toolbar .group.game #kt-send")),
   }));
-  check("toolbar", tb.exportGone && tb.importOldGone && tb.save === "Save .rhs" && !tb.saveGhost && s.scrollW <= 1100 && tb.hint, JSON.stringify(tb));
+  check("toolbar", tb.exportGone && tb.importOldGone && tb.save === "Save .rhs" && !tb.saveGhost && s.scrollW <= 1100 && tb.hint && tb.labels === "Add|Import|Edit|View|File|Game" && tb.ghosts === 0 && tb.sendFilled && tb.sendGroup, JSON.stringify(tb));
 
   await dlg({ save: `${HARNESS_WORK}/s1.rhs` });
   await keys("Control+s");

@@ -6,9 +6,21 @@
 #kt-toolbar { display: flex; flex-wrap: wrap; gap: 0.5rem 0.75rem; align-items: center; padding: 0.5rem 1rem; border-bottom: 1px solid var(--border); flex: 0 0 auto; }
 #kt-recent { width: 9rem; }
 #kt-glyph { width: 6rem; }
-#kt-toolbar .group { display: flex; gap: 0.3rem; align-items: center; }
+#kt-toolbar .group { display: flex; gap: 0.3rem; align-items: center; --tint: var(--border); }
 #kt-toolbar .group.grow { flex: 1 1 auto; }
-#kt-toolbar .label { color: var(--muted); font-size: var(--fs-sm); margin-right: 0.2rem; }
+/* The colour of a group: its label and its buttons' borders. Edit and
+   File stay neutral; a separator sits between neighbouring groups. */
+#kt-toolbar .group + .group:not(.grow) { padding-left: 0.75rem; border-left: 1px solid var(--border); }
+#kt-toolbar .group.add { --tint: var(--accent); }
+#kt-toolbar .group.import { --tint: #c8a3ff; }
+#kt-toolbar .group.view { --tint: var(--warn); }
+#kt-toolbar .group.game { --tint: var(--ok); }
+#kt-toolbar .label { color: var(--tint); font-size: var(--fs-xs); font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; margin-right: 0.2rem; }
+#kt-toolbar .group.edit .label, #kt-toolbar .group.file .label { color: var(--muted); }
+#kt-toolbar .group .btn { border-color: color-mix(in srgb, var(--tint) 45%, var(--border)); }
+#kt-toolbar .group .btn:hover { border-color: var(--tint); }
+#kt-toolbar .btn.game { background: var(--ok); border-color: var(--ok); color: #08141a; font-weight: 600; }
+#kt-toolbar .btn.game:hover { filter: brightness(1.1); border-color: var(--ok); }
 #kt-previews.on, #kt-turntable.on, #kt-presets.on { outline: 2px solid var(--accent); }
 /* The Presets popover: placed under its button by the script (fixed, so
    the wrapping toolbar's height does not matter), five tiles in a row. */
