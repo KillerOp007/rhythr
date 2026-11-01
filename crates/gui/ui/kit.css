@@ -42,6 +42,8 @@
 .kt-part .name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kt-part .depth { font-size: var(--fs-sm); color: var(--muted); font-variant-numeric: tabular-nums; min-width: 2.4rem; text-align: right; }
 .kt-part.kt-group { background: var(--accent-soft); font-weight: 600; cursor: pointer; }
+/* A folded group whose hidden member is the selected part. */
+.kt-part.kt-group.has-selected .name { text-decoration: underline; text-decoration-color: var(--accent); text-underline-offset: 3px; }
 .kt-part.member { margin-left: 1.2rem; }
 .kt-part .count { font-size: var(--fs-sm); color: var(--muted); font-weight: 400; }
 .kt-part .fold { width: 1.6rem; padding: 0; opacity: 1; }

@@ -1,7 +1,21 @@
 // crates/gui/ui/kit/tests/render.test.mjs
 import test from "node:test";
 import assert from "node:assert/strict";
-import { fmt, roundToStep, clampDepth, shapeFields, pointSummary, EFFECT_DEFAULTS, repeatFromField, inspectorKeyFor } from "../render.js";
+import { fmt, roundToStep, clampDepth, shapeFields, pointSummary, EFFECT_DEFAULTS, repeatFromField, inspectorKeyFor, headerHasSelected, WAVES_DEPTH_MAX } from "../render.js";
+
+test("a_folded_header_marks_its_selected_member", () => {
+  const g = { id: "g1", parts: ["p2", "p3"] };
+  assert.equal(headerHasSelected(g, true, "p3"), true);
+  assert.equal(headerHasSelected(g, false, "p3"), false, "an open group shows the member itself");
+  assert.equal(headerHasSelected(g, true, "p1"), false);
+  assert.equal(headerHasSelected(g, true, null), false);
+});
+
+test("the_wave_depth_slider_reaches_the_kernel_limit", () => {
+  // Migrated v1 depths above 0.6 used to sit past the slider; the kernel
+  // clamps at 0.95, so the slider does too.
+  assert.equal(WAVES_DEPTH_MAX, 0.95);
+});
 
 test("chips_toggle_discretely_and_repeat_below_two_is_off", () => {
   assert.deepEqual(EFFECT_DEFAULTS.waves, { count: 6, depth: 0.15, style: "sine" });

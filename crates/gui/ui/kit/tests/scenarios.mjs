@@ -746,15 +746,28 @@ async function groups({ page, h }) {
 
   const serialBefore = await page.evaluate(() => window.kitStore.serialize());
   const undoBefore = s.undo;
+  const evalBefore = s.calls.filter((c) => c === "kit_evaluate").length;
   await page.click("#kt-parts .kt-group .fold");
   await settle();
   s = await S();
   const serialAfter = await page.evaluate(() => window.kitStore.serialize());
-  check("folding hides the members and changes nothing", s.folded.join() === "g1" && s.rows.length === 2 && !s.rows.some((r) => r.member) && serialAfter === serialBefore && s.undo === undoBefore, JSON.stringify(s.rows));
+  const evalAfter = s.calls.filter((c) => c === "kit_evaluate").length;
+  check("folding hides the members and changes nothing", s.folded.join() === "g1" && s.rows.length === 2 && !s.rows.some((r) => r.member) && serialAfter === serialBefore && s.undo === undoBefore && evalAfter === evalBefore, JSON.stringify({ rows: s.rows, evalBefore, evalAfter }));
   await page.click("#kt-parts .kt-group .fold");
   await settle();
   s = await S();
   check("unfold brings them back", s.folded.length === 0 && s.rows.length === 4);
+  // A member selected inside a folded group: its header carries the mark.
+  await h.store(`s.select("p3")`);
+  await page.click("#kt-parts .kt-group .fold");
+  await settle();
+  const markedFolded = await page.evaluate(() => document.querySelector("#kt-parts .kt-group").classList.contains("has-selected"));
+  await page.click("#kt-parts .kt-group .fold");
+  await settle();
+  const markedOpen = await page.evaluate(() => document.querySelector("#kt-parts .kt-group").classList.contains("has-selected"));
+  check("a folded header marks its selected member", markedFolded && !markedOpen, JSON.stringify({ markedFolded, markedOpen }));
+  await h.store(`s.selectGroup("g1")`);
+  await settle();
 
   await page.click('[data-role="leave"]');
   await settle();
@@ -790,6 +803,18 @@ async function effects({ page, h }) {
   await settle();
   s = await S();
   check("count follows the slider in one step", s.parts[1].effects.waves.count === 8 && s.undo === undo0 + 2);
+  const depthMax = await page.evaluate(() => {
+    const f = [...document.querySelectorAll("#kt-inspector-body .kt-field")].find((x) => x.querySelector("label") && x.querySelector("label").textContent === "Depth");
+    const r = f && f.querySelector('input[type="range"]');
+    return r ? r.max : null;
+  });
+  check("the depth slider reaches the kernel's limit", depthMax === "0.95", String(depthMax));
+  check("the style pick", await clickSeg("Style", "Spike"));
+  await settle();
+  check("the second style pick", await clickSeg("Style", "Pulse"));
+  await settle();
+  s = await S();
+  check("style picks are separate undo steps", s.parts[1].effects.waves.style === "pulse" && s.undo === undo0 + 4, JSON.stringify({ undo: s.undo, undo0 }));
   await page.click('[data-role="chip-round"]');
   await settle();
   s = await S();
