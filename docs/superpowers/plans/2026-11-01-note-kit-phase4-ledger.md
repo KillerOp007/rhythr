@@ -53,6 +53,6 @@ Testbuild kit9 follows for the owner's probe round.
 
 Not cut in this phase. After the owner's probe round and its fixes: version 0.7.0 in `Cargo.toml` and `crates/gui/tauri.conf.json`, `## v0.7.0 (date)` in the changelog with the Unreleased entries, `bash scripts/preflight.sh 0.7.0`, the Linux build through `scripts/build-linux.sh`, the Windows build, `latest.json`, then the GitHub release and AUR as for 0.6.3, all after the owner's Go; nothing is pushed before it.
 
-## Probe round in the game (owner, testbuild kit8)
+## Probe round in the game (owner, testbuilds kit8 and kit9)
 
-Open; the list is section 8 of the spec: three kit-built skins in play with the glass grey measured, Send to game first and second send and which reload step shows the new file, a two-key profile file, the single designer button and a converting v1 file, each preset in the game. Findings decide the wording of `MSG_AGAIN` and the two-key fallback before the release step.
+Round 1 on kit8 (20:12) found the three items above. Round 2 on kit9 (01.11., 20:53): "passt alles, send to game funktioniert". Send to game works end to end on the owner's Windows installation (Rhythia Release 45): the profile `rhythr-kit` appears in the game's settings and the note from the designer plays. The spec's remaining probe questions (which reload step shows a resent file, whether the game accepts a two-key profile, the glass grey) are answered or carried in the entries below as the owner reports them; `MSG_AGAIN` keeps its "switch away and back" wording until the reload finding says otherwise.
