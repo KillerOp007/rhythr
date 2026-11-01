@@ -304,10 +304,8 @@ pub fn send_error_text(e: SendError) -> String {
 pub async fn kit_send_to_game(design: Design) -> Result<SendReport, String> {
     join(
         tauri::async_runtime::spawn_blocking(move || {
-            let dir = crate::game_data::game_data_dir().map_err(|tried| {
-                let list: Vec<String> = tried.iter().map(|p| p.display().to_string()).collect();
-                format!("Game folder not found. Looked in: {}", list.join("; "))
-            })?;
+            let dir = crate::game_data::game_data_dir()
+                .map_err(|tried| crate::game_data::not_found_text(&tried))?;
             game::send_to_game(&design, &dir).map_err(send_error_text)
         })
         .await,

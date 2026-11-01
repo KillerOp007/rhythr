@@ -8,8 +8,7 @@
 //! icon imports as the bands it draws. Paths group into layers by paint
 //! colour in order of first appearance: the kit makes one part per layer
 //! (`kit::import::layer_modes` decides Add or Cut, so a figure on a badge
-//! shows as a hole, in the game too), the old designer takes every layer
-//! merged into one outline.
+//! shows as a hole, in the game too).
 
 use rhythia_render::kit::doc::Mode;
 use rhythia_render::kit::import::layer_modes;
@@ -271,12 +270,6 @@ pub fn svg_layers(data: &[u8]) -> Result<Vec<SvgLayer>, String> {
         .collect())
 }
 
-/// Every layer merged: the old designer's single outline.
-pub fn svg_to_contours(data: &[u8]) -> Result<Vec<Vec<[f32; 2]>>, String> {
-    let layers = svg_layers(data)?;
-    Ok(layers.into_iter().flat_map(|l| l.contours).collect())
-}
-
 /// Outlines a typed character with the first system font that covers
 /// it. Regular glyphs outline cleanly; colour emoji fonts carry no
 /// outlines and report as not found.
@@ -413,7 +406,11 @@ mod tests {
                M50 30 A20 20 0 1 0 50 70 A20 20 0 1 0 50 30 Z"/>
           <rect x="70" y="40" width="25" height="20" fill="blue"/>
         </svg>"##;
-        let contours = svg_to_contours(svg.as_bytes()).unwrap();
+        let contours: Vec<Vec<[f32; 2]>> = svg_layers(svg.as_bytes())
+            .unwrap()
+            .into_iter()
+            .flat_map(|l| l.contours)
+            .collect();
         // Donut outer + donut hole + rect: three contours, one clockwise.
         assert!(contours.len() >= 3, "got {} contours", contours.len());
         assert!(
@@ -514,9 +511,8 @@ mod tests {
         // One frame for both: the disc reaches 1, the square a quarter.
         assert!((extent(&layers[0].contours) - 1.0).abs() < 0.01);
         assert!((extent(&layers[1].contours) - 0.25).abs() < 0.01);
-        // The old designer still gets everything as one outline.
-        let merged = svg_to_contours(svg.as_bytes()).unwrap();
-        assert_eq!(merged.len(), 2);
+        // Two colours, one contour each: nothing merged across layers.
+        assert_eq!(layers.iter().map(|l| l.contours.len()).sum::<usize>(), 2);
     }
 
     #[test]

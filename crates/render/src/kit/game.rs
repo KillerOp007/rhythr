@@ -75,10 +75,20 @@ fn value_str<'a>(v: &'a serde_json::Value, key: &str) -> Option<&'a str> {
 
 /// The active profile's JSON object, or None when `framework.json`, the
 /// name it holds or the file it names cannot be read. A name with a path
-/// separator or a parent step is not a profile name and is not followed.
+/// separator or a parent step is not a profile name and is not followed;
+/// neither are the game's own files (`userconfig.json` holds secrets,
+/// `framework.json` is not a profile) or the kit's profile, so a damaged
+/// `framework.json` can never make the kit copy them.
 fn active_profile(data_dir: &Path, fw: Option<&serde_json::Value>) -> Option<serde_json::Value> {
     let name = value_str(fw?, "CurrentGameProfile")?;
     if name.is_empty() || name.contains(['/', '\\']) || name.contains("..") {
+        return None;
+    }
+    let own = format!("{PROFILE_NAME}.json");
+    if ["userconfig.json", "framework.json", own.as_str()]
+        .iter()
+        .any(|r| name.eq_ignore_ascii_case(r))
+    {
         return None;
     }
     let bytes = std::fs::read(data_dir.join(name)).ok()?;
@@ -351,6 +361,35 @@ mod tests {
         assert!(!r2.profile_created);
         assert_eq!(r2.message, MSG_NO_PROFILE);
         assert!(!t2.path().join("rhythr-kit.json").exists());
+    }
+
+    #[test]
+    fn a_framework_naming_a_reserved_file_is_not_followed() {
+        // The kit never reads userconfig.json (secrets), framework.json or
+        // its own profile as the active profile, whatever a damaged
+        // framework.json names, in any letter case.
+        for name in [
+            "userconfig.json",
+            "USERCONFIG.JSON",
+            "framework.json",
+            "rhythr-kit.json",
+        ] {
+            let t = tempfile::tempdir().unwrap();
+            std::fs::write(
+                t.path().join("framework.json"),
+                format!(r#"{{"CurrentGameProfile":{{"Value":"{name}"}}}}"#),
+            )
+            .unwrap();
+            std::fs::write(
+                t.path().join("userconfig.json"),
+                r#"{"OnlineSessionToken":{"Value":"secret"}}"#,
+            )
+            .unwrap();
+            let r = send_to_game(&Design::default_note(), t.path()).unwrap();
+            assert!(!r.profile_created, "{name}");
+            assert_eq!(r.message, MSG_NO_PROFILE, "{name}");
+            assert!(!t.path().join("rhythr-kit.json").exists(), "{name}");
+        }
     }
 
     #[test]

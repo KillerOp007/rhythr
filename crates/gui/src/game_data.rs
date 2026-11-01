@@ -115,6 +115,22 @@ pub fn is_game_data_dir(p: &Path) -> bool {
 
 /// The first candidate that is a game folder, or every candidate tried,
 /// for the message that says where the kit looked.
+pub fn pick(tried: Vec<PathBuf>) -> Result<PathBuf, Vec<PathBuf>> {
+    match tried.iter().find(|p| is_game_data_dir(p)) {
+        Some(found) => Ok(found.clone()),
+        None => Err(tried),
+    }
+}
+
+/// The status sentence when no candidate is the game's folder: every
+/// folder tried, in the order tried.
+pub fn not_found_text(tried: &[PathBuf]) -> String {
+    let list: Vec<String> = tried.iter().map(|p| p.display().to_string()).collect();
+    format!("Game folder not found. Looked in: {}.", list.join("; "))
+}
+
+/// The game folder on this machine: the candidates in their order, the
+/// first that counts.
 pub fn game_data_dir() -> Result<PathBuf, Vec<PathBuf>> {
     let env_override = std::env::var_os(ENV_OVERRIDE)
         .filter(|s| !s.is_empty())
@@ -129,11 +145,7 @@ pub fn game_data_dir() -> Result<PathBuf, Vec<PathBuf>> {
             .collect();
         (None, steam_library_roots(), xdg)
     };
-    let tried = candidates(env_override, roaming, &steam, &xdg);
-    match tried.iter().find(|p| is_game_data_dir(p)) {
-        Some(found) => Ok(found.clone()),
-        None => Err(tried),
-    }
+    pick(candidates(env_override, roaming, &steam, &xdg))
 }
 
 #[cfg(test)]
@@ -178,12 +190,39 @@ mod tests {
     }
 
     #[test]
-    fn the_environment_override_wins_when_it_is_a_game_folder() {
+    fn the_first_existing_game_folder_wins() {
+        // A missing folder and an empty one are passed over; the first
+        // folder that is the game's wins, whatever comes after it.
+        let empty = tempfile::tempdir().unwrap();
+        let game = tempfile::tempdir().unwrap();
+        std::fs::create_dir(game.path().join("skins")).unwrap();
+        let later = tempfile::tempdir().unwrap();
+        std::fs::write(later.path().join("framework.json"), "{}").unwrap();
+        let picked = pick(vec![
+            empty.path().join("nowhere"),
+            empty.path().to_path_buf(),
+            game.path().to_path_buf(),
+            later.path().to_path_buf(),
+        ])
+        .unwrap();
+        assert_eq!(picked, game.path());
+    }
+
+    #[test]
+    fn the_not_found_sentence_lists_every_candidate() {
         let t = tempfile::tempdir().unwrap();
-        std::fs::create_dir(t.path().join("skins")).unwrap();
-        std::env::set_var(ENV_OVERRIDE, t.path());
-        let found = game_data_dir();
-        std::env::remove_var(ENV_OVERRIDE);
-        assert_eq!(found.unwrap(), t.path());
+        let tried = vec![t.path().join("x"), t.path().join("y")];
+        let err = pick(tried.clone()).unwrap_err();
+        assert_eq!(err, tried);
+        let text = not_found_text(&err);
+        assert!(
+            text.starts_with("Game folder not found. Looked in: "),
+            "{text}"
+        );
+        assert!(
+            text.contains(&format!("{}; {}", tried[0].display(), tried[1].display())),
+            "{text}"
+        );
+        assert!(text.ends_with('.'), "{text}");
     }
 }
