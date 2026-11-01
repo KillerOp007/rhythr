@@ -109,7 +109,10 @@ replay is integrity-checked (a "verified" / "inconsistent" badge on the
 replay card), and a live GPU preview with a scrubbable timeline (health
 graph + miss markers) appears. Individual HUD elements can be toggled per
 user preference. Overrides persist across restarts and apply to every
-render. Building the Windows installer: see
+render. The Note Designer (toolbar button) builds a note skin from parts,
+saves it as one `.rhs` that both rhythr and the game read, and sends it
+straight into the game's own folders as the profile `rhythr-kit` (see
+the [user guide](docs/USER-GUIDE.md)). Building the Windows installer: see
 [docs/WINDOWS-BUILD.md](docs/WINDOWS-BUILD.md).
 
 `testdata/` holds real replays verified against the game's own database

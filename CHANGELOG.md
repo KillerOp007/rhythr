@@ -3,7 +3,7 @@
 rhythr is an unofficial community tool and is not affiliated with or
 endorsed by Rhythia or Capo Games.
 
-## Unreleased
+## v0.7.0 (2026-11-01)
 
 - **A note designer.** A new window (toolbar button) where a note is
   built from parts: discs, squares, polygons, stars, rings and pills,
