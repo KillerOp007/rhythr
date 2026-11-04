@@ -6679,6 +6679,7 @@ mod autoplay_tests {
     }
 }
 
+#[cfg(test)]
 mod diagnostics_tests {
     use super::{diagnostics_report, err_str, game_section, redact_path, App, Shared};
     use std::sync::Arc;

@@ -9,6 +9,8 @@ description = "Rhythia replay renderer (desktop app)"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+# Reading the map entry of exported .rhm archives for the Autoplay picker.
+zip.workspace = true
 rhythia-errcode.workspace = true
 rhythia-formats.workspace = true
 rhythia-sim.workspace = true

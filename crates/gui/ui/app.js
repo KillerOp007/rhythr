@@ -85,6 +85,12 @@ function esc(text) {
 function renderReplayCard() {
   const body = $("replay-body");
   const r = status?.replay;
+  if (status?.autoplay) {
+    renderAutoplayCard();
+    return;
+  }
+  $("card-replay").querySelector("h2").textContent = "Replay";
+  $("btn-replay").textContent = "Browse";
   if (!r) {
     body.innerHTML = `<p class="hint">Drop a <code>.rhr</code> file anywhere</p>`;
     return;
@@ -137,6 +143,216 @@ function renderReplayCard() {
       ${esc(date)}
     </div>
     ${outcome} ${chip} ${modWarn}`;
+}
+
+// ------------------------------------------------------------ autoplay
+
+/// The Replay card while an Autoplay session is active: the picked export,
+/// its numbers, and the way back to the replay flow.
+function renderAutoplayCard() {
+  const a = status.autoplay;
+  $("card-replay").querySelector("h2").textContent = "Autoplay";
+  $("btn-replay").textContent = "Change map";
+  const mappers = a.mappers?.length ? a.mappers.join(", ") : "";
+  const sub = [a.song_name && a.song_name !== a.title ? a.song_name : "", mappers ? `mapped by ${mappers}` : ""]
+    .filter(Boolean)
+    .join(" · ");
+  $("replay-body").innerHTML = `
+    <div class="src-title src-path" title="${esc(a.title)}">${esc(a.title)}</div>
+    <div class="src-meta src-path" title="${esc(sub)}">${esc(sub || a.file_name)}</div>
+    <span class="chip info">from exports</span>
+    <span class="chip">${fmtTime(a.duration_ms)}</span>
+    <span class="chip">${a.note_count.toLocaleString()} notes</span>
+    <div style="margin-top:7px"><button class="linkbtn" id="btn-autoplay-back" type="button">Back to replay</button></div>`;
+  $("btn-autoplay-back").addEventListener("click", () => {
+    call(() => invoke("autoplay_clear")).then(() => loadNote("Back to the replay flow.")).catch(() => {});
+  });
+}
+
+let pickerTimer = null;
+let pickerToken = null;
+let pickerMaps = [];
+
+function pickerOpen() {
+  return !$("autoplay-picker").hidden;
+}
+
+async function refreshPicker(force) {
+  let listing;
+  try {
+    listing = await invoke("autoplay_exports");
+  } catch (e) {
+    $("ap-path").textContent = String(e);
+    $("ap-list").innerHTML = "";
+    $("ap-empty").hidden = false;
+    $("ap-count").textContent = "";
+    return;
+  }
+  $("ap-path").textContent = listing.folder;
+  $("ap-path").title = `${listing.folder} (from the ${listing.source === "setting" ? "chosen folder" : listing.source === "env" ? "RHYTHR_GAME_DATA_DIR override" : "game's data folder"})`;
+  if (!force && listing.token === pickerToken) return;
+  pickerToken = listing.token;
+  pickerMaps = listing.maps;
+  renderPickerList();
+}
+
+function renderPickerList() {
+  const q = $("ap-search").value.trim().toLowerCase();
+  const rows = pickerMaps.filter((m) => !q || `${m.title} ${m.song_name} ${(m.mappers || []).join(" ")}`.toLowerCase().includes(q));
+  const list = $("ap-list");
+  list.innerHTML = "";
+  for (const m of rows) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "ap-row" + (m.unreadable ? " unreadable" : "") + (status?.autoplay?.rhm === m.path ? " sel" : "");
+    b.title = m.unreadable ? `${m.file_name}: could not be read. Export it again from the game.` : `${m.title}
+${(m.mappers || []).join(", ")}`;
+    const when = m.exported_unix_ms ? new Date(m.exported_unix_ms).toLocaleString() : "";
+    const sub = [m.song_name && m.song_name !== m.title ? m.song_name : "", m.mappers?.length ? `mapped by ${m.mappers.join(", ")}` : ""].filter(Boolean).join(" · ") || m.file_name;
+    b.innerHTML = `<span class="t"></span><span class="m"><b></b><span></span></span><span class="s"></span>`;
+    b.querySelector(".t").textContent = m.title;
+    b.querySelector(".s").textContent = sub;
+    b.querySelector(".m b").textContent = m.unreadable ? "unreadable" : `${fmtTime(m.duration_ms)} · ${m.note_count.toLocaleString()} notes`;
+    b.querySelector(".m span").textContent = when ? `exported ${when}` : "";
+    if (!m.unreadable) b.addEventListener("click", () => pickExport(m));
+    list.appendChild(b);
+  }
+  $("ap-empty").hidden = pickerMaps.length > 0;
+  $("ap-count").textContent = pickerMaps.length ? `${rows.length} of ${pickerMaps.length} maps` : "";
+}
+
+async function pickExport(m) {
+  closePicker();
+  try {
+    const st = await call(() => invoke("autoplay_pick", { path: m.path }));
+    loadNote(st?.autoplay?.note || `Autoplay: ${m.title}`);
+  } catch (e) {
+    // call() already showed the message
+  }
+}
+
+function openPicker() {
+  $("autoplay-picker").hidden = false;
+  $("ap-search").focus();
+  refreshPicker(true);
+  if (pickerTimer) clearInterval(pickerTimer);
+  pickerTimer = setInterval(() => refreshPicker(false), 1000);
+}
+
+function closePicker() {
+  $("autoplay-picker").hidden = true;
+  if (pickerTimer) clearInterval(pickerTimer);
+  pickerTimer = null;
+}
+
+const AP_SPEEDS = Array.from({ length: 25 }, (_, i) => (0.8 + i * 0.05).toFixed(2));
+const AP_DANCE = { 1: "subtle", 2: "medium", 3: "wild" };
+const AP_DANCE_IDX = { subtle: 1, medium: 2, wild: 3 };
+
+function renderAutoplayTab() {
+  const a = status?.autoplay;
+  $("tab-btn-autoplay").hidden = !a;
+  if (!a) return;
+  const s = a.settings;
+  const dance = s.movement === "dance";
+  $("ap-movement-dance").classList.toggle("on", dance);
+  $("ap-movement-normal").classList.toggle("on", !dance);
+  $("ap-dance-field").classList.toggle("off", !dance);
+  $("ap-dance").disabled = !dance;
+  $("ap-movement-hint").textContent = dance
+    ? "Close notes: almost straight. The farther the next note and the more time, the wider the arc. Same spot with time: a boomerang out and back; same spot in quick succession: hold. Never a jump, never a rush."
+    : "The same soft curves, no detours, no boomerangs. Calm and direct. Never a jump.";
+  $("ap-dance").value = AP_DANCE_IDX[s.dance] || 2;
+  $("ap-dance-val").textContent = s.dance;
+  $("ap-rest").value = s.rest_secs;
+  $("ap-rest-val").textContent = `${Number(s.rest_secs).toFixed(1)} s`;
+  const speed = Number(s.speed_mod);
+  $("ap-rest-hint").textContent =
+    Math.abs(speed - 1) < 0.001
+      ? "Real seconds without a note. With a speed mod the map time is divided by it, so the feel stays the same."
+      : `Real seconds without a note: at ${speed.toFixed(2)}x that is a gap of ${(s.rest_secs * speed).toFixed(1)} s in the map.`;
+  const sel = $("ap-speed");
+  if (!sel.options.length) {
+    for (const v of AP_SPEEDS) {
+      const o = document.createElement("option");
+      o.value = v;
+      o.textContent = v === "1.00" ? "1.00x (none)" : `${v}x`;
+      sel.appendChild(o);
+    }
+  }
+  sel.value = speed.toFixed(2);
+  $("ap-note").hidden = !a.note;
+  $("ap-note").textContent = a.note || "";
+}
+
+function pushAutoplay(patch) {
+  const cur = status?.autoplay?.settings || status?.settings?.autoplay || {};
+  const settings = { ...cur, ...patch };
+  call(() => invoke("autoplay_settings", { settings }))
+    .then(() => schedulePreview())
+    .catch(() => {});
+}
+
+let autoplayWasOn = false;
+function syncAutoplayUi(st) {
+  const on = !!st.autoplay;
+  $("btn-autoplay").classList.toggle("on", on);
+  $("tab-btn-autoplay").hidden = !on;
+  $("thumb-wrap").hidden = on;
+  $("card-ghost").hidden = on;
+  if (on) $("btn-analyze").hidden = true;
+  if (on && !autoplayWasOn) {
+    $("tab-btn-autoplay").click();
+  } else if (!on && autoplayWasOn && $("tab-btn-autoplay").classList.contains("active")) {
+    document.querySelector('.tab[data-tab="output"]').click();
+  }
+  autoplayWasOn = on;
+}
+
+function initAutoplay() {
+  $("btn-autoplay").addEventListener("click", () => {
+    if (pickerOpen()) closePicker();
+    else openPicker();
+  });
+  $("ap-howto").addEventListener("click", () => {
+    $("ap-howto-text").hidden = !$("ap-howto-text").hidden;
+  });
+  $("ap-refresh").addEventListener("click", () => refreshPicker(true));
+  $("ap-open").addEventListener("click", () => {
+    invoke("autoplay_open_folder").catch((e) => showPreviewMsg(String(e)));
+  });
+  $("ap-choose").addEventListener("click", async () => {
+    const p = await dialog.open({ directory: true, multiple: false, title: "Export folder" });
+    if (!p) return;
+    await call(() => invoke("autoplay_set_folder", { path: String(p) })).catch(() => {});
+    refreshPicker(true);
+  });
+  $("ap-search").addEventListener("input", renderPickerList);
+  $("ap-search").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      const first = $("ap-list").querySelector(".ap-row:not(.unreadable)");
+      if (first) first.click();
+    }
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && pickerOpen()) closePicker();
+  });
+  document.addEventListener("pointerdown", (e) => {
+    if (!pickerOpen()) return;
+    if ($("autoplay-picker").contains(e.target) || $("btn-autoplay").contains(e.target) || $("btn-replay").contains(e.target)) return;
+    closePicker();
+  });
+  $("ap-movement-normal").addEventListener("click", () => pushAutoplay({ movement: "normal" }));
+  $("ap-movement-dance").addEventListener("click", () => pushAutoplay({ movement: "dance" }));
+  $("ap-dance").addEventListener("input", () => {
+    $("ap-dance-val").textContent = AP_DANCE[$("ap-dance").value];
+  });
+  $("ap-dance").addEventListener("change", () => pushAutoplay({ dance: AP_DANCE[$("ap-dance").value] }));
+  $("ap-rest").addEventListener("input", () => {
+    $("ap-rest-val").textContent = `${Number($("ap-rest").value).toFixed(1)} s`;
+  });
+  $("ap-rest").addEventListener("change", () => pushAutoplay({ rest_secs: Number($("ap-rest").value) }));
+  $("ap-speed").addEventListener("change", () => pushAutoplay({ speed_mod: Number($("ap-speed").value) }));
 }
 
 function renderMapCard() {
@@ -1837,6 +2053,9 @@ function updateRenderButton() {
           : "";
       readyText = `Ready to render ${what} (~${fmtTime(est * 1000)} at last speed${slow})`;
     }
+    if (ready && status?.autoplay) {
+      readyText = `${readyText}: Autoplay, ${status.autoplay.title}`;
+    }
     // ffmpeg is checked here too: `ready` is only replay+map, while the
     // button is also disabled without ffmpeg, so this line used to promise a
     // render next to a button that could not start one.
@@ -1909,6 +2128,8 @@ async function applyStatus(st) {
   syncOptionalCards();
   renderHudTab();
   renderOutputTab();
+  renderAutoplayTab();
+  syncAutoplayUi(st);
   renderClipRow();
   updateRenderButton();
   syncHistoryButtons();
@@ -1947,7 +2168,7 @@ async function applyStatus(st) {
   const hasPair = !!(st.replay && st.map);
   $("scrub-row").hidden = !hasPair;
   $("clip-row").hidden = !hasPair;
-  $("btn-analyze").hidden = !hasPair;
+  $("btn-analyze").hidden = !hasPair || !!st.autoplay;
   if (hasPair && (replayChanged || mapChanged || !hadPair)) {
     currentMs = Math.min(15000, (st.replay.length_ms || 0) / 2);
     timelineData = await invoke("timeline", { samples: 600 }).catch(() => null);
@@ -2140,7 +2361,11 @@ function initControls() {
     const p = await dialog.open({ filters: [{ name: "Rhythia replay", extensions: ["rhr"] }] });
     if (p) await loadPath(p);
   };
-  $("btn-replay").addEventListener("click", pickReplay);
+  $("btn-replay").addEventListener("click", () => {
+    if (status?.autoplay) openPicker();
+    else pickReplay();
+  });
+  initAutoplay();
   // The empty-state panel invited a drop but did nothing on a click, which
   // is the first thing anyone tries.
   $("btn-drop-open").addEventListener("click", pickReplay);
@@ -2336,8 +2561,9 @@ function initControls() {
   document.querySelectorAll(".tab").forEach((tab) => {
     tab.addEventListener("click", () => {
       document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t === tab));
-      $("tab-output").hidden = tab.dataset.tab !== "output";
-      $("tab-hud").hidden = tab.dataset.tab !== "hud";
+      document.querySelectorAll(".tab-page").forEach((p) => {
+        p.hidden = p.id !== `tab-${tab.dataset.tab}`;
+      });
     });
   });
 

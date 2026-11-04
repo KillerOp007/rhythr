@@ -120,6 +120,10 @@
 
     <!-- ─────────── center: preview + render ─────────── -->
     <section id="center">
+      <div id="tools-row">
+      <span id="mode-tools">
+        <button class="btn small accent" id="btn-autoplay" title="Render a map with a synthetic cursor: no replay needed">Autoplay</button>
+      </span>
       <span id="preview-tools" hidden>
         <button class="btn small accent" id="btn-analyze" hidden title="Open the Analyze window: full-size replay, slow motion, overlays and stats">Analyze</button>
         <button class="btn small" id="btn-kit" title="Design your own note from parts: add, cut, depth, glass, effects; one .rhs for rhythr and the game">Note Designer</button>
@@ -139,7 +143,28 @@
         </div>
       </span>
       </span>
+      </div>
       <div id="preview-wrap">
+        <div id="autoplay-picker" hidden role="dialog" aria-label="Exported maps">
+          <div class="ap-head">
+            <h3>Exported maps</h3>
+            <span class="ap-actions">
+              <button class="btn small ghost" id="ap-howto" type="button">How do I export?</button>
+              <button class="btn small ghost" id="ap-open" type="button">Open folder</button>
+              <button class="btn small ghost" id="ap-refresh" type="button">Refresh</button>
+              <button class="btn small ghost" id="ap-choose" type="button" title="Pick the export folder yourself (for unusual installs)">Choose folder</button>
+            </span>
+            <span class="ap-path" id="ap-path"></span>
+          </div>
+          <div class="ap-howto" id="ap-howto-text" hidden>
+            In the game, right-click a map in the song list and choose <b>Export</b>. The <code>.rhm</code> lands in the folder above and shows up here within a second, no restart needed.
+            <ol><li>Right-click the map</li><li>Export</li><li>Come back here, it is in the list</li></ol>
+          </div>
+          <div class="ap-search"><input type="text" id="ap-search" placeholder="Search title, artist or mapper" aria-label="Search maps" spellcheck="false" /></div>
+          <div class="ap-list" id="ap-list"></div>
+          <div class="ap-empty" id="ap-empty" hidden>No exported maps yet. In the game, right-click a map and choose Export; it appears here on its own.</div>
+          <div class="ap-foot"><span id="ap-count"></span><span>Newest first · Enter picks the first · Esc closes</span></div>
+        </div>
         <div id="dropzone">
           <svg viewBox="0 0 24 24" width="44" height="44" aria-hidden="true">
             <polygon points="12,2.6 18.6,5.4 21.4,12 18.6,18.6 12,21.4 5.4,18.6 2.6,12 5.4,5.4"
@@ -194,9 +219,40 @@
     <!-- ─────────── right: settings ─────────── -->
     <aside id="settings">
       <nav id="tabs">
+        <button class="tab" data-tab="autoplay" id="tab-btn-autoplay" hidden>Autoplay</button>
         <button class="tab active" data-tab="output">Output</button>
         <button class="tab" data-tab="hud">HUD</button>
       </nav>
+
+      <div class="tab-page" id="tab-autoplay" hidden>
+        <div class="field">
+          <span>Movement</span>
+          <div class="seg" role="group" aria-label="Movement">
+            <button type="button" id="ap-movement-normal">Normal</button>
+            <button type="button" id="ap-movement-dance" class="on">Cursor dance</button>
+          </div>
+          <span class="sub" id="ap-movement-hint">Close notes: almost straight. The farther the next note and the more time, the wider the arc. Same spot with time: a boomerang out and back; same spot in quick succession: hold. Never a jump, never a rush.</span>
+        </div>
+        <label class="field" id="ap-dance-field">
+          <span>Dance amount <em id="ap-dance-val" class="mono">medium</em></span>
+          <input type="range" id="ap-dance" min="1" max="3" step="1" value="2" />
+          <span class="sub">How wide the arcs and boomerangs get when there is time. Close notes always stay almost straight, whatever this says.</span>
+        </label>
+        <label class="field">
+          <span>Rest in the centre after <em id="ap-rest-val" class="mono">4.5 s</em></span>
+          <input type="range" id="ap-rest" min="2" max="8" step="0.5" value="4.5" />
+          <span class="sub" id="ap-rest-hint">Real seconds without a note. With a speed mod the map time is divided by it, so the feel stays the same.</span>
+        </label>
+        <div class="field">
+          <span>Speed mod</span>
+          <select id="ap-speed"></select>
+          <span class="sub">Song, approach and the cursor all follow it, like the game's own speed mod.</span>
+        </div>
+        <div class="ap-fixed"><span>Player name</span><span class="mono">Autoplay</span></div>
+        <div class="ap-fixed"><span>Accuracy</span><span class="mono">100.00%, full combo</span></div>
+        <div class="ap-note" id="ap-note" hidden></div>
+        <div class="ap-note"><b>Marked as autoplay.</b> Every autoplay render carries the AUTOPLAY ticker across the top and a hidden mark that survives re-encoding. Neither can be switched off.</div>
+      </div>
 
       <div class="tab-page" id="tab-output">
         <div class="field">
