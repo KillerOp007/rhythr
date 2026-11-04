@@ -5,6 +5,8 @@
 
 use sha2::{Digest, Sha256};
 
+pub mod gpu;
+
 /// Pattern grid, stretched to whatever frame it marks.
 pub const PAT_W: usize = 640;
 pub const PAT_H: usize = 360;
