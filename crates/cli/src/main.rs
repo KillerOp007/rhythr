@@ -246,6 +246,23 @@ enum Command {
         #[arg(long, default_value = "song", value_parser = ["song", "clip"])]
         background_sync: String,
     },
+    /// Look for the hidden Autoplay mark in a video. Exit code 0 when the
+    /// mark is found, 2 when it is weak, 1 when there is none.
+    MarkCheck {
+        video: PathBuf,
+        /// A key file (64 hex characters on one line); repeat for several
+        /// keys. The key built into this binary is always tried last.
+        #[arg(long = "key", value_name = "FILE")]
+        keys: Vec<PathBuf>,
+        /// Emit machine-readable JSON instead of text.
+        #[arg(long)]
+        json: bool,
+        #[arg(long, default_value = "ffmpeg")]
+        ffmpeg: String,
+        /// Stop reading after this many frames.
+        #[arg(long, default_value_t = 3000)]
+        max_frames: usize,
+    },
 }
 
 fn load_config(
@@ -468,6 +485,150 @@ fn warn_unreproducible_mods(r: &rhythia_formats::rhr::Replay) {
     }
 }
 
+/// A key file holds one line of 64 hex characters.
+fn read_key_file(path: &Path) -> Result<rhythia_render::mark::Seed, String> {
+    let text = std::fs::read_to_string(path).map_err(|e| format!("reading {}: {e}", path.display()))?;
+    rhythia_render::mark::seed_from_hex(&text).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// Width, height and black level of a video from ffmpeg's `-i` banner (the
+/// bundled ffmpeg comes without ffprobe). Black is 16 unless the stream
+/// says full range (`pc`).
+fn probe_video(ffmpeg: &str, path: &Path) -> Option<(usize, usize, f32)> {
+    let mut cmd = std::process::Command::new(ffmpeg);
+    rhythia_render::video::hide_console_window(&mut cmd);
+    let out = cmd
+        .args(["-hide_banner", "-i"])
+        .arg(path)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&out.stderr);
+    let line = text.lines().find(|l| l.contains("Video:"))?;
+    let dims = line
+        .split(|c: char| c == ' ' || c == ',')
+        .filter_map(|tok| {
+            let (w, h) = tok.split_once('x')?;
+            let w: usize = w.parse().ok()?;
+            let h: usize = h.parse().ok()?;
+            (w > 0 && h > 0 && w <= 16384 && h <= 16384).then_some((w, h))
+        })
+        .next()?;
+    let black = if line.contains("(pc") { 0.0 } else { 16.0 };
+    Some((dims.0, dims.1, black))
+}
+
+/// Decodes the video, averages it and tries every key; prints the verdict
+/// and returns the exit code (0 found, 2 weak, 1 none).
+fn run_mark_check(video: &Path, keys: &[PathBuf], json: bool, ffmpeg: &str, max_frames: usize) -> anyhow::Result<i32> {
+    use rhythia_render::mark::check::{check, Accumulator, Verdict, VerdictKind};
+    use rhythia_render::mark::{self, Seed};
+    use std::io::Read;
+
+    let (w, h, black) = probe_video(ffmpeg, video)
+        .with_context(|| format!("could not read the video's size with {ffmpeg} ({})", video.display()))?;
+    let mut cmd = std::process::Command::new(ffmpeg);
+    rhythia_render::video::hide_console_window(&mut cmd);
+    let mut child = cmd
+        .args(["-v", "error", "-i"])
+        .arg(video)
+        .args(["-f", "rawvideo", "-pix_fmt", "yuv420p", "pipe:1"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .with_context(|| format!("running {ffmpeg}"))?;
+    let mut stdout = child.stdout.take().expect("piped stdout");
+    let frame_len = w * h * 3 / 2;
+    let mut buf = vec![0u8; frame_len];
+    let mut acc = Accumulator::new(w, h, black);
+    let mut frames = 0usize;
+    while frames < max_frames {
+        if stdout.read_exact(&mut buf).is_err() {
+            break;
+        }
+        acc.push_luma(&buf[..w * h]);
+        frames += 1;
+    }
+    drop(stdout);
+    let _ = child.kill();
+    let _ = child.wait();
+    if acc.frames_used() == 0 {
+        anyhow::bail!("no frames decoded from {}", video.display());
+    }
+    let avg = acc.average();
+
+    let mut candidates: Vec<(String, Seed)> = Vec::new();
+    for k in keys {
+        let seed = read_key_file(k).map_err(anyhow::Error::msg)?;
+        let name = k.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| k.display().to_string());
+        candidates.push((name, seed));
+    }
+    let (built, kind) = mark::built_in();
+    candidates.push((format!("built-in {}", kind.label()), built));
+    let wrong: Vec<Vec<f32>> = (1..=3u8)
+        .map(|i| mark::pattern(&mark::seed_from_hex(&format!("{i:02x}").repeat(32)).expect("hex")))
+        .collect();
+
+    let mut best: Option<(String, Verdict)> = None;
+    for (name, seed) in candidates {
+        let v = check(&avg, &mark::pattern(&seed), &wrong);
+        let better = best.as_ref().map_or(true, |(_, b)| v.z > b.z);
+        let found = v.kind == VerdictKind::Found;
+        if better {
+            best = Some((name, v));
+        }
+        if found {
+            break;
+        }
+    }
+    let (key, v) = best.expect("at least the built-in key");
+    let kind_name = match v.kind {
+        VerdictKind::Found => "Found",
+        VerdictKind::Weak => "Weak",
+        VerdictKind::None => "None",
+    };
+    if json {
+        let obj = serde_json::json!({
+            "video": video.display().to_string(),
+            "frames_used": acc.frames_used(),
+            "size": format!("{w}x{h}"),
+            "black": black,
+            "key": key,
+            "score": v.score,
+            "scale": v.scale,
+            "angle_deg": v.angle_deg,
+            "offset": [v.offset.0, v.offset.1],
+            "null_mean": v.null_mean,
+            "null_std": v.null_std,
+            "null_n": v.null_n,
+            "z": v.z,
+            "wrong_keys_max": v.wrong_keys_max,
+            "kind": kind_name,
+        });
+        println!("{obj}");
+    } else {
+        match v.kind {
+            VerdictKind::Found => println!(
+                "Autoplay mark found: z {:.1}, score {:.3}, scale {:.3}, angle {:.1} deg, key {key}",
+                v.z, v.score, v.scale, v.angle_deg
+            ),
+            VerdictKind::Weak => println!(
+                "Autoplay mark: weak (z {:.1}, score {:.3}, scale {:.3}, angle {:.1} deg, key {key})",
+                v.z, v.score, v.scale, v.angle_deg
+            ),
+            VerdictKind::None => println!("No Autoplay mark (best z {:.1}, key {key})", v.z),
+        }
+    }
+    Ok(match v.kind {
+        VerdictKind::Found => 0,
+        VerdictKind::Weak => 2,
+        VerdictKind::None => 1,
+    })
+}
+
 fn main() -> ExitCode {
     match run() {
         Ok(ok) => {
@@ -600,6 +761,14 @@ fn run() -> anyhow::Result<bool> {
                 out.display()
             );
             Ok(true)
+        }
+        Command::MarkCheck { video, keys, json, ffmpeg, max_frames } => {
+            let code = run_mark_check(&video, &keys, json, &ffmpeg, max_frames)?;
+            if code == 0 {
+                Ok(true)
+            } else {
+                std::process::exit(code)
+            }
         }
         Command::Video {
             replay,
@@ -1147,5 +1316,38 @@ fn print_report(report: &integrity::IntegrityReport, replay_hits: i32) {
         println!("=> PROBABLY THE WRONG MAP: most recorded hits find no note here");
     } else {
         println!("=> REPLAY DATA INCONSISTENT (possibly manipulated)");
+    }
+}
+
+#[cfg(test)]
+mod mark_check_tests {
+    use super::*;
+
+    #[test]
+    fn mark_check_parses_keys_and_flags() {
+        let cli = Cli::try_parse_from([
+            "rhythr-cli", "mark-check", "v.mp4", "--key", "a.txt", "--key", "b.txt", "--json",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::MarkCheck { video, keys, json, ffmpeg, max_frames } => {
+                assert_eq!(video, PathBuf::from("v.mp4"));
+                assert_eq!(keys, vec![PathBuf::from("a.txt"), PathBuf::from("b.txt")]);
+                assert!(json);
+                assert_eq!(ffmpeg, "ffmpeg");
+                assert_eq!(max_frames, 3000);
+            }
+            _ => panic!("wrong command"),
+        }
+    }
+
+    #[test]
+    fn a_key_file_is_one_hex_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("k.txt");
+        std::fs::write(&f, format!("{}\n", "ab".repeat(32))).unwrap();
+        assert!(read_key_file(&f).is_ok());
+        std::fs::write(&f, "nope").unwrap();
+        assert!(read_key_file(&f).unwrap_err().contains("64 hex"));
     }
 }
