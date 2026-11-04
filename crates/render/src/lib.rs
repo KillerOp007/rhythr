@@ -11,6 +11,7 @@ pub mod config;
 pub mod exe_assets;
 pub mod hud;
 pub mod kit;
+pub mod mark;
 pub mod mesh;
 pub mod mods;
 pub mod nv12;

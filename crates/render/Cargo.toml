@@ -21,9 +21,14 @@ fontdue = { version = "0.9.3", default-features = false, features = ["std", "has
 i_overlay = "8"
 i_triangle = "0.47"
 kurbo = "0.13"
+sha2 = "0.10"
+rustfft = "6"
 
 [dependencies.tempfile]
 version = "3"
+
+[build-dependencies]
+sha2 = "0.10"
 
 [dev-dependencies]
 tempfile = "3"
