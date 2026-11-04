@@ -295,17 +295,38 @@ mod tests {
         assert_eq!(out.derived_hits(), 3);
     }
 
+    /// The largest distance of any frame in `(from_ms, to_ms)` from the
+    /// straight line between the two notes (the chord).
+    fn max_off_chord(r: &Replay, from_ms: f64, to_ms: f64, a: (f32, f32), b: (f32, f32)) -> f32 {
+        let d = ((b.0 - a.0).powi(2) + (b.1 - a.1).powi(2)).sqrt();
+        r.frames
+            .iter()
+            .filter(|f| f.ms > from_ms && f.ms < to_ms)
+            .map(|f| ((b.0 - a.0) * (a.1 - f.y) - (a.0 - f.x) * (b.1 - a.1)).abs() / d)
+            .fold(0.0f32, f32::max)
+    }
+
+    /// Real maps leave 150 ms between notes: the dance must arc on the
+    /// distance alone, time to spare only widens it. Close notes stay almost
+    /// straight, far notes get a visible arc, the amount scales it.
     #[test]
-    fn close_notes_go_almost_straight() {
-        let map = map_with(&[(1000, 0.0, 1.0), (1150, 2.0, 1.0)]);
-        let r = generate(&map, &AutoplaySettings::default(), 120, &dice()).unwrap();
-        let path_len: f32 = r
-            .frames
-            .windows(2)
-            .filter(|w| w[0].ms >= 1000.0 && w[1].ms <= 1150.0)
-            .map(|w| ((w[1].x - w[0].x).powi(2) + (w[1].y - w[0].y).powi(2)).sqrt())
-            .sum();
-        assert!(path_len < 2.0 * 1.02, "path {path_len} for a chord of 2.0");
+    fn close_notes_go_almost_straight_and_far_notes_arc_even_in_a_hurry() {
+        let near = map_with(&[(1000, 1.0, 1.0), (1150, 1.5, 1.0)]);
+        let far = map_with(&[(1000, 0.0, 1.0), (1150, 2.0, 1.0)]);
+        let off = |map: &Map, dance: DanceAmount| {
+            let s = AutoplaySettings { movement: Movement::Dance, dance, ..Default::default() };
+            let r = generate(map, &s, 120, &dice()).unwrap();
+            let a = world(&map.notes[0]);
+            let b = world(&map.notes[1]);
+            max_off_chord(&r, 1000.0, 1150.0, a, b)
+        };
+        assert!(off(&near, DanceAmount::Medium) < 0.15, "near: {}", off(&near, DanceAmount::Medium));
+        let (subtle, medium, wild) = (off(&far, DanceAmount::Subtle), off(&far, DanceAmount::Medium), off(&far, DanceAmount::Wild));
+        assert!(medium > 0.3, "far at medium: {medium}");
+        assert!(subtle < medium && medium < wild, "subtle {subtle}, medium {medium}, wild {wild}");
+        let s = AutoplaySettings { movement: Movement::Normal, ..Default::default() };
+        let r = generate(&far, &s, 120, &dice()).unwrap();
+        assert!(max_off_chord(&r, 1000.0, 1150.0, world(&far.notes[0]), world(&far.notes[1])) < 0.02, "normal movement stays straight");
     }
 
     #[test]

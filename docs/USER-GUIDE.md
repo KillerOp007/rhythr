@@ -396,9 +396,9 @@ map, not for anything that could pass as a real play.
   steps of 0.05, which drives the song, the approach and the cursor like the
   game's own. The player name is Autoplay and the accuracy 100 percent,
   always; neither is a setting.
-- **How the cursor moves**: it keeps a steady pace. Close notes are an
-  almost straight line, the farther the next note and the more time, the
-  wider the arc. The same spot twice in quick succession is a hold; the same
+- **How the cursor moves**: close notes are an almost straight line; the
+  farther the next note, the wider the arc, and wider still when there is
+  time to spare. The same spot twice in quick succession is a hold; the same
   spot with time is a boomerang out and back. On a long pause it goes to
   the centre, waits, and leaves in time for the next note. It never leaves
   the field and never jumps.

@@ -20,6 +20,12 @@ pub const REST_OUT_MAX_SECS: f64 = 1.0;
 pub const REST_IN_MIN_SECS: f64 = 0.25;
 /// Fraction of the chord used for the belly's reach limit.
 pub const L_MAX_FACTOR: f32 = 1.5;
+/// The dance's belly per unit of chord: real maps leave about 150 ms
+/// between notes, so an arc that waited for time to spare never came. The
+/// control points sit this fraction of the chord off it (the curve itself
+/// reaches three quarters of that); time to spare widens it, the amount
+/// scales it, the barrier has the last word.
+pub const BELLY_PER_UNIT: f32 = 0.3;
 /// Samples per segment for the arc-length table.
 const ARC_SAMPLES: usize = 48;
 
@@ -219,7 +225,7 @@ pub fn plan(points: &[Waypoint], settings: &AutoplaySettings, field: &Field, dic
                         best = *dir;
                     }
                 }
-                let reach = ((CRUISE as f64 * t / BOOMERANG_DIVISOR) as f32).min(best_room) * factor;
+                let reach = ((CRUISE as f64 * t / BOOMERANG_DIVISOR) as f32 * factor).min(best_room);
                 let tip = (a.0 + best.0 * reach, a.1 + best.1 * reach);
                 let mid = t0 + (t1 - t0) / 2.0;
                 let spread = BOOMERANG_SPREAD * reach;
@@ -232,7 +238,7 @@ pub fn plan(points: &[Waypoint], settings: &AutoplaySettings, field: &Field, dic
             let l_max = 2.0 * field.bound * L_MAX_FACTOR;
             let l = ((CRUISE as f64 * t) as f32).clamp(d, l_max);
             let mut belly = 0.0f32;
-            if dance && l > d * 1.001 {
+            if dance {
                 let n = (-(b.1 - a.1) / d, (b.0 - a.0) / d);
                 let mid = ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0);
                 let s = side(dice, i);
@@ -242,7 +248,8 @@ pub fn plan(points: &[Waypoint], settings: &AutoplaySettings, field: &Field, dic
                     room = field.room(mid, (-n.0 * s, -n.1 * s));
                     sign = -s;
                 }
-                belly = ((l - d) / 2.0).min(room) * factor * sign;
+                let want = ((l - d) / 2.0).max(BELLY_PER_UNIT * d) * factor;
+                belly = want.min(room) * sign;
             }
             let kind = if belly.abs() > 1e-4 { SegmentKind::Curve } else { SegmentKind::Straight };
             segs.push(chord_curve(t0, t1, a, b, belly, kind));
