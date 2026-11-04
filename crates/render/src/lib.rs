@@ -5,6 +5,7 @@
 
 pub mod analysis;
 pub mod audio;
+pub mod autoplay;
 pub mod background;
 pub mod builtin;
 pub mod config;
