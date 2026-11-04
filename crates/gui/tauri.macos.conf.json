@@ -1,0 +1,27 @@
+{
+  "bundle": {
+    "targets": [
+      "app",
+      "dmg"
+    ],
+    "createUpdaterArtifacts": false,
+    "resources": [
+      "ffmpeg",
+      "ffmpeg-LICENSE.txt",
+      "README.txt",
+      "FONT-LICENSE.txt",
+      "LICENSE.txt",
+      "THIRD-PARTY-NOTICES.txt",
+      "THIRD-PARTY-CRATES.txt"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/256x256.png",
+      "icons/512x512.png"
+    ],
+    "macOS": {
+      "signingIdentity": "-"
+    }
+  }
+}

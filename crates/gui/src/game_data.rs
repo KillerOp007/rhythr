@@ -139,10 +139,16 @@ pub fn all_candidates() -> Vec<PathBuf> {
         // Windows: the roaming folder; no Proton prefix to look for.
         (dirs::config_dir(), Vec::new(), Vec::new())
     } else {
-        let xdg: Vec<PathBuf> = [dirs::config_dir(), dirs::data_dir()]
+        let mut xdg: Vec<PathBuf> = [dirs::config_dir(), dirs::data_dir()]
             .into_iter()
             .flatten()
             .collect();
+        // .NET on macOS maps the application data folder to ~/.config.
+        if cfg!(target_os = "macos") {
+            if let Some(home) = dirs::home_dir() {
+                xdg.push(home.join(".config"));
+            }
+        }
         (None, steam_library_roots(), xdg)
     };
     candidates(env_override, roaming, &steam, &xdg)

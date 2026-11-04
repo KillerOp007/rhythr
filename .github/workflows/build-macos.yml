@@ -1,0 +1,80 @@
+# A macOS test build, run by hand. There is no Mac in the project: the
+# bundle this produces goes to a community tester. See docs/MACOS-BUILD.md.
+name: macOS build
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Suffix for the artifact name (mac1, mac2, ...)
+        required: false
+        default: mac1
+
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust with both Apple targets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: macos-universal
+
+      - name: Tauri CLI
+        run: npm install -g "@tauri-apps/cli@^2"
+
+      # A static ffmpeg for each architecture, joined into one universal
+      # binary and placed where tauri.macos.conf.json lists it as a
+      # resource (Contents/Resources, where the app looks for it).
+      - name: Static ffmpeg (universal)
+        working-directory: crates/gui
+        run: |
+          set -euo pipefail
+          for arch in arm64 amd64; do
+            curl -fsSL -o "ffmpeg-$arch.zip" "https://ffmpeg.martin-riedl.de/redirect/latest/macos/$arch/release/ffmpeg.zip"
+            mkdir -p "ff-$arch"
+            unzip -q "ffmpeg-$arch.zip" -d "ff-$arch"
+            bin=$(find "ff-$arch" -type f -name ffmpeg | head -n 1)
+            test -n "$bin"
+            cp "$bin" "ffmpeg-$arch"
+          done
+          lipo -create -output ffmpeg ffmpeg-arm64 ffmpeg-amd64
+          chmod +x ffmpeg
+          codesign --force --sign - ffmpeg
+          lipo -info ffmpeg
+          ./ffmpeg -version | head -n 1
+          {
+            echo "ffmpeg: static build by Martin Riedl, https://ffmpeg.martin-riedl.de"
+            echo "(GPL build: libx264 and libx265 are included; build script at https://git.martin-riedl.de/ffmpeg/build-script)."
+            echo "rhythr runs it as a separate process. The FFmpeg licence text and the GPL follow."
+            echo
+            curl -fsSL https://raw.githubusercontent.com/FFmpeg/FFmpeg/master/LICENSE.md
+            echo
+            curl -fsSL https://raw.githubusercontent.com/FFmpeg/FFmpeg/master/COPYING.GPLv3
+          } > ffmpeg-LICENSE.txt
+          rm -rf ff-arm64 ff-amd64 ffmpeg-arm64 ffmpeg-amd64 ffmpeg-*.zip
+
+      - name: Build the universal bundle
+        working-directory: crates/gui
+        run: tauri build --target universal-apple-darwin
+
+      - name: Collect
+        run: |
+          set -euo pipefail
+          ver=$(sed -n 's/^  "version": "\(.*\)",$/\1/p' crates/gui/tauri.conf.json)
+          mkdir -p out
+          cp target/universal-apple-darwin/release/bundle/dmg/*.dmg "out/rhythr_${ver}_universal_TESTBUILD-${{ inputs.tag }}.dmg"
+          ls -la out
+          codesign --verify --deep --strict --verbose=2 target/universal-apple-darwin/release/bundle/macos/rhythr.app
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rhythr-macos-${{ inputs.tag }}
+          path: out/*.dmg
+          if-no-files-found: error
