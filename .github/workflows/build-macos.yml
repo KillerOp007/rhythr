@@ -60,6 +60,13 @@ jobs:
           } > ffmpeg-LICENSE.txt
           rm -rf ff-arm64 ff-amd64 ffmpeg-arm64 ffmpeg-amd64 ffmpeg-*.zip
 
+      # The Tauri CLI wants frontendDist to exist before it runs cargo; on a
+      # fresh checkout ui-dist is only created by build.rs during the build,
+      # so a plain copy stands in (build.rs replaces it with the real one).
+      - name: Web assets stand-in
+        working-directory: crates/gui
+        run: cp -R ui ui-dist
+
       - name: Build the universal bundle
         working-directory: crates/gui
         run: tauri build --target universal-apple-darwin
