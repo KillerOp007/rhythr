@@ -204,9 +204,10 @@ pub fn plan(points: &[Waypoint], settings: &AutoplaySettings, field: &Field, dic
             if dance && t >= HOLD_SECS {
                 // boomerang: out along the direction with the most room (the
                 // dice break ties), back on a different arc
+                let d = std::f32::consts::FRAC_1_SQRT_2;
                 let dirs: [(f32, f32); 8] = [
                     (1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0),
-                    (0.7071, 0.7071), (-0.7071, 0.7071), (0.7071, -0.7071), (-0.7071, -0.7071),
+                    (d, d), (-d, d), (d, -d), (-d, -d),
                 ];
                 let s = side(dice, i);
                 let mut best = dirs[0];

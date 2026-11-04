@@ -60,7 +60,7 @@ impl AutoplaySettings {
     pub fn normalized(self) -> Self {
         let speed = (self.speed_mod.clamp(0.8, 2.0) / 0.05).round() * 0.05;
         let rest = (self.rest_secs.clamp(2.0, 8.0) / 0.5).round() * 0.5;
-        AutoplaySettings { speed_mod: ((speed * 100.0).round() / 100.0) as f32, rest_secs: rest, ..self }
+        AutoplaySettings { speed_mod: (speed * 100.0).round() / 100.0, rest_secs: rest, ..self }
     }
 }
 
