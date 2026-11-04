@@ -26,6 +26,157 @@ struct Cli {
     command: Command,
 }
 
+/// The options `video` and `autoplay` share: everything about the map,
+/// the output file and the encoding.
+#[derive(clap::Args)]
+struct VideoCommon {
+    /// Map file: .rhm or the game's cache .json.
+    #[arg(long)]
+    map: PathBuf,
+    /// Output MP4 path.
+    #[arg(long, short)]
+    out: PathBuf,
+    /// Audio track to mux (ms/mp3); omit for silent or when the .rhm
+    /// carries embedded audio.
+    #[arg(long)]
+    audio: Option<PathBuf>,
+    /// Mux --audio at its own rate instead of rate-shifting it with the
+    /// run's speed mod. Use it when the track is a replacement
+    /// soundtrack rather than the map's song.
+    #[arg(long)]
+    audio_own_speed: bool,
+    /// Which hit sound plays: "default", one of the game's packs
+    /// (bass, creamy, pick, vulnus), or a path to an audio file.
+    #[arg(long, default_value = "default")]
+    hitsound: String,
+    /// What a speed mod does to the song's pitch: auto follows the
+    /// replay (its recorded Pitch Lock toggle on new files, pitched on
+    /// older ones), locked keeps the pitch, pitched shifts it with the
+    /// speed.
+    #[arg(long, default_value = "auto", value_parser = ["auto", "locked", "pitched"])]
+    pitch: String,
+    /// Clip start (ms or mm:ss); default 0.
+    #[arg(long)]
+    start: Option<String>,
+    /// Clip end (ms or mm:ss); default the replay's end (or fail time).
+    #[arg(long)]
+    end: Option<String>,
+    /// Frames per second (24-240).
+    #[arg(long, default_value_t = 60, value_parser = clap::value_parser!(u32).range(24..=240))]
+    fps: u32,
+    /// How fast the video plays the run back (0.1-4.0). 0.25 is slow
+    /// motion over four times the length; the run's own speed mod is a
+    /// separate thing and is always applied on top of this.
+    #[arg(long, default_value_t = 1.0)]
+    speed: f64,
+    /// Aim for a file of about this many MB instead of a quality level.
+    /// Single-pass, so it lands near the target rather than exactly on
+    /// it; --quality is ignored when this is given.
+    #[arg(long)]
+    target_size_mb: Option<f64>,
+    /// Output width in pixels (320-7680).
+    #[arg(long, default_value_t = 1920, value_parser = clap::value_parser!(u32).range(320..=7680))]
+    width: u32,
+    /// Output height in pixels (240-4320).
+    #[arg(long, default_value_t = 1080, value_parser = clap::value_parser!(u32).range(240..=4320))]
+    height: u32,
+    /// Render quality 0-100, higher is better. Mapped onto whichever
+    /// encoder ends up being used; --crf overrides it with a raw CRF.
+    #[arg(long, default_value_t = rhythia_render::quality::DEFAULT)]
+    quality: u32,
+    /// Raw x264 CRF, for scripts written before --quality existed. Wins
+    /// over --quality when both are given.
+    #[arg(long)]
+    crf: Option<u32>,
+    /// Feed frames to ffmpeg over its stdin instead of a loopback
+    /// socket. The socket is the default and is probed before it is
+    /// used; this is the way out if it ever misbehaves.
+    #[arg(long)]
+    no_tcp_feed: bool,
+    /// Bytes handed to that socket per write; 0 = the whole frame at
+    /// once. The best value differs by platform.
+    #[arg(long, default_value_t = 256 * 1024)]
+    socket_chunk: usize,
+    /// Diagnostic: run everything but encode nothing and write no file,
+    /// so the reported feed time is the transport by itself.
+    #[arg(long)]
+    dry_run: bool,
+    /// Motion blur strength: 0 = off, 1 = light, 2 = strong (tmix).
+    #[arg(long, default_value_t = 0)]
+    motion_blur: u32,
+    /// Music volume in percent (0-150).
+    #[arg(long, default_value_t = 100)]
+    music_volume: u32,
+    /// Hit/miss-sound volume in percent (0 = off); needs --game-assets
+    /// for the game's extracted sound files.
+    #[arg(long, default_value_t = 0)]
+    hitsound_volume: u32,
+    /// x264 speed preset (ultrafast..placebo).
+    #[arg(long, default_value = "veryfast")]
+    preset: String,
+    /// Video encoder: auto probes the VAAPI hardware encoder and falls
+    /// back to software x264; force one with x264/vaapi.
+    #[arg(long, default_value = "auto")]
+    encoder: String,
+    /// ffmpeg executable (path or bare name on PATH).
+    #[arg(long, default_value = "ffmpeg")]
+    ffmpeg: String,
+    /// The player's config.json or exported .rhs skin.
+    #[arg(long)]
+    config: Option<PathBuf>,
+    /// Directory with the game's built-in assets to resolve built-in
+    /// skin references (see `frame --game-assets`).
+    #[arg(long)]
+    game_assets: Option<PathBuf>,
+    /// Ghost races: hide the score-lead widget (numbers + bar) and the
+    /// results delta graph.
+    #[arg(long)]
+    no_racing_delta: bool,
+    /// Custom playfield background: an image or a video file (videos
+    /// play muted and looped). Replaces the skin's background; the
+    /// results screen keeps its own look.
+    #[arg(long)]
+    background: Option<PathBuf>,
+    /// How much the custom background is darkened, 0-100 percent.
+    #[arg(long, default_value_t = 60, value_parser = clap::value_parser!(u32).range(0..=100))]
+    background_dim: u32,
+    /// Zoom on the custom background, percent (100 = exactly covering
+    /// the frame).
+    #[arg(long, default_value_t = 100)]
+    background_zoom: u32,
+    /// Horizontal shift of the custom background in percent of the
+    /// frame width (positive = right); clamped so the frame stays
+    /// covered.
+    #[arg(long, default_value_t = 0, allow_negative_numbers = true)]
+    background_x: i32,
+    /// Vertical shift in percent of the frame height (positive =
+    /// down).
+    #[arg(long, default_value_t = 0, allow_negative_numbers = true)]
+    background_y: i32,
+    /// Video backgrounds: start (and loop) playback from this second.
+    #[arg(long, default_value_t = 0.0)]
+    background_start: f64,
+    /// Video backgrounds in clip renders (--start): "song" plays the
+    /// video as if it ran since 0:00 of the song, "clip" restarts it
+    /// at the clip start.
+    #[arg(long, default_value = "song", value_parser = ["song", "clip"])]
+    background_sync: String,
+}
+
+/// What `video` has and `autoplay` does not.
+struct VideoExtra {
+    ghost_replay: Option<PathBuf>,
+    results_secs: f64,
+    app_layout: bool,
+    app_layout_file: Option<PathBuf>,
+}
+
+/// Where the run comes from: a replay file, or the synthetic Autoplay run.
+enum RunSource {
+    Replay(PathBuf),
+    Autoplay(rhythia_render::autoplay::AutoplaySettings),
+}
+
 #[derive(Subcommand)]
 enum Command {
     /// Measure which way of handing frames to ffmpeg is fastest here, and
@@ -98,112 +249,16 @@ enum Command {
     /// Render a replay to an MP4 video (frames → ffmpeg + audio).
     Video {
         replay: PathBuf,
-        /// Map file: .rhm or the game's cache .json.
-        #[arg(long)]
-        map: PathBuf,
-        /// Output MP4 path.
-        #[arg(long, short)]
-        out: PathBuf,
-        /// Audio track to mux (ms/mp3); omit for silent or when the .rhm
-        /// carries embedded audio.
-        #[arg(long)]
-        audio: Option<PathBuf>,
-        /// Mux --audio at its own rate instead of rate-shifting it with the
-        /// run's speed mod. Use it when the track is a replacement
-        /// soundtrack rather than the map's song.
-        #[arg(long)]
-        audio_own_speed: bool,
-        /// Which hit sound plays: "default", one of the game's packs
-        /// (bass, creamy, pick, vulnus), or a path to an audio file.
-        #[arg(long, default_value = "default")]
-        hitsound: String,
-        /// What a speed mod does to the song's pitch: auto follows the
-        /// replay (its recorded Pitch Lock toggle on new files, pitched on
-        /// older ones), locked keeps the pitch, pitched shifts it with the
-        /// speed.
-        #[arg(long, default_value = "auto", value_parser = ["auto", "locked", "pitched"])]
-        pitch: String,
-        /// Clip start (ms or mm:ss); default 0.
-        #[arg(long)]
-        start: Option<String>,
-        /// Clip end (ms or mm:ss); default the replay's end (or fail time).
-        #[arg(long)]
-        end: Option<String>,
-        /// Frames per second (24-240).
-        #[arg(long, default_value_t = 60, value_parser = clap::value_parser!(u32).range(24..=240))]
-        fps: u32,
-        /// How fast the video plays the run back (0.1-4.0). 0.25 is slow
-        /// motion over four times the length; the run's own speed mod is a
-        /// separate thing and is always applied on top of this.
-        #[arg(long, default_value_t = 1.0)]
-        speed: f64,
-        /// Aim for a file of about this many MB instead of a quality level.
-        /// Single-pass, so it lands near the target rather than exactly on
-        /// it; --quality is ignored when this is given.
-        #[arg(long)]
-        target_size_mb: Option<f64>,
-        /// Output width in pixels (320-7680).
-        #[arg(long, default_value_t = 1920, value_parser = clap::value_parser!(u32).range(320..=7680))]
-        width: u32,
-        /// Output height in pixels (240-4320).
-        #[arg(long, default_value_t = 1080, value_parser = clap::value_parser!(u32).range(240..=4320))]
-        height: u32,
-        /// Render quality 0-100, higher is better. Mapped onto whichever
-        /// encoder ends up being used; --crf overrides it with a raw CRF.
-        #[arg(long, default_value_t = rhythia_render::quality::DEFAULT)]
-        quality: u32,
-        /// Raw x264 CRF, for scripts written before --quality existed. Wins
-        /// over --quality when both are given.
-        #[arg(long)]
-        crf: Option<u32>,
-        /// Feed frames to ffmpeg over its stdin instead of a loopback
-        /// socket. The socket is the default and is probed before it is
-        /// used; this is the way out if it ever misbehaves.
-        #[arg(long)]
-        no_tcp_feed: bool,
-        /// Bytes handed to that socket per write; 0 = the whole frame at
-        /// once. The best value differs by platform.
-        #[arg(long, default_value_t = 256 * 1024)]
-        socket_chunk: usize,
-        /// Diagnostic: run everything but encode nothing and write no file,
-        /// so the reported feed time is the transport by itself.
-        #[arg(long)]
-        dry_run: bool,
+        #[command(flatten)]
+        common: VideoCommon,
         /// Second replay of the same map, rendered as a ghost overlay
         /// (cursor + trail in orange, with a versus panel).
         #[arg(long)]
         ghost_replay: Option<PathBuf>,
-        /// Motion blur strength: 0 = off, 1 = light, 2 = strong (tmix).
-        #[arg(long, default_value_t = 0)]
-        motion_blur: u32,
-        /// Music volume in percent (0-150).
-        #[arg(long, default_value_t = 100)]
-        music_volume: u32,
-        /// Hit/miss-sound volume in percent (0 = off); needs --game-assets
-        /// for the game's extracted sound files.
-        #[arg(long, default_value_t = 0)]
-        hitsound_volume: u32,
         /// Seconds of results screen appended when the clip reaches the end
         /// of the run (0 disables).
         #[arg(long, default_value_t = 4.0)]
         results_secs: f64,
-        /// x264 speed preset (ultrafast..placebo).
-        #[arg(long, default_value = "veryfast")]
-        preset: String,
-        /// Video encoder: auto probes the VAAPI hardware encoder and falls
-        /// back to software x264; force one with x264/vaapi.
-        #[arg(long, default_value = "auto")]
-        encoder: String,
-        /// ffmpeg executable (path or bare name on PATH).
-        #[arg(long, default_value = "ffmpeg")]
-        ffmpeg: String,
-        /// The player's config.json or exported .rhs skin.
-        #[arg(long)]
-        config: Option<PathBuf>,
-        /// Directory with the game's built-in assets to resolve built-in
-        /// skin references (see `frame --game-assets`).
-        #[arg(long)]
-        game_assets: Option<PathBuf>,
         /// Apply the HUD layout arranged in the desktop app (see
         /// `frame --app-layout`).
         #[arg(long)]
@@ -212,39 +267,24 @@ enum Command {
         /// own; implies --app-layout.
         #[arg(long, value_name = "FILE")]
         app_layout_file: Option<PathBuf>,
-        /// Ghost races: hide the score-lead widget (numbers + bar) and the
-        /// results delta graph.
-        #[arg(long)]
-        no_racing_delta: bool,
-        /// Custom playfield background: an image or a video file (videos
-        /// play muted and looped). Replaces the skin's background; the
-        /// results screen keeps its own look.
-        #[arg(long)]
-        background: Option<PathBuf>,
-        /// How much the custom background is darkened, 0-100 percent.
-        #[arg(long, default_value_t = 60, value_parser = clap::value_parser!(u32).range(0..=100))]
-        background_dim: u32,
-        /// Zoom on the custom background, percent (100 = exactly covering
-        /// the frame).
-        #[arg(long, default_value_t = 100)]
-        background_zoom: u32,
-        /// Horizontal shift of the custom background in percent of the
-        /// frame width (positive = right); clamped so the frame stays
-        /// covered.
-        #[arg(long, default_value_t = 0, allow_negative_numbers = true)]
-        background_x: i32,
-        /// Vertical shift in percent of the frame height (positive =
-        /// down).
-        #[arg(long, default_value_t = 0, allow_negative_numbers = true)]
-        background_y: i32,
-        /// Video backgrounds: start (and loop) playback from this second.
-        #[arg(long, default_value_t = 0.0)]
-        background_start: f64,
-        /// Video backgrounds in clip renders (--start): "song" plays the
-        /// video as if it ran since 0:00 of the song, "clip" restarts it
-        /// at the clip start.
-        #[arg(long, default_value = "song", value_parser = ["song", "clip"])]
-        background_sync: String,
+    },
+    /// Render a map with a synthetic cursor (no replay). The video carries
+    /// the AUTOPLAY ticker, the hidden mark and a metadata tag.
+    Autoplay {
+        #[command(flatten)]
+        common: VideoCommon,
+        /// How the cursor moves: "normal" (soft, direct) or "dance".
+        #[arg(long, default_value = "dance", value_parser = ["normal", "dance"])]
+        movement: String,
+        /// How wide the arcs and boomerangs get under "dance".
+        #[arg(long, default_value = "medium", value_parser = ["subtle", "medium", "wild"])]
+        dance: String,
+        /// Real seconds without a note before the cursor rests in the centre (2 to 8).
+        #[arg(long, default_value_t = 4.5)]
+        rest: f64,
+        /// The game's speed mod, 0.80 to 2.00 in steps of 0.05 (song, approach and cursor follow it).
+        #[arg(long, default_value_t = 1.0)]
+        speed_mod: f32,
     },
     /// Look for the hidden Autoplay mark in a video. Exit code 0 when the
     /// mark is found, 2 when it is weak, 1 when there is none.
@@ -770,47 +810,84 @@ fn run() -> anyhow::Result<bool> {
                 std::process::exit(code)
             }
         }
-        Command::Video {
-            replay,
-            map,
-            out,
-            audio,
-            audio_own_speed,
-            hitsound,
-            pitch,
-            start,
-            end,
-            fps,
-            speed,
-            target_size_mb,
-            width,
-            height,
-            quality,
-            crf,
-            no_tcp_feed,
-            socket_chunk,
-            dry_run,
-            ghost_replay,
-            motion_blur,
-            music_volume,
-            hitsound_volume,
-            results_secs,
-            preset,
-            encoder,
-            ffmpeg,
-            config,
-            game_assets,
-            app_layout,
-            app_layout_file,
-            no_racing_delta,
-            background,
-            background_dim,
-            background_zoom,
-            background_x,
-            background_y,
-            background_start,
-            background_sync,
-        } => {
+        Command::Video { replay, common, ghost_replay, results_secs, app_layout, app_layout_file } => render_run(
+            RunSource::Replay(replay),
+            common,
+            VideoExtra { ghost_replay, results_secs, app_layout, app_layout_file },
+        ),
+        Command::Autoplay { common, movement, dance, rest, speed_mod } => {
+            use rhythia_render::autoplay::{AutoplaySettings, DanceAmount, Movement};
+            let settings = AutoplaySettings {
+                movement: if movement == "normal" { Movement::Normal } else { Movement::Dance },
+                dance: match dance.as_str() {
+                    "subtle" => DanceAmount::Subtle,
+                    "wild" => DanceAmount::Wild,
+                    _ => DanceAmount::Medium,
+                },
+                rest_secs: rest,
+                speed_mod,
+            }
+            .normalized();
+            if (settings.speed_mod - speed_mod).abs() > 1e-6 || (settings.rest_secs - rest).abs() > 1e-9 {
+                eprintln!(
+                    "note: rendering with speed mod {:.2}x and rest {:.1} s (snapped to the grids)",
+                    settings.speed_mod, settings.rest_secs
+                );
+            }
+            render_run(
+                RunSource::Autoplay(settings),
+                common,
+                VideoExtra { ghost_replay: None, results_secs: 0.0, app_layout: false, app_layout_file: None },
+            )
+        }
+    }
+}
+
+/// The shared body of `video` and `autoplay`: load, configure, render.
+fn render_run(source: RunSource, common: VideoCommon, extra: VideoExtra) -> anyhow::Result<bool> {
+    let VideoCommon {
+        map,
+        out,
+        audio,
+        audio_own_speed,
+        hitsound,
+        pitch,
+        start,
+        end,
+        fps,
+        speed,
+        target_size_mb,
+        width,
+        height,
+        quality,
+        crf,
+        no_tcp_feed,
+        socket_chunk,
+        dry_run,
+        motion_blur,
+        music_volume,
+        hitsound_volume,
+        preset,
+        encoder,
+        ffmpeg,
+        config,
+        game_assets,
+        no_racing_delta,
+        background,
+        background_dim,
+        background_zoom,
+        background_x,
+        background_y,
+        background_start,
+        background_sync,
+    } = common;
+    let VideoExtra { ghost_replay, results_secs, app_layout, app_layout_file } = extra;
+    let autoplay = matches!(source, RunSource::Autoplay(_));
+    let source_name: String = match &source {
+        RunSource::Replay(p) => p.file_name().unwrap_or_default().to_string_lossy().into_owned(),
+        RunSource::Autoplay(_) => "Autoplay".to_string(),
+    };
+    {
             // h.264 refuses an odd side, and the GPU colour conversion needs
             // a width divisible by four (four pixels per 32-bit word), so an
             // unrounded size either fails minutes in or runs ten times slower
@@ -825,10 +902,22 @@ fn run() -> anyhow::Result<bool> {
                 }
                 (w, h)
             };
-            let r = Replay::from_path(&replay)
-                .with_context(|| format!("reading {}", replay.display()))?;
             let mut m =
                 Map::from_path(&map).with_context(|| format!("reading {}", map.display()))?;
+            let (r, mark_pattern) = match &source {
+                RunSource::Replay(replay) => (
+                    Replay::from_path(replay).with_context(|| format!("reading {}", replay.display()))?,
+                    None,
+                ),
+                RunSource::Autoplay(settings) => {
+                    let (seed, _) = rhythia_render::mark::built_in();
+                    let pattern = rhythia_render::mark::pattern(&seed);
+                    let run = rhythia_render::autoplay::generate(&m, settings, fps, &pattern).map_err(|e| {
+                        anyhow::anyhow!(rhythia_errcode::stamp_in(rhythia_errcode::Area::Autoplay, &e.to_string()))
+                    })?;
+                    (run, Some(pattern))
+                }
+            };
             // Cache-JSON maps don't embed their cover; look for a sibling
             // "…cover.png" sharing the map's name prefix (results screen bg).
             if m.cover.is_none() {
@@ -882,7 +971,7 @@ fn run() -> anyhow::Result<bool> {
 
             warn_unreproducible_mods(&r);
             let report = integrity::verify_replay(&r, &m);
-            if !report.consistent() {
+            if !autoplay && !report.consistent() {
                 // Loading the wrong chart is a mistake, not tampering, and it
                 // is by far the likelier of the two. Saying "possibly
                 // manipulated" for it accused people of something they had
@@ -937,7 +1026,14 @@ fn run() -> anyhow::Result<bool> {
                 _audio_tmp = Some(tmp);
                 Some(path)
             } else {
-                eprintln!("note: no audio (cache-JSON map has none; pass --audio for sound)");
+                if autoplay {
+                    eprintln!(
+                        "note: {}",
+                        rhythia_errcode::stamp_in(rhythia_errcode::Area::Autoplay, "the map has no audio, rendering silent")
+                    );
+                } else {
+                    eprintln!("note: no audio (cache-JSON map has none; pass --audio for sound)");
+                }
                 None
             };
 
@@ -947,6 +1043,10 @@ fn run() -> anyhow::Result<bool> {
                     .context("initialising GPU renderer")?;
             // The glyph atlas holds ASCII until a title asks for more.
             renderer.ensure_hud_text(&rhythia_render::hud::atlas_text(&m, &r));
+            if let (RunSource::Autoplay(settings), Some(pattern)) = (&source, &mark_pattern) {
+                renderer.set_mark(Some(pattern));
+                renderer.set_ticker(Some(rhythia_render::autoplay::ticker_text(settings)));
+            }
 
             // Pick the fastest working encoder: probe the hardware encoders
             // (NVIDIA, Intel, then VAAPI) unless the user forced a choice.
@@ -1067,7 +1167,11 @@ fn run() -> anyhow::Result<bool> {
                 usable
             };
             let opts = rhythia_render::video::VideoOptions {
-                extra_output_args: Vec::new(),
+                extra_output_args: if autoplay {
+                    rhythia_render::video::AUTOPLAY_METADATA.iter().map(|s| s.to_string()).collect()
+                } else {
+                    Vec::new()
+                },
                 fps,
                 output_speed: speed,
                 target_size_mb,
@@ -1137,7 +1241,7 @@ fn run() -> anyhow::Result<bool> {
             println!(
                 "rendering {song_secs:.1}s of {} @ {}x{}/{} (run {:.2}x, output {:.2}x) -> {:.1}s \
                  video -> {}",
-                replay.file_name().unwrap_or_default().to_string_lossy(),
+                source_name,
                 width,
                 height,
                 fps,
@@ -1197,7 +1301,6 @@ fn run() -> anyhow::Result<bool> {
                 );
             }
             Ok(true)
-        }
     }
 }
 
@@ -1336,6 +1439,34 @@ mod mark_check_tests {
                 assert!(json);
                 assert_eq!(ffmpeg, "ffmpeg");
                 assert_eq!(max_frames, 3000);
+            }
+            _ => panic!("wrong command"),
+        }
+    }
+
+    #[test]
+    fn autoplay_parses_its_flags() {
+        let cli = Cli::try_parse_from([
+            "rhythr-cli", "autoplay", "--map", "m.rhm", "-o", "o.mp4", "--movement", "normal", "--dance", "wild",
+            "--rest", "6", "--speed-mod", "1.5", "--fps", "30",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Autoplay { movement, dance, rest, speed_mod, common } => {
+                assert_eq!(movement, "normal");
+                assert_eq!(dance, "wild");
+                assert!((rest - 6.0).abs() < 1e-9 && (speed_mod - 1.5).abs() < 1e-6 && common.fps == 30);
+                assert_eq!(common.map, PathBuf::from("m.rhm"));
+            }
+            _ => panic!("wrong command"),
+        }
+        assert!(Cli::try_parse_from(["rhythr-cli", "autoplay", "--map", "m.rhm", "-o", "o.mp4", "--movement", "sideways"]).is_err());
+        // the video command keeps its shape
+        let cli = Cli::try_parse_from(["rhythr-cli", "video", "r.rhr", "--map", "m.rhm", "-o", "o.mp4", "--speed", "0.5", "--results-secs", "2"]).unwrap();
+        match cli.command {
+            Command::Video { replay, common, results_secs, .. } => {
+                assert_eq!(replay, PathBuf::from("r.rhr"));
+                assert!((common.speed - 0.5).abs() < 1e-9 && (results_secs - 2.0).abs() < 1e-9);
             }
             _ => panic!("wrong command"),
         }

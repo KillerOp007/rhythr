@@ -18,3 +18,7 @@ clap.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tempfile = "3"
+
+[dev-dependencies]
+# Building synthetic .rhm archives for the autoplay end-to-end test.
+zip = { version = "2", default-features = false, features = ["deflate"] }
