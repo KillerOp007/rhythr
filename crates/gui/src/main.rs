@@ -4743,10 +4743,16 @@ async fn open_analyze_window(app_handle: tauri::AppHandle) -> Result<(), String>
         WebviewUrl::App("analyze.html".into()),
     )
     .title("rhythr · Analyze")
-    .min_inner_size(760.0, 520.0)
+    .min_inner_size(760.0, 520.0);
     // Live mode paints BEHIND the webview; the page body goes
-    // transparent so the wgpu frame shows through.
-    .transparent(native_capable);
+    // transparent so the wgpu frame shows through. macOS has no live
+    // mode, and its transparent() sits behind a private API feature.
+    #[cfg(not(target_os = "macos"))]
+    {
+        builder = builder.transparent(native_capable);
+    }
+    #[cfg(target_os = "macos")]
+    let _ = native_capable;
     let restore = saved.filter(|(_, _, w, h)| *w >= ANALYZE_MIN.0 && *h >= ANALYZE_MIN.1);
     builder = builder.inner_size(1280.0, 800.0);
     let win = builder.build().map_err(err_str)?;
