@@ -171,6 +171,8 @@ pub struct Renderer {
     /// The hidden Autoplay mark: two full-screen draws after the HUD while
     /// a pattern is set (see [`crate::mark`]).
     mark: crate::mark::gpu::MarkPass,
+    /// The Autoplay ticker text; drawn last on every frame while set.
+    ticker: std::cell::RefCell<Option<String>>,
 }
 
 /// Number of in-flight readback buffers; the video loop reads a frame only
@@ -367,6 +369,13 @@ impl Renderer {
 
     pub fn mark_enabled(&self) -> bool {
         self.mark.enabled()
+    }
+
+    /// Sets the Autoplay ticker text (or clears it). While set, every frame
+    /// carries the moving band across the top, after every HUD element and
+    /// regardless of the HUD toggles.
+    pub fn set_ticker(&self, text: Option<String>) {
+        *self.ticker.borrow_mut() = text;
     }
 
     /// Whether the OUTPUT frame is portrait (Shorts/TikTok). Layout and
@@ -878,6 +887,7 @@ impl Renderer {
             depad_scratch: std::cell::RefCell::new(Vec::new()),
             nv12: std::cell::RefCell::new(None),
             mark,
+            ticker: std::cell::RefCell::new(None),
         })
     }
 
@@ -2072,6 +2082,11 @@ impl Renderer {
         // Full-frame extras join after the viewport shift: they are
         // already in frame space.
         verts.extend_from_slice(extra_hud);
+        if !clear || vp_w >= self.width {
+            if let Some(text) = self.ticker.borrow().as_ref() {
+                verts.extend(crate::hud::build_ticker(&self.hud_atlas, text, song_time_ms, self.width, self.height));
+            }
+        }
         if !verts.is_empty() {
             verts.truncate(HUD_VERT_CAP - HUD_VERT_CAP % 3);
             self.queue

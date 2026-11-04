@@ -11,6 +11,9 @@ use crate::scene::SceneParams;
 use crate::{Error, Renderer, SkinConfig};
 use rhythia_formats::{map::Map, rhr::Replay};
 
+/// The output arguments that tag an Autoplay render in the file's metadata.
+pub const AUTOPLAY_METADATA: [&str; 2] = ["-metadata", "comment=rhythr autoplay render: not a real play"];
+
 pub struct VideoOptions {
     pub fps: u32,
     /// Song time (ms) the video starts at.

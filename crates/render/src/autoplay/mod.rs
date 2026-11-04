@@ -354,6 +354,14 @@ mod tests {
     }
 
     #[test]
+    fn the_ticker_text_names_movement_and_speed() {
+        let s = AutoplaySettings { speed_mod: 1.25, ..Default::default() };
+        assert_eq!(ticker_text(&s), "AUTOPLAY   rendered with rhythr   not a real play   cursor dance   1.25x");
+        let s = AutoplaySettings { movement: Movement::Normal, ..Default::default() };
+        assert!(ticker_text(&s).ends_with("normal movement   1.00x"));
+    }
+
+    #[test]
     fn settings_normalise_to_the_grids() {
         let s = AutoplaySettings { speed_mod: 1.337, rest_secs: 9.9, ..Default::default() }.normalized();
         assert!((s.speed_mod - 1.35).abs() < 1e-6 && (s.rest_secs - 8.0).abs() < 1e-9);

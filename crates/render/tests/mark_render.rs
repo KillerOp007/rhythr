@@ -70,3 +70,19 @@ fn without_the_mark_black_stays_zero() {
     let off = renderer.render_still(&params, &cfg, &skin, &replay, &map, 300.0, None).unwrap();
     assert_eq!(&off[0..3], &[0, 0, 0]);
 }
+
+#[test]
+fn the_ticker_is_drawn_when_set() {
+    let (renderer, cfg, params, map, replay) = scene();
+    let skin = renderer.prepare_skin(&cfg);
+    renderer.set_ticker(Some("AUTOPLAY   rendered with rhythr".into()));
+    let on = renderer.render_still(&params, &cfg, &skin, &replay, &map, 300.0, None).unwrap();
+    renderer.set_ticker(None);
+    let off = renderer.render_still(&params, &cfg, &skin, &replay, &map, 300.0, None).unwrap();
+    let band_rows = 0..(360.0 * 0.08) as usize;
+    let changed = band_rows
+        .flat_map(|y| (0..640).map(move |x| (y, x)))
+        .filter(|&(y, x)| on[(y * 640 + x) * 4] != off[(y * 640 + x) * 4])
+        .count();
+    assert!(changed > 200, "the ticker changed {changed} pixels in the top band");
+}

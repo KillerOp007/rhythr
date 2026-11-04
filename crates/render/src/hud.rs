@@ -1231,6 +1231,17 @@ pub fn build_hud(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_ticker_sits_in_the_top_band_and_is_never_empty() {
+        let atlas = super::FontAtlas::new(None);
+        for t in [0.0, 4000.0, 8000.0, 11_900.0] {
+            let v = super::build_ticker(&atlas, "AUTOPLAY   rendered with rhythr", t, 1920, 1080);
+            assert!(!v.is_empty());
+            assert!(v.iter().all(|q| q.pos[1] >= 0.0 && q.pos[1] <= 1080.0 * 0.08), "ticker left the top band at {t}");
+            assert!(v.iter().any(|q| q.pos[0] >= 0.0 && q.pos[0] <= 1920.0), "nothing visible at {t}");
+        }
+    }
+
     use super::*;
 
     /// A run with one note and a cursor nowhere near it, at `speed`.
@@ -2730,6 +2741,26 @@ fn race_delta_text(delta: i64) -> (String, i8) {
 /// split seam, not inside one side's viewport). Styled like the game's stat
 /// panels: grey uppercase label, big value in the interface font, with the
 /// value and lead arrow tinted in the leading player's cursor colour.
+/// The Autoplay ticker: a dark band with the text, moving left to right
+/// across the top of the frame and wrapping, drawn twice half a pass apart
+/// so the frame always shows text. Full-frame pixels, appended last.
+pub fn build_ticker(atlas: &FontAtlas, text: &str, song_time_ms: f64, width: u32, height: u32) -> Vec<HudVertex> {
+    use crate::autoplay::ticker::{x_offset, HEIGHT_FRAC, PASS_SECS, TOP_FRAC};
+    let (w, h) = (width as f32, height as f32);
+    let px = (HEIGHT_FRAC * h).max(8.0);
+    let pad = px * 0.6;
+    let band_w = atlas.measure(text, px) + 2.0 * pad;
+    let band_h = px * 1.8;
+    let y0 = TOP_FRAC * h;
+    let mut b = HudBuilder::new(atlas);
+    let half = PASS_SECS * 500.0;
+    for x in [x_offset(song_time_ms, band_w, w), x_offset(song_time_ms + half, band_w, w)] {
+        b.rect(x, y0, band_w, band_h, [0.0, 0.0, 0.0, 0.35]);
+        b.text(text, x + pad, y0 + band_h * 0.72, px, Align::Left, [1.0, 1.0, 1.0, 0.65]);
+    }
+    b.verts
+}
+
 pub fn build_race_delta(
     atlas: &FontAtlas,
     cfg: &crate::config::SkinConfig,
