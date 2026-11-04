@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager};
 
+mod autoplay_commands;
 mod game_data;
 mod imports;
 mod kit_commands;
@@ -171,6 +172,12 @@ struct Settings {
     /// at the clip start.
     background_sync_song: bool,
     recent_replays: Vec<String>,
+    /// Autoplay: movement, dance amount, rest threshold, speed mod.
+    autoplay: rhythia_render::autoplay::AutoplaySettings,
+    /// A manual export folder (Choose folder in the map picker).
+    autoplay_exports_dir: Option<String>,
+    /// The export of the last Autoplay session, restored on launch.
+    last_autoplay: Option<String>,
     /// Named layout/look snapshots ("Save preset" in the app). "Before
     /// reset" is written automatically before every layout reset.
     presets: BTreeMap<String, LayoutPreset>,
@@ -229,6 +236,9 @@ impl Default for Settings {
             background_start: 0.0,
             background_sync_song: true,
             recent_replays: Vec::new(),
+            autoplay: rhythia_render::autoplay::AutoplaySettings::default(),
+            autoplay_exports_dir: None,
+            last_autoplay: None,
             presets: BTreeMap::new(),
         }
     }
@@ -491,6 +501,12 @@ struct Inner {
     base_config: SkinConfig,
     settings: Settings,
     preview: Option<PreviewCtx>,
+    /// The Autoplay session, when the loaded run is synthetic.
+    autoplay: Option<autoplay_commands::AutoplaySession>,
+    /// The pick's note (the map has no audio), already stamped.
+    autoplay_note: Option<String>,
+    /// Folder and count of the last export listing, for diagnostics.
+    autoplay_exports_seen: Option<(String, usize)>,
 }
 
 /// Rendered preview frames, keyed by whole song ms. The Analyze window
@@ -730,6 +746,8 @@ struct StatusDto {
     can_redo: bool,
     /// Build identity, so a bug report always names the exact build.
     build: String,
+    /// The Autoplay session, when one is active.
+    autoplay: Option<autoplay_commands::AutoplayDto>,
 }
 
 #[derive(Serialize)]
@@ -1084,6 +1102,15 @@ fn sanitize_filename(name: &str) -> String {
 
 /// "Player - Song.mp4" from the loaded replay/map.
 fn suggested_name(inner: &Inner) -> String {
+    if inner.autoplay.is_some() {
+        let song = inner
+            .map
+            .as_ref()
+            .map(|(_, m)| if m.meta.song_name.is_empty() { m.meta.title.as_str() } else { m.meta.song_name.as_str() })
+            .filter(|s| !s.is_empty())
+            .unwrap_or("render");
+        return sanitize_filename(&format!("Autoplay - {song}.mp4"));
+    }
     let player = inner
         .replay
         .as_ref()
@@ -1648,6 +1675,10 @@ fn diagnostics_report(app: &App) -> String {
         }
     );
 
+    // Autoplay: where the exports come from, what was picked, which key.
+    let _ = writeln!(s, "\nautoplay");
+    s.push_str(&autoplay_commands::diagnostics_section(&inner));
+
     // Settings that differ from a fresh install. Three lines here beat
     // re-reading the whole block above looking for the one odd value.
     let d = Settings::default();
@@ -1829,10 +1860,12 @@ fn is_light_background(cfg: &rhythia_render::config::SkinConfig) -> bool {
 
 fn assemble_status(inner: &Inner, rendering: bool) -> StatusDto {
     let replay = inner.replay.as_ref().map(|(path, r)| {
-        let verify = inner
-            .map
-            .as_ref()
-            .map(|(_, m)| verify_dto(r, m, inner.map_hash_mismatch));
+        // A synthetic run has no header to check against.
+        let verify = if inner.autoplay.is_some() {
+            None
+        } else {
+            inner.map.as_ref().map(|(_, m)| verify_dto(r, m, inner.map_hash_mismatch))
+        };
         let mods: Vec<String> = serde_json::from_str(&r.mods).unwrap_or_default();
         ReplayDto {
             path: path.to_string_lossy().into_owned(),
@@ -1952,6 +1985,7 @@ fn assemble_status(inner: &Inner, rendering: bool) -> StatusDto {
         build: env!("RHYTHR_BUILD").to_string(),
         can_undo: !inner.undo_stack.is_empty(),
         can_redo: !inner.redo_stack.is_empty(),
+        autoplay: autoplay_commands::status_dto(inner),
     }
 }
 
@@ -2118,6 +2152,8 @@ fn load_replay(
     let app = state.inner();
     let replay = Replay::from_path(&path).map_err(err_str)?;
     let mut inner = app.lock();
+    // A replay ends the Autoplay session.
+    autoplay_commands::clear_session(&mut inner);
     // Keep the map when it still belongs to this replay (same online id) or
     // when the user picked it manually, since the verify badge flags a true
     // mismatch. Auto-resolved maps for another id are swapped out.
@@ -2548,6 +2584,9 @@ fn load_ghost(
     let app = state.inner();
     let ghost = Replay::from_path(&path).map_err(err_str)?;
     let mut inner = app.lock();
+    if inner.autoplay.is_some() {
+        return Err("ghost races are for real plays".into());
+    }
     if let Some((_, r)) = &inner.replay {
         if ghost.map_id != r.map_id
             && !ghost.beatmap_hash.is_empty()
@@ -4070,6 +4109,11 @@ fn ensure_preview_ctx(app: &App, _time_ms: f64) -> Result<(), String> {
             let renderer =
                 rhythia_render::Renderer::new(pw.max(64), ph, cfg.hud_fonts().as_slice())
                     .map_err(|e| gpu_err(&e))?;
+            // The preview shows the Autoplay video as it will be: ticker and mark.
+            if let Some(sess) = &inner.autoplay {
+                renderer.set_ticker(Some(rhythia_render::autoplay::ticker_text(&sess.settings)));
+                renderer.set_mark(Some(autoplay_commands::mark_pattern()));
+            }
             let mut params = SceneParams::from(&cfg);
             let skin = renderer.prepare_skin(&cfg);
             let (_, r) = inner.replay.as_ref().unwrap();
@@ -5006,6 +5050,9 @@ async fn export_card(
         }
         let (w, h) = (width.clamp(256, 4096), height.clamp(256, 4096));
         let inner = app.lock();
+        if inner.autoplay.is_some() {
+            return Err("score cards are for real plays".to_string());
+        }
         let (_, r) = inner.replay.as_ref().ok_or("no replay loaded")?;
         let (_, m) = inner.map.as_ref().ok_or("no map loaded")?;
         let cfg = render_config(&inner);
@@ -5133,6 +5180,9 @@ fn start_render(
             replay: replay.clone(),
             map: map.clone(),
             cfg: render_config(&inner),
+            autoplay: inner.autoplay.is_some(),
+            ticker: inner.autoplay.as_ref().map(|a| rhythia_render::autoplay::ticker_text(&a.settings)),
+            mark: inner.autoplay.as_ref().map(|_| autoplay_commands::mark_pattern().to_vec()),
             width: s.width,
             height: s.height,
             fps: s.fps,
@@ -5151,7 +5201,9 @@ fn start_render(
             dry_run: s.dry_run,
             encoder: s.encoder.clone(),
             preset: s.preset.clone(),
-            results_secs: s.results_secs,
+            // No results screen for Autoplay: an SS frame with 100 percent is
+            // the fake score image this feature must not produce.
+            results_secs: if inner.autoplay.is_some() { 0.0 } else { s.results_secs },
             motion_blur: s.motion_blur,
             music_volume: s.music_volume.min(150) as f32 / 100.0,
             hitsounds: load_hitsounds(s, &resolve_ffmpeg(s)),
@@ -5296,6 +5348,10 @@ struct RenderJob {
     clip: Option<(f64, f64)>,
     ffmpeg: String,
     out: PathBuf,
+    /// Autoplay: the ticker text, the mark pattern and the metadata tag.
+    autoplay: bool,
+    ticker: Option<String>,
+    mark: Option<Vec<f32>>,
 }
 
 /// What the window is told when a render finishes.
@@ -5413,6 +5469,12 @@ fn run_render_job(
     if let Some(g) = &job.ghost {
         renderer.ensure_hud_text(&g.replay.player_name);
     }
+    if let Some(p) = &job.mark {
+        renderer.set_mark(Some(p));
+    }
+    if let Some(t) = &job.ticker {
+        renderer.set_ticker(Some(t.clone()));
+    }
     let params = SceneParams::from(&job.cfg);
 
     // Probe hardware encoders unless one was forced.
@@ -5509,7 +5571,11 @@ fn run_render_job(
         None => (0.0, run_end),
     };
     let opts = rhythia_render::video::VideoOptions {
-        extra_output_args: Vec::new(),
+        extra_output_args: if job.autoplay {
+            rhythia_render::video::AUTOPLAY_METADATA.iter().map(|s| s.to_string()).collect()
+        } else {
+            Vec::new()
+        },
         fps: job.fps,
         output_speed: job.output_speed,
         target_size_mb: job.target_size_mb,
@@ -5874,7 +5940,21 @@ fn main() {
         let arg_replay = std::env::args()
             .nth(1)
             .filter(|a| a.to_lowercase().ends_with(".rhr"));
-        let candidate = arg_replay.or_else(|| inner.settings.last_replay.clone());
+        // An Autoplay session comes back when its export still exists; a
+        // replay on the command line wins over it.
+        let restored_autoplay = arg_replay.is_none()
+            && inner
+                .settings
+                .last_autoplay
+                .clone()
+                .filter(|p| Path::new(p).exists())
+                .map(|p| autoplay_commands::start_session(&mut inner, PathBuf::from(p)).is_ok())
+                .unwrap_or(false);
+        let candidate = if restored_autoplay {
+            None
+        } else {
+            arg_replay.or_else(|| inner.settings.last_replay.clone())
+        };
         if let Some(path) = candidate.filter(|p| Path::new(p).exists()) {
             if let Ok(replay) = Replay::from_path(&path) {
                 // The mismatch verdict comes back with the map now, so
@@ -6096,6 +6176,10 @@ fn main() {
             // against the monitor list so a window remembered on a screen
             // that is now gone cannot open off-screen.
             if let Some(main) = app.handle().get_webview_window("main") {
+                // A build without the owner's mark key says so in its title.
+                if rhythia_render::mark::built_in().1 == rhythia_render::mark::KeyKind::Dev {
+                    let _ = main.set_title("rhythr (dev build)");
+                }
                 if let Some((x, y, w, h)) = rect {
                     if w >= 800 && h >= 600 && window_pos_visible(&main, x, y) {
                         let _ = main.set_size(tauri::PhysicalSize::new(w, h));
@@ -6196,6 +6280,12 @@ fn main() {
             kit_commands::kit_shape_to_points,
             kit_commands::kit_send_to_game,
             kit_commands::kit_presets,
+            autoplay_commands::autoplay_exports,
+            autoplay_commands::autoplay_pick,
+            autoplay_commands::autoplay_settings,
+            autoplay_commands::autoplay_clear,
+            autoplay_commands::autoplay_set_folder,
+            autoplay_commands::autoplay_open_folder,
             kit_preview,
             open_kit_window,
             set_clip,
@@ -6545,6 +6635,50 @@ mod settings_migration_tests {
 }
 
 #[cfg(test)]
+mod autoplay_tests {
+    use super::*;
+    use rhythia_render::autoplay::AutoplaySettings;
+
+    fn one_note_map() -> Map {
+        let mut map = Map::default();
+        map.meta.song_name = "Song".into();
+        map.meta.title = "Title".into();
+        map.notes.push(rhythia_formats::map::Note { time_ms: 500, x: 1.0, y: 1.0 });
+        map
+    }
+
+    #[test]
+    fn an_autoplay_session_is_named_after_the_map_and_skips_the_verify_badge() {
+        let mut inner = Inner::default();
+        let map = one_note_map();
+        let pattern = autoplay_commands::mark_pattern();
+        let replay = rhythia_render::autoplay::generate(&map, &AutoplaySettings::default(), 60, &pattern).unwrap();
+        inner.replay = Some((PathBuf::from("/x/song.rhm"), replay));
+        inner.map = Some((PathBuf::from("/x/song.rhm"), map));
+        inner.autoplay = Some(autoplay_commands::AutoplaySession { rhm: PathBuf::from("/x/song.rhm"), settings: AutoplaySettings::default() });
+        assert_eq!(suggested_name(&inner), "Autoplay - Song.mp4");
+        let st = assemble_status(&inner, false);
+        assert!(st.replay.as_ref().unwrap().verify.is_none());
+        assert_eq!(st.autoplay.as_ref().unwrap().key_kind, "dev");
+        assert_eq!(st.autoplay.as_ref().unwrap().note_count, 1);
+    }
+
+    #[test]
+    fn a_settings_file_without_autoplay_fields_loads_the_defaults() {
+        let s: Settings = serde_json::from_str(r#"{"width":1920}"#).unwrap();
+        assert_eq!(s.autoplay, AutoplaySettings::default());
+        assert!(s.autoplay_exports_dir.is_none() && s.last_autoplay.is_none());
+    }
+
+    #[test]
+    fn the_report_has_the_autoplay_section() {
+        let app: App = Arc::new(Shared::default());
+        let text = diagnostics_report(&app);
+        assert!(text.contains("\nautoplay"), "{text}");
+        assert!(text.contains("key: dev") || text.contains("key: owner"), "{text}");
+    }
+}
+
 mod diagnostics_tests {
     use super::{diagnostics_report, err_str, game_section, redact_path, App, Shared};
     use std::sync::Arc;
