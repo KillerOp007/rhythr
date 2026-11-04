@@ -62,7 +62,18 @@ once.
 
 8. **Change `## Unreleased` in CHANGELOG.md** to the version and the date.
 
-9. Tag and push, and let the release build produce the artefacts.
+9. **Export the Autoplay mark key**, then tag and push and let the release
+   build produce the artefacts:
+
+   ```
+   export RHYTHR_MARK_KEY="$(cat ~/.tauri/rhythr-autoplay-mark.key)"
+   ```
+
+   Both build scripts (`scripts/build-linux.sh`, `scripts/build-windows.sh`)
+   refuse to run without it. A build without the key marks Autoplay videos
+   with the public dev key and calls itself "dev build" in the title; that
+   is fine for a test build, never for a release. The key lives next to the
+   updater key and is backed up with it.
 
 ## After the artefacts exist
 

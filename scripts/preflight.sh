@@ -178,6 +178,7 @@ DASHES=$(grep -rln "$DASH_PAT" \
   --include="*.json" --include="*.py" . 2>/dev/null \
   | grep -v "^./target/" | grep -v "^./notes/" \
   | grep -v "^./crates/gui/ui-dist/" \
+  | grep -v "^./.superpowers/" | grep -v "^./.claude/" \
   | grep -v "THIRD-PARTY" | sort)
 if [ -n "$DASHES" ]; then
   bad "em or en dashes left in: $(echo "$DASHES" | tr '\n' ' ')"
@@ -197,6 +198,14 @@ if [ -f docs/ERROR-CODES.md ]; then
   fi
 else
   bad "docs/ERROR-CODES.md is missing: users are told to quote codes that lead nowhere"
+fi
+
+echo
+echo "release environment"
+if [ -n "${RHYTHR_MARK_KEY:-}" ]; then
+  ok "RHYTHR_MARK_KEY is set (Autoplay videos get the owner's mark)"
+else
+  warn "RHYTHR_MARK_KEY is not set: a build from this shell marks Autoplay videos with the public dev key (the build scripts refuse that for a release)"
 fi
 
 echo

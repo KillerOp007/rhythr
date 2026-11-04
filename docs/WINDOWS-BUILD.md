@@ -21,6 +21,10 @@ tauri build --runner cargo-xwin --target x86_64-pc-windows-msvc
 # -> target/x86_64-pc-windows-msvc/release/bundle/nsis/rhythr_<ver>_x64-setup.exe
 ```
 
+For a release use `scripts/build-windows.sh` instead: it runs the same
+command and refuses without `RHYTHR_MARK_KEY` (the Autoplay mark key, see
+docs/RELEASING.md). A build without the key is a dev build.
+
 The LNK4099 "cannot use debug info" linker warnings are expected (the
 xwin SDK ships no PDBs) and harmless. The installer is unsigned:
 Windows SmartScreen will show "unknown publisher" on first run.
@@ -110,7 +114,8 @@ the matching public key is pinned in `tauri.conf.json`.
 
 ```sh
 export TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.tauri/rhythr-updater.key)"
-# Windows: tauri build --runner cargo-xwin --target x86_64-pc-windows-msvc
+export RHYTHR_MARK_KEY="$(cat ~/.tauri/rhythr-autoplay-mark.key)"   # the Autoplay mark key
+scripts/build-windows.sh            # the NSIS installer through cargo-xwin
 scripts/build-linux.sh              # Linux bundles (see docs/LINUX-BUILD.md)
 python3 scripts/make-latest-json.py <version>
 gh release create v<version> <setup.exe> <AppImage> <deb> <rpm> latest.json ...

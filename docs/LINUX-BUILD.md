@@ -40,8 +40,12 @@ Both are gitignored, like `ffmpeg.exe` for Windows.
 ```sh
 export TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.tauri/rhythr-updater.key)"
 export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=""
+export RHYTHR_MARK_KEY="$(cat ~/.tauri/rhythr-autoplay-mark.key)"   # the Autoplay mark key
 scripts/build-linux.sh
 ```
+
+The script refuses to run without `RHYTHR_MARK_KEY`: a build without it
+marks Autoplay videos with the public dev key (see docs/RELEASING.md).
 
 First run builds the container image (~10 min); after that only the app
 compiles. Bundles land in `target-linux22/release/bundle/`, with a

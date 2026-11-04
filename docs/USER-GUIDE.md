@@ -364,6 +364,64 @@ action and key of the Note Designer window.
 | P, 3, F1 or ? | Previews, 3D view, this help. |
 | Space and drag | Pan the front view. |
 
+## Autoplay
+
+Autoplay renders a map without a replay: the cursor is synthetic, every
+note is a hit, and the video says so. It exists for show-off videos of a
+map, not for anything that could pass as a real play.
+
+- **Getting a map in**: in the game, right-click a map in the song list and
+  choose Export. The game writes a `.rhm` (map, audio and cover in one
+  archive) into `%APPDATA%\CapoRhythia\exports`; under Proton that is
+  `<steam library>/steamapps/compatdata/2250500/pfx/drive_c/users/steamuser/AppData/Roaming/CapoRhythia/exports`.
+  rhythr reads that folder; a new export shows up within a second while the
+  picker is open.
+- **Picking**: press **Autoplay** above the preview. The list shows every
+  exported map, newest first, with duration and note count. Search by
+  title, artist or mapper; Enter picks the first match, Esc closes. "Open
+  folder" reveals the folder, "Choose folder" sets one by hand for unusual
+  installs (the `RHYTHR_GAME_DATA_DIR` override keeps working too). A map
+  the game exported without audio renders silent and says so (`RH-AUT-904`).
+- **The session**: the Replay card becomes the Autoplay card and an
+  **Autoplay** tab appears next to Output and HUD. "Back to replay", or
+  dropping a `.rhr`, ends the session. The app restores the session on the
+  next start as long as the export still exists.
+- **Settings** (Autoplay tab): Movement, **Normal** (soft, direct curves) or
+  **Cursor dance**; Dance amount, subtle, medium or wild; Rest in the centre
+  after 2 to 8 real seconds without a note (with a speed mod the map time is
+  divided by it, so the feel stays the same); Speed mod, 0.80x to 2.00x in
+  steps of 0.05, which drives the song, the approach and the cursor like the
+  game's own. The player name is Autoplay and the accuracy 100 percent,
+  always; neither is a setting.
+- **How the cursor moves**: it keeps a steady pace. Close notes are an
+  almost straight line, the farther the next note and the more time, the
+  wider the arc. The same spot twice in quick succession is a hold; the same
+  spot with time is a boomerang out and back. On a long pause it goes to
+  the centre, waits, and leaves in time for the next note. It never leaves
+  the field and never jumps.
+- **What is not there**: no results screen, no score card, no Analyze
+  window, no ghost race. Each of those would be a real-play artefact on a
+  synthetic run.
+- **The marks**: every Autoplay video carries a ticker across the top
+  (AUTOPLAY, rendered with rhythr, not a real play, plus the movement and the
+  speed mod), a hidden mark in the picture that survives re-encoding,
+  resizing, cropping and light filtering, and a metadata comment. None of
+  the three can be switched off. The hidden mark has limits, stated plainly:
+  a deliberate black-crush filter removes it, a self-compiled rhythr without
+  the owner's key does not carry it, and the key can be dug out of a release
+  binary by someone who takes it apart. It stops the ordinary fake; the
+  Rhythia team's own records are the final word on any score.
+- **Checking a video**: `rhythr-cli mark-check video.mp4` (with `--key
+  file.txt` for a key file, `--json` for the numbers) answers "found",
+  "weak" or "no mark" with exit codes 0, 2 and 1. Only the owner's key finds
+  the owner's mark; a build without it is a "dev build" (the window title
+  says so) and marks with the public dev key, which the checker reports as
+  such. `docs/AUTOPLAY-VERIFICATION.md` is the one-page guide for the team.
+- **CLI**: `rhythr-cli autoplay --map song.rhm -o out.mp4` with
+  `--movement normal|dance`, `--dance subtle|medium|wild`, `--rest <s>`,
+  `--speed-mod <x>` and the same output options as `video` (`--speed` is
+  still the playback speed of the output).
+
 ## The Analyze window
 
 Click **Analyze** above the preview to open the replay-forensics view.
@@ -503,6 +561,11 @@ The "verified" / "inconsistent" badge is rhythr's own consistency
 check. It is **not** an official Rhythia score verification. Music,
 beatmaps and artwork belong to their creators; you are responsible for
 the rights needed to publish rendered videos.
+
+Autoplay videos are marked as such: the ticker, a hidden mark and a
+metadata tag. Removing the marks to pass an Autoplay video off as a real
+play is misuse; the Rhythia team can check any video with the key and act
+on it.
 
 ## Licenses
 

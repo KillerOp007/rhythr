@@ -20,6 +20,12 @@ if [ ! -f "$ROOT/crates/gui/ffmpeg" ]; then
     echo "error: crates/gui/ffmpeg missing (static linux ffmpeg, see docs/LINUX-BUILD.md)" >&2
     exit 1
 fi
+# The Autoplay mark key: without it the build marks Autoplay videos with
+# the public dev key, which is not a release (see docs/RELEASING.md).
+if [ -z "${RHYTHR_MARK_KEY:-}" ]; then
+    echo "error: RHYTHR_MARK_KEY is not set (the Autoplay mark key, see docs/RELEASING.md)" >&2
+    exit 1
+fi
 
 # Tauri CLI 2.12.1 is the floor: older bundlers ship a linuxdeploy whose
 # excludelist lets libwayland/libxkbcommon/libxcb into the AppImage, which
@@ -50,6 +56,7 @@ podman run --rm \
     -e APPIMAGE_EXTRACT_AND_RUN=1 \
     -e TAURI_SIGNING_PRIVATE_KEY \
     -e TAURI_SIGNING_PRIVATE_KEY_PASSWORD \
+    -e RHYTHR_MARK_KEY \
     -w /work/crates/gui \
     "$IMG" bash -ec '
         # Native packages first: deb and rpm declare ffmpeg as a dependency,

@@ -63,10 +63,15 @@ This tool is a strict **read-only renderer**:
   mods. Only visuals are configurable (skin, camera, HUD, resolution, FPS).
 - Every replay is run through an **integrity check**: hits/misses/accuracy
   are re-derived from the raw input frames and compared against the header.
-  On mismatch the tool warns loudly and burns a "replay data inconsistent
-  (possibly manipulated)" notice into the rendered video.
+  On mismatch the app shows an "inconsistent (possibly modified)" badge on
+  the replay card and the CLI prints a warning before it renders.
 - This check (and any rendered video) is a heuristic by this tool. It is
   **not** an official Rhythia score verification.
+- **Autoplay** (a synthetic cursor on an exported map) touches no replay
+  either: the run exists only in memory, never as a file. Every Autoplay
+  video carries a visible AUTOPLAY ticker, a hidden mark that
+  `rhythr-cli mark-check` finds, and a metadata tag. Removing them to pass
+  a video off as a real play is misuse; see `docs/AUTOPLAY-VERIFICATION.md`.
 
 ## Workspace
 
@@ -75,7 +80,7 @@ This tool is a strict **read-only renderer**:
 | `crates/formats` | Read-only parsers: `.rhr` replays (all 5 version gates), map cache JSON, `.rhm` |
 | `crates/sim` | Hit registration (frame flags → per-note results), integrity check |
 | `crates/render` | wgpu GPU renderer: scene, skins/`.rhs` import, HUD, results screen, video export |
-| `crates/cli` | `rhythr-cli` binary: `info`, `verify`, `check`, `frame`, `video` |
+| `crates/cli` | `rhythr-cli` binary: `info`, `verify`, `check`, `frame`, `video`, `autoplay`, `mark-check` |
 | `crates/gui` | Desktop app (Tauri): preview + scrubber, HUD overrides, map auto-download, video export |
 
 ```sh
@@ -90,6 +95,10 @@ cargo run -p rhythia-cli -- frame testdata/pass_long_score77.rhr \
 # A video clip (frames → ffmpeg + audio; needs ffmpeg on PATH):
 cargo run -p rhythia-cli -- video testdata/pass_long_score77.rhr \
     --map testdata/pass_long_map_map_json.json --start 1:25 --end 1:37 -o clip.mp4
+
+# Autoplay: a map without a replay, marked as such; then check a video for the mark:
+cargo run -p rhythia-cli -- autoplay --map song.rhm --movement dance -o autoplay.mp4
+cargo run -p rhythia-cli -- mark-check autoplay.mp4
 ```
 
 The renderer runs headlessly on the GPU (Vulkan), the same wgpu backend

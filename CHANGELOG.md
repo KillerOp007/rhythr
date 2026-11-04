@@ -3,6 +3,17 @@
 rhythr is an unofficial community tool and is not affiliated with or
 endorsed by Rhythia or Capo Games.
 
+## Unreleased
+
+- **Autoplay.** Render a map without a replay: export it from the game
+  (right-click, Export), press Autoplay above the preview and pick it from
+  the list. A synthetic cursor plays every note, Normal or Cursor dance, with
+  a rest in the centre on long pauses and the game's speed mod as a setting.
+  Every Autoplay video is marked as one: a ticker across the top, a hidden
+  mark in the picture that `rhythr-cli mark-check` finds, and a metadata tag.
+  Results screen, score card, Analyze and ghost races are off for Autoplay.
+  CLI: `rhythr-cli autoplay` and `rhythr-cli mark-check`. Codes `RH-AUT`.
+
 ## v0.7.0 (2026-11-01)
 
 - **A note designer.** A new window (toolbar button) where a note is
