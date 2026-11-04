@@ -35,7 +35,9 @@ fn a_map_renders_tagged_and_marked_with_a_note_about_the_missing_audio() {
         .arg(&rhm)
         .arg("-o")
         .arg(&out)
-        .args(["--width", "320", "--height", "240", "--fps", "30", "--encoder", "x264"])
+        // the pattern's own size: at 320 by 240 the mark was marginal (z near
+        // the threshold) and any change in the picture tipped it over
+        .args(["--width", "640", "--height", "360", "--fps", "30", "--encoder", "x264"])
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&run.stderr);
