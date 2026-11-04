@@ -48,6 +48,8 @@ pub enum Area {
     Designer,
     /// Writing a note into the game's own folders (Send to game).
     Game,
+    /// Autoplay: the export folder, the exported map, the synthetic run.
+    Autoplay,
 }
 
 impl Area {
@@ -61,6 +63,7 @@ impl Area {
             Area::App => "APP",
             Area::Designer => "DSN",
             Area::Game => "GAM",
+            Area::Autoplay => "AUT",
         }
     }
 
@@ -74,6 +77,7 @@ impl Area {
             Area::App => "Application",
             Area::Designer => "Note Designer",
             Area::Game => "Sending to the game",
+            Area::Autoplay => "Autoplay",
         }
     }
 
@@ -89,6 +93,7 @@ impl Area {
             Area::App => "RH-APP-600",
             Area::Designer => "RH-DSN-700",
             Area::Game => "RH-GAM-800",
+            Area::Autoplay => "RH-AUT-900",
         }
     }
 }
@@ -1256,6 +1261,72 @@ pub static CODES: &[Entry] = &[
              game section shows which folder was used and what the kit found there.",
         )],
     },
+    Entry {
+        id: "RH-AUT-901",
+        area: Area::Autoplay,
+        title: "the game's export folder was not found",
+        fix: "Start the game once so its data folder exists, or pick the folder with Choose folder in the map picker.",
+        patterns: &["export folder not found"],
+        causes: &[
+            (
+                Plat::Windows,
+                "%APPDATA%\\CapoRhythia\\exports does not exist yet: the game never exported a map \
+                 on this account, or AppData is redirected somewhere the lookup does not report. \
+                 Choose folder in the picker persists a manual path.",
+            ),
+            (
+                Plat::Linux,
+                "No Steam library holds a Proton prefix with CapoRhythia/exports, or the game runs \
+                 natively with its data outside the XDG folders. RHYTHR_GAME_DATA_DIR or Choose \
+                 folder names the folder outright.",
+            ),
+            (Plat::MacOs, "The game does not run here; Choose folder or RHYTHR_GAME_DATA_DIR apply."),
+        ],
+    },
+    Entry {
+        id: "RH-AUT-902",
+        area: Area::Autoplay,
+        title: "the exported map could not be read",
+        fix: "Export the map again from the game; a partly written or old archive reads as damaged.",
+        patterns: &["map archive unreadable", "not a map archive"],
+        causes: &[(
+            Plat::Any,
+            "The .rhm is not a zip with a map entry: the export was interrupted, the file is from \
+             an older game build, or something else was dropped into the exports folder.",
+        )],
+    },
+    Entry {
+        id: "RH-AUT-903",
+        area: Area::Autoplay,
+        title: "the map has no notes",
+        fix: "Pick another map; an empty map has nothing to play.",
+        patterns: &["map has no notes", "no notes"],
+        causes: &[(Plat::Any, "The map entry parsed but holds zero notes, so there is no run to generate.")],
+    },
+    Entry {
+        id: "RH-AUT-904",
+        area: Area::Autoplay,
+        title: "the map has no audio",
+        fix: "The render went on silent. Export the map again from the game, or add the song with the audio setting.",
+        patterns: &["no audio"],
+        causes: &[(
+            Plat::Any,
+            "The archive has no audio entry; the game writes one for every map it can play, so \
+             the export is incomplete or the file was edited.",
+        )],
+    },
+    Entry {
+        id: "RH-AUT-900",
+        area: Area::Autoplay,
+        title: "Autoplay failed",
+        fix: "Save diagnostics and report the message; the code above says which part failed.",
+        patterns: &[],
+        causes: &[(
+            Plat::Any,
+            "Nothing in the Autoplay area matched; the message is the lead. The diagnostics file's \
+             autoplay section shows the folder, the map and the settings in use.",
+        )],
+    },
 ];
 
 /// Looks a code up by its id, with or without a platform suffix.
@@ -1419,6 +1490,7 @@ pub fn markdown() -> String {
         Area::App,
         Area::Designer,
         Area::Game,
+        Area::Autoplay,
     ] {
         let _ = write!(s, "\n## {} ({})\n", area.title(), area.tag());
         for e in CODES.iter().filter(|e| e.area == area) {
@@ -1482,6 +1554,7 @@ mod tests {
             Area::App,
             Area::Designer,
             Area::Game,
+            Area::Autoplay,
         ] {
             let f = fallback(area);
             assert_eq!(f.area, area);
@@ -1565,6 +1638,18 @@ mod tests {
     /// The Note Designer's and the game writer's wording, copied from
     /// `kit_commands::user_message`, `kit::game` and the import commands.
     /// Classified inside their areas, as the commands do.
+    #[test]
+    fn autoplay_messages_land_on_the_right_code() {
+        assert_eq!(classify_in(Area::Autoplay, "export folder not found. Looked in: a").id, "RH-AUT-901");
+        assert_eq!(classify_in(Area::Autoplay, "map archive unreadable: zip").id, "RH-AUT-902");
+        assert_eq!(classify_in(Area::Autoplay, "the map has no notes").id, "RH-AUT-903");
+        assert_eq!(classify_in(Area::Autoplay, "the map has no audio").id, "RH-AUT-904");
+        assert_eq!(classify_in(Area::Autoplay, "something else").id, "RH-AUT-900");
+        for e in CODES.iter().filter(|e| e.area == Area::Autoplay) {
+            assert!(!e.fix.is_empty() && e.fix.ends_with('.'), "{}", e.id);
+        }
+    }
+
     #[test]
     fn designer_and_game_messages_land_on_the_right_code() {
         let designer: &[(&str, &str)] = &[

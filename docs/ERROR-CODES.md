@@ -428,3 +428,41 @@ Shown to the user: Apply another profile in the game or close it, then send agai
 Shown to the user: Save diagnostics and report it; the saved .rhs still imports in the game.
 
 - **all systems**: Nothing in the game area matched; the message is the lead. The diagnostics file's game section shows which folder was used and what the kit found there.
+
+## Autoplay (AUT)
+
+### RH-AUT-901 the game's export folder was not found
+
+Shown to the user: Start the game once so its data folder exists, or pick the folder with Choose folder in the map picker.
+
+- **Windows**: %APPDATA%\CapoRhythia\exports does not exist yet: the game never exported a map on this account, or AppData is redirected somewhere the lookup does not report. Choose folder in the picker persists a manual path.
+- **Linux**: No Steam library holds a Proton prefix with CapoRhythia/exports, or the game runs natively with its data outside the XDG folders. RHYTHR_GAME_DATA_DIR or Choose folder names the folder outright.
+- **macOS**: The game does not run here; Choose folder or RHYTHR_GAME_DATA_DIR apply.
+- Recognised by: `export folder not found`
+
+### RH-AUT-902 the exported map could not be read
+
+Shown to the user: Export the map again from the game; a partly written or old archive reads as damaged.
+
+- **all systems**: The .rhm is not a zip with a map entry: the export was interrupted, the file is from an older game build, or something else was dropped into the exports folder.
+- Recognised by: `map archive unreadable`, `not a map archive`
+
+### RH-AUT-903 the map has no notes
+
+Shown to the user: Pick another map; an empty map has nothing to play.
+
+- **all systems**: The map entry parsed but holds zero notes, so there is no run to generate.
+- Recognised by: `map has no notes`, `no notes`
+
+### RH-AUT-904 the map has no audio
+
+Shown to the user: The render went on silent. Export the map again from the game, or add the song with the audio setting.
+
+- **all systems**: The archive has no audio entry; the game writes one for every map it can play, so the export is incomplete or the file was edited.
+- Recognised by: `no audio`
+
+### RH-AUT-900 Autoplay failed
+
+Shown to the user: Save diagnostics and report the message; the code above says which part failed.
+
+- **all systems**: Nothing in the Autoplay area matched; the message is the lead. The diagnostics file's autoplay section shows the folder, the map and the settings in use.
