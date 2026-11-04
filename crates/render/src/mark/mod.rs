@@ -5,6 +5,8 @@
 
 use sha2::{Digest, Sha256};
 
+pub mod check;
+mod fft;
 pub mod gpu;
 
 /// Pattern grid, stretched to whatever frame it marks.
@@ -130,7 +132,7 @@ fn gaussian_kernel(sigma: f32) -> Vec<f32> {
 }
 
 /// Separable gaussian blur with reflected edges.
-fn blur(src: &[f32], w: usize, h: usize, sigma: f32) -> Vec<f32> {
+pub(crate) fn blur(src: &[f32], w: usize, h: usize, sigma: f32) -> Vec<f32> {
     let k = gaussian_kernel(sigma);
     let r = (k.len() / 2) as isize;
     let reflect = |i: isize, n: isize| -> usize {
