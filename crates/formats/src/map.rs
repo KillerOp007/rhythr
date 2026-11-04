@@ -152,10 +152,19 @@ impl Map {
                 .get("Y")
                 .and_then(|v| v.as_f64())
                 .ok_or(Error::BadMapField("Notes[].Y"))?;
+            // A magnitude beyond f32 would turn infinite in the cast and
+            // follow the note through every later computation.
+            let (x, y) = (x as f32, y as f32);
+            if !x.is_finite() {
+                return Err(Error::BadMapField("Notes[].X"));
+            }
+            if !y.is_finite() {
+                return Err(Error::BadMapField("Notes[].Y"));
+            }
             notes.push(Note {
                 time_ms: time.round() as i64,
-                x: x as f32,
-                y: y as f32,
+                x,
+                y,
             });
         }
         notes.sort_by_key(|n| n.time_ms);

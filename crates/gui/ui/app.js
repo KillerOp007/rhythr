@@ -2370,6 +2370,12 @@ function initControls() {
   // is the first thing anyone tries.
   $("btn-drop-open").addEventListener("click", pickReplay);
   $("btn-map").addEventListener("click", async () => {
+    // During Autoplay the map comes from the export picker; a map file
+    // dropped on the window still works and becomes the session's map.
+    if (status?.autoplay) {
+      openPicker();
+      return;
+    }
     const p = await dialog.open({ filters: [{ name: "Map", extensions: ["sspm", "rhm", "json"] }] });
     if (p) await loadPath(p);
   });

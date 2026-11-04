@@ -9,8 +9,10 @@ use rhythia_render::autoplay::{self, AutoplaySettings};
 use serde::Serialize;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::Ordering;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
+use tauri::Manager as _;
 
 /// The active Autoplay session: which export and which settings.
 pub struct AutoplaySession {
@@ -136,11 +138,59 @@ pub fn read_header(path: &Path) -> Result<ExportEntryDto, String> {
     })
 }
 
+/// Headers already read, by file, with the size and time stamp they were
+/// read at, plus the last listing for the unchanged case. The window polls
+/// the folder every second; without this every poll would open every
+/// archive again.
+#[derive(Default)]
+pub struct HeaderCache {
+    headers: HashMap<PathBuf, (i64, u64, ExportEntryDto)>,
+    last: Option<ExportsDto>,
+}
+
+fn header_cache() -> &'static Mutex<HeaderCache> {
+    static CACHE: OnceLock<Mutex<HeaderCache>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HeaderCache::default()))
+}
+
+/// Refuses what is for real plays while an Autoplay session is active: the
+/// Analyze window and the thumbnail would show the synthetic run without
+/// its marks.
+pub fn real_play_only(inner: &Inner, what: &str) -> Result<(), String> {
+    if inner.autoplay.is_some() {
+        return Err(format!("{what} is for real plays; leave Autoplay first (Back to replay)"));
+    }
+    Ok(())
+}
+
+fn unreadable_entry(p: &Path, mtime: i64) -> ExportEntryDto {
+    ExportEntryDto {
+        path: p.to_string_lossy().into_owned(),
+        file_name: p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+        title: format!("{} (unreadable)", p.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()),
+        song_name: String::new(),
+        mappers: Vec::new(),
+        duration_ms: 0,
+        note_count: 0,
+        has_audio: false,
+        exported_unix_ms: mtime,
+        unreadable: true,
+    }
+}
+
 /// Every `.rhm` in the folder, newest export first, with a token over the
 /// listing. A missing folder lists as empty (the game has not exported
 /// anything yet); a damaged archive lists as unreadable instead of failing
 /// the whole listing.
+#[cfg(test)]
 pub fn list_exports(dir: &Path) -> Result<ExportsDto, String> {
+    list_exports_cached(dir, &mut HeaderCache::default())
+}
+
+/// `list_exports` with a cache: a file whose size and time stamp are known
+/// is not opened again, and a folder whose listing has not changed returns
+/// the previous result.
+pub fn list_exports_cached(dir: &Path, cache: &mut HeaderCache) -> Result<ExportsDto, String> {
     use std::hash::{Hash, Hasher};
     let mut files: Vec<(PathBuf, i64, u64)> = Vec::new();
     if let Ok(rd) = std::fs::read_dir(dir) {
@@ -170,27 +220,31 @@ pub fn list_exports(dir: &Path) -> Result<ExportsDto, String> {
         mtime.hash(&mut h);
         len.hash(&mut h);
     }
-    let maps = files
+    let token = h.finish();
+    let folder = dir.to_string_lossy().into_owned();
+    if let Some(last) = cache.last.as_ref() {
+        if last.token == token && last.folder == folder {
+            return Ok(last.clone());
+        }
+    }
+    let maps: Vec<ExportEntryDto> = files
         .iter()
-        .map(|(p, mtime, _)| {
-            read_header(p).unwrap_or_else(|_| ExportEntryDto {
-                path: p.to_string_lossy().into_owned(),
-                file_name: p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
-                title: format!(
-                    "{} (unreadable)",
-                    p.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
-                ),
-                song_name: String::new(),
-                mappers: Vec::new(),
-                duration_ms: 0,
-                note_count: 0,
-                has_audio: false,
-                exported_unix_ms: *mtime,
-                unreadable: true,
-            })
+        .map(|(p, mtime, len)| {
+            if let Some((m, l, dto)) = cache.headers.get(p) {
+                if m == mtime && l == len {
+                    return dto.clone();
+                }
+            }
+            let dto = read_header(p).unwrap_or_else(|_| unreadable_entry(p, *mtime));
+            cache.headers.insert(p.clone(), (*mtime, *len, dto.clone()));
+            dto
         })
         .collect();
-    Ok(ExportsDto { folder: dir.to_string_lossy().into_owned(), source: String::new(), maps, token: h.finish() })
+    let present: HashSet<&PathBuf> = files.iter().map(|(p, _, _)| p).collect();
+    cache.headers.retain(|p, _| present.contains(p));
+    let listing = ExportsDto { folder, source: String::new(), maps, token };
+    cache.last = Some(listing.clone());
+    Ok(listing)
 }
 
 /// Loads the export, builds the run and makes it the session. Returns the
@@ -311,13 +365,22 @@ fn status(app: &App, inner: &Inner) -> StatusDto {
 }
 
 #[tauri::command]
-pub fn autoplay_exports(state: tauri::State<'_, App>) -> Result<ExportsDto, String> {
-    let app = state.inner();
-    let mut inner = app.lock();
-    let (dir, source) = exports_dir(&inner.settings).map_err(autoplay_err)?;
-    let mut listing = list_exports(&dir)?;
+pub async fn autoplay_exports(state: tauri::State<'_, App>) -> Result<ExportsDto, String> {
+    let app = state.inner().clone();
+    let (dir, source) = {
+        let inner = app.lock();
+        exports_dir(&inner.settings).map_err(autoplay_err)?
+    };
+    // Off the event loop and outside the state lock: the first listing
+    // opens every archive, and the preview must not wait for that.
+    let mut listing = tauri::async_runtime::spawn_blocking(move || {
+        let mut cache = header_cache().lock().unwrap_or_else(|p| p.into_inner());
+        list_exports_cached(&dir, &mut cache)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
     listing.source = source.to_string();
-    inner.autoplay_exports_seen = Some((listing.folder.clone(), listing.maps.len()));
+    app.lock().autoplay_exports_seen = Some((listing.folder.clone(), listing.maps.len()));
     Ok(listing)
 }
 
@@ -329,6 +392,11 @@ pub fn autoplay_pick(state: tauri::State<'_, App>, app_handle: tauri::AppHandle,
     }
     let mut inner = app.lock();
     start_session(&mut inner, PathBuf::from(path))?;
+    // The Analyze window is for real plays: one left open from the replay
+    // before this pick would show the synthetic run without its marks.
+    if let Some(w) = app_handle.get_webview_window("analyze") {
+        let _ = w.close();
+    }
     crate::notify_sources_changed(&app_handle);
     Ok(status(app, &inner))
 }
@@ -435,8 +503,7 @@ mod tests {
     #[test]
     fn the_exports_folder_prefers_the_setting_then_the_env_then_the_game() {
         let dir = tempfile::tempdir().unwrap();
-        let mut s = crate::Settings::default();
-        s.autoplay_exports_dir = Some(dir.path().to_string_lossy().into_owned());
+        let mut s = crate::Settings { autoplay_exports_dir: Some(dir.path().to_string_lossy().into_owned()), ..Default::default() };
         assert_eq!(exports_dir_with(&s, None, Err(vec![])).unwrap().1, "setting");
         s.autoplay_exports_dir = Some("/does/not/exist".into());
         let e = exports_dir_with(&s, None, Err(vec![std::path::PathBuf::from("/nope")])).unwrap_err();
@@ -449,6 +516,83 @@ mod tests {
         let (p, src) = exports_dir_with(&s, Some(game.path().to_path_buf()), Err(vec![])).unwrap();
         assert_eq!(src, "env");
         assert_eq!(p, game.path().join("exports"));
+    }
+
+    #[test]
+    fn unchanged_exports_are_served_from_the_cache_not_read_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.rhm");
+        write_rhm(&a, "A", 3, true);
+        let mut cache = HeaderCache::default();
+        let l1 = list_exports_cached(dir.path(), &mut cache).unwrap();
+        assert_eq!(l1.maps[0].title, "A");
+        // the same file with the same size and time stamp but garbage inside:
+        // a listing that read it again would call it unreadable
+        let meta = std::fs::metadata(&a).unwrap();
+        let (mtime, len) = (meta.modified().unwrap(), meta.len() as usize);
+        std::fs::write(&a, vec![b'x'; len]).unwrap();
+        std::fs::File::options().write(true).open(&a).unwrap().set_modified(mtime).unwrap();
+        let l2 = list_exports_cached(dir.path(), &mut cache).unwrap();
+        assert_eq!(l2.token, l1.token);
+        assert_eq!(l2.maps[0].title, "A", "an unchanged file must not be read again");
+        // a new time stamp is a new file
+        std::fs::File::options().write(true).open(&a).unwrap().set_modified(mtime + std::time::Duration::from_secs(5)).unwrap();
+        let l3 = list_exports_cached(dir.path(), &mut cache).unwrap();
+        assert_ne!(l3.token, l1.token);
+        assert!(l3.maps[0].unreadable, "{:?}", l3.maps[0]);
+    }
+
+    #[test]
+    fn a_map_loaded_during_a_session_becomes_the_session_map() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.rhm");
+        let b = dir.path().join("b.rhm");
+        write_rhm(&a, "A", 3, true);
+        write_rhm(&b, "B", 6, true);
+        let mut inner = crate::Inner::default();
+        start_session(&mut inner, a.clone()).unwrap();
+        crate::load_map_into(&mut inner, b.clone()).unwrap();
+        assert_eq!(inner.autoplay.as_ref().unwrap().rhm, b);
+        assert_eq!(inner.map_source, "autoplay");
+        assert_eq!(inner.map.as_ref().unwrap().1.notes.len(), 6);
+        assert_eq!(inner.replay.as_ref().unwrap().1.frames.iter().filter(|f| f.hit).count(), 6);
+        assert_eq!(inner.settings.last_autoplay.as_deref(), Some(b.to_string_lossy().as_ref()));
+        // without a session a map is just a map
+        clear_session(&mut inner);
+        crate::load_map_into(&mut inner, a).unwrap();
+        assert!(inner.autoplay.is_none() && inner.replay.is_none());
+        assert_eq!(inner.map_source, "local");
+    }
+
+    #[test]
+    fn the_analyze_window_and_the_thumbnail_wait_for_a_real_play() {
+        let mut inner = crate::Inner::default();
+        assert!(real_play_only(&inner, "The Analyze window").is_ok());
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.rhm");
+        write_rhm(&a, "A", 3, true);
+        start_session(&mut inner, a).unwrap();
+        let e = real_play_only(&inner, "The Analyze window").unwrap_err();
+        assert!(e.contains("Analyze") && e.contains("Autoplay"), "{e}");
+        clear_session(&mut inner);
+        assert!(real_play_only(&inner, "Save thumbnail").is_ok());
+    }
+
+    #[test]
+    fn a_new_output_frame_rate_rebuilds_the_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.rhm");
+        write_rhm(&a, "A", 3, true);
+        let mut inner = crate::Inner::default();
+        inner.settings.fps = 60;
+        start_session(&mut inner, a).unwrap();
+        let before = inner.replay.as_ref().unwrap().1.frames.len();
+        crate::apply_output(&mut inner, crate::OutputUpdate { fps: Some(120), ..Default::default() }).unwrap();
+        let after = inner.replay.as_ref().unwrap().1.frames.len();
+        assert!(after > before * 3 / 2, "{before} frames at 60 fps, {after} at 120");
+        // the same rate again leaves the run alone
+        crate::apply_output(&mut inner, crate::OutputUpdate { fps: Some(120), ..Default::default() }).unwrap();
+        assert_eq!(inner.replay.as_ref().unwrap().1.frames.len(), after);
     }
 
     #[test]

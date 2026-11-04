@@ -113,7 +113,7 @@ fn field_for(map: &Map) -> Field {
     Field { bound: grid + (0.5 - CURSOR_EDGE_INSET) }
 }
 
-/// Builds the synthetic run: frames at `fps` with the cursor on the plan,
+/// Builds the synthetic run: frames at `fps` (at least 60) with the cursor on the plan,
 /// one hit-flagged frame per note at its visit time. `dice` (the mark
 /// pattern) decides the sides of bellies and boomerangs.
 pub fn generate(map: &Map, settings: &AutoplaySettings, fps: u32, dice: &[f32]) -> Result<Replay, AutoplayError> {
@@ -121,7 +121,10 @@ pub fn generate(map: &Map, settings: &AutoplaySettings, fps: u32, dice: &[f32]) 
         return Err(AutoplayError::NoNotes);
     }
     let settings = settings.normalized();
-    let fps = fps.clamp(24, 240);
+    // at least 60 per second of map time whatever the output rate: the
+    // renderer interpolates between frames and a 24 fps run would turn
+    // every arc into a polygon
+    let fps = fps.clamp(24, 240).max(60);
     let frame_ms = 1000.0 / fps as f64;
     let window_ms = BASE_HIT_WINDOW_MS * f64::from(settings.speed_mod);
     let field = field_for(map);
@@ -247,6 +250,16 @@ mod tests {
                 .unwrap();
             assert!((f.x - wx).abs() < 0.02 && (f.y - wy).abs() < 0.02, "note at {} ms: frame {:?}", n.time_ms, f);
         }
+    }
+
+    #[test]
+    fn frames_come_at_least_sixty_per_second_whatever_the_output_rate() {
+        let map = map_with(&[(500, 0.0, 0.0), (2500, 2.0, 2.0)]);
+        let slow = generate(&map, &AutoplaySettings::default(), 24, &dice()).unwrap();
+        let sixty = generate(&map, &AutoplaySettings::default(), 60, &dice()).unwrap();
+        let fast = generate(&map, &AutoplaySettings::default(), 120, &dice()).unwrap();
+        assert_eq!(slow.frames.len(), sixty.frames.len(), "a 24 fps output must not thin the run below 60 frames per second");
+        assert!(fast.frames.len() > sixty.frames.len() * 3 / 2, "a faster output keeps its own rate: {} vs {}", fast.frames.len(), sixty.frames.len());
     }
 
     #[test]

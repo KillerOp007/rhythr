@@ -383,9 +383,12 @@ map, not for anything that could pass as a real play.
   installs (the `RHYTHR_GAME_DATA_DIR` override keeps working too). A map
   the game exported without audio renders silent and says so (`RH-AUT-904`).
 - **The session**: the Replay card becomes the Autoplay card and an
-  **Autoplay** tab appears next to Output and HUD. "Back to replay", or
-  dropping a `.rhr`, ends the session. The app restores the session on the
-  next start as long as the export still exists.
+  **Autoplay** tab appears next to Output and HUD. While it is active the
+  Map button opens the picker, a map file dropped on the window becomes
+  the session's map, and an Analyze window left open from a replay closes.
+  "Back to replay", or dropping a `.rhr`, ends the session. The app
+  restores the session on the next start as long as the export still
+  exists.
 - **Settings** (Autoplay tab): Movement, **Normal** (soft, direct curves) or
   **Cursor dance**; Dance amount, subtle, medium or wild; Rest in the centre
   after 2 to 8 real seconds without a note (with a speed mod the map time is

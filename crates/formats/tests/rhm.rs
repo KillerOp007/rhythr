@@ -76,3 +76,13 @@ fn oversized_map_entry_is_rejected() {
         Err(rhythia_formats::Error::ArchiveEntryTooLarge { .. })
     ));
 }
+
+#[test]
+fn a_note_coordinate_beyond_f32_is_rejected_not_turned_infinite() {
+    let json = br#"{"OnlineId":1,"LegacyId":"x","Title":"T","SongName":"S","Duration":1000,"Notes":[{"Time":100,"X":1e300,"Y":1}]}"#;
+    let err = Map::from_cache_json(json).unwrap_err();
+    assert!(matches!(err, rhythia_formats::Error::BadMapField("Notes[].X")), "{err:?}");
+    let json = br#"{"OnlineId":1,"LegacyId":"x","Title":"T","SongName":"S","Duration":1000,"Notes":[{"Time":100,"X":1,"Y":-1e300}]}"#;
+    let err = Map::from_cache_json(json).unwrap_err();
+    assert!(matches!(err, rhythia_formats::Error::BadMapField("Notes[].Y")), "{err:?}");
+}

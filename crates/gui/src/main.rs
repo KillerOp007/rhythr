@@ -430,6 +430,11 @@ impl Settings {
     /// two windows saving at once) can never leave a half-written settings
     /// file behind. The old one stays until the new one is complete.
     fn save(&self) {
+        // Unit tests start sessions and change settings freely; none of
+        // them may touch the developer's real settings file.
+        if cfg!(test) {
+            return;
+        }
         let dir = config_dir();
         let _ = std::fs::create_dir_all(&dir);
         let Ok(json) = serde_json::to_string_pretty(self) else {
@@ -2218,6 +2223,23 @@ fn load_replay(
     ))
 }
 
+/// Loads a map file. During an Autoplay session the map becomes the
+/// session's map (the run is rebuilt for it); otherwise it is the loaded
+/// map of a replay.
+fn load_map_into(inner: &mut Inner, path: PathBuf) -> Result<(), String> {
+    if inner.autoplay.is_some() {
+        autoplay_commands::start_session(inner, path)?;
+        return Ok(());
+    }
+    let map = Map::from_path(&path).map_err(err_str)?;
+    inner.map = Some((path, map));
+    inner.map_source = "local".into();
+    inner.map_hash_mismatch = false;
+    normalize_time_bases(inner);
+    invalidate_preview(inner);
+    Ok(())
+}
+
 #[tauri::command]
 fn load_map(
     state: tauri::State<'_, App>,
@@ -2225,13 +2247,8 @@ fn load_map(
     app_handle: tauri::AppHandle,
 ) -> Result<StatusDto, String> {
     let app = state.inner();
-    let map = Map::from_path(&path).map_err(err_str)?;
     let mut inner = app.lock();
-    inner.map = Some((PathBuf::from(path), map));
-    inner.map_source = "local".into();
-    inner.map_hash_mismatch = false;
-    normalize_time_bases(&mut inner);
-    invalidate_preview(&mut inner);
+    load_map_into(&mut inner, PathBuf::from(path))?;
     notify_sources_changed(&app_handle);
     Ok(assemble_status(
         &inner,
@@ -3250,7 +3267,19 @@ struct OutputUpdate {
 fn set_output(state: tauri::State<'_, App>, update: OutputUpdate) -> Result<StatusDto, String> {
     let app = state.inner();
     let mut inner = app.lock();
+    apply_output(&mut inner, update)?;
+    Ok(assemble_status(
+        &inner,
+        app.rendering.load(Ordering::SeqCst),
+    ))
+}
+
+/// Applies an output settings update: clamps, saves, and rebuilds what
+/// depends on it (the preview on an orientation flip, the Autoplay run on a
+/// new frame rate).
+fn apply_output(inner: &mut Inner, update: OutputUpdate) -> Result<(), String> {
     let was_portrait = inner.settings.height > inner.settings.width;
+    let old_fps = inner.settings.fps;
     let s = &mut inner.settings;
     // Rounded here as well as in the window: a preset, the Analyze window and
     // a restored session all reach this without going through the input.
@@ -3343,12 +3372,13 @@ fn set_output(state: tauri::State<'_, App>, update: OutputUpdate) -> Result<Stat
     s.save();
     // Orientation flips rebuild the preview at the new aspect.
     if (inner.settings.height > inner.settings.width) != was_portrait {
-        invalidate_preview(&mut inner);
+        invalidate_preview(inner);
     }
-    Ok(assemble_status(
-        &inner,
-        app.rendering.load(Ordering::SeqCst),
-    ))
+    // The synthetic run is built at the output frame rate.
+    if inner.settings.fps != old_fps {
+        autoplay_commands::regenerate(inner)?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -3487,6 +3517,7 @@ fn prepare_segment(
     // the lock the still frames and the UI need.
     let (replay, map, cfg, mut params, ghost, ffmpeg, settings_w, settings_h, encoder, clip) = {
         let inner = app.lock();
+        autoplay_commands::real_play_only(&inner, "The Analyze window")?;
         let (_, r) = inner.replay.as_ref().ok_or("no replay loaded")?;
         let (_, m) = inner.map.as_ref().ok_or("no map loaded")?;
         let cfg = effective_config(&inner);
@@ -3683,6 +3714,7 @@ async fn start_live_session(
     live: tauri::State<'_, live::LiveHandles>,
     app_handle: tauri::AppHandle,
 ) -> Result<bool, String> {
+    autoplay_commands::real_play_only(&state.inner().lock(), "The Analyze window")?;
     // Native mode ships on Windows; other platforms keep the proven
     // fallback engines unless explicitly forced (testing).
     let forced = std::env::var("RHYTHR_NATIVE_ANALYZE").is_ok();
@@ -4755,6 +4787,9 @@ mod kit_preview_tests {
 #[tauri::command]
 async fn open_analyze_window(app_handle: tauri::AppHandle) -> Result<(), String> {
     use tauri::{WebviewUrl, WebviewWindowBuilder};
+    if let Some(app) = app_handle.try_state::<App>() {
+        autoplay_commands::real_play_only(&app.lock(), "The Analyze window")?;
+    }
     if let Some(w) = app_handle.get_webview_window("analyze") {
         let _ = w.unminimize();
         let _ = w.show();
@@ -5012,6 +5047,7 @@ async fn export_frame(
             return Err("rendering in progress".to_string());
         }
         let inner = app.lock();
+        autoplay_commands::real_play_only(&inner, "Save thumbnail")?;
         let (_, r) = inner.replay.as_ref().ok_or("no replay loaded")?;
         let (_, m) = inner.map.as_ref().ok_or("no map loaded")?;
         let cfg = render_config(&inner);
@@ -6652,7 +6688,7 @@ mod autoplay_tests {
         let mut inner = Inner::default();
         let map = one_note_map();
         let pattern = autoplay_commands::mark_pattern();
-        let replay = rhythia_render::autoplay::generate(&map, &AutoplaySettings::default(), 60, &pattern).unwrap();
+        let replay = rhythia_render::autoplay::generate(&map, &AutoplaySettings::default(), 60, pattern).unwrap();
         inner.replay = Some((PathBuf::from("/x/song.rhm"), replay));
         inner.map = Some((PathBuf::from("/x/song.rhm"), map));
         inner.autoplay = Some(autoplay_commands::AutoplaySession { rhm: PathBuf::from("/x/song.rhm"), settings: AutoplaySettings::default() });

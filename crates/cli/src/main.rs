@@ -548,7 +548,7 @@ fn probe_video(ffmpeg: &str, path: &Path) -> Option<(usize, usize, f32)> {
     let text = String::from_utf8_lossy(&out.stderr);
     let line = text.lines().find(|l| l.contains("Video:"))?;
     let dims = line
-        .split(|c: char| c == ' ' || c == ',')
+        .split([' ', ','])
         .filter_map(|tok| {
             let (w, h) = tok.split_once('x')?;
             let w: usize = w.parse().ok()?;
@@ -558,6 +558,12 @@ fn probe_video(ffmpeg: &str, path: &Path) -> Option<(usize, usize, f32)> {
         .next()?;
     let black = if line.contains("(pc") { 0.0 } else { 16.0 };
     Some((dims.0, dims.1, black))
+}
+
+/// Bytes of one raw yuv420p frame: the luma plane plus two chroma planes
+/// of half size, rounded up for odd dimensions.
+fn yuv420p_frame_len(w: usize, h: usize) -> usize {
+    w * h + 2 * w.div_ceil(2) * h.div_ceil(2)
 }
 
 /// Decodes the video, averages it and tries every key; prints the verdict
@@ -581,7 +587,7 @@ fn run_mark_check(video: &Path, keys: &[PathBuf], json: bool, ffmpeg: &str, max_
         .spawn()
         .with_context(|| format!("running {ffmpeg}"))?;
     let mut stdout = child.stdout.take().expect("piped stdout");
-    let frame_len = w * h * 3 / 2;
+    let frame_len = yuv420p_frame_len(w, h);
     let mut buf = vec![0u8; frame_len];
     let mut acc = Accumulator::new(w, h, black);
     let mut frames = 0usize;
@@ -615,7 +621,7 @@ fn run_mark_check(video: &Path, keys: &[PathBuf], json: bool, ffmpeg: &str, max_
     let mut best: Option<(String, Verdict)> = None;
     for (name, seed) in candidates {
         let v = check(&avg, &mark::pattern(&seed), &wrong);
-        let better = best.as_ref().map_or(true, |(_, b)| v.z > b.z);
+        let better = best.as_ref().is_none_or(|(_, b)| v.z > b.z);
         let found = v.kind == VerdictKind::Found;
         if better {
             best = Some((name, v));
@@ -1425,6 +1431,13 @@ fn print_report(report: &integrity::IntegrityReport, replay_hits: i32) {
 #[cfg(test)]
 mod mark_check_tests {
     use super::*;
+
+    #[test]
+    fn a_yuv420p_frame_of_odd_size_counts_its_rounded_up_chroma_planes() {
+        assert_eq!(yuv420p_frame_len(1920, 1080), 1920 * 1080 * 3 / 2);
+        assert_eq!(yuv420p_frame_len(1919, 1079), 1919 * 1079 + 2 * 960 * 540);
+        assert_eq!(yuv420p_frame_len(641, 361), 641 * 361 + 2 * 321 * 181);
+    }
 
     #[test]
     fn mark_check_parses_keys_and_flags() {

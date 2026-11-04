@@ -61,7 +61,7 @@ pub fn resample(src: &[f32], sh: usize, sw: usize, dh: usize, dw: usize) -> Vec<
 /// Area average of a luma plane to the pattern grid: exact block means when
 /// the frame is a multiple of the grid, bilinear otherwise.
 pub fn canonical(y: &[u8], width: usize, height: usize) -> Vec<f32> {
-    if height % PAT_H == 0 && width % PAT_W == 0 && height > 0 && width > 0 {
+    if height.is_multiple_of(PAT_H) && width.is_multiple_of(PAT_W) && height > 0 && width > 0 {
         let fy = height / PAT_H;
         let fx = width / PAT_W;
         let inv = 1.0 / (fy * fx) as f32;
@@ -146,7 +146,7 @@ impl Accumulator {
     /// One frame's luma plane, row major `width * height`.
     pub fn push_luma(&mut self, y: &[u8]) {
         self.pushed += 1;
-        if (self.pushed - 1) % FRAME_STEP != 0 {
+        if !(self.pushed - 1).is_multiple_of(FRAME_STEP) {
             return;
         }
         let hp = highpass(&canonical(y, self.width, self.height));

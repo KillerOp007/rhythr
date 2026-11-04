@@ -11,7 +11,7 @@ fn friendly(n: usize) -> usize {
     loop {
         let mut k = m;
         for f in [2, 3, 5] {
-            while k % f == 0 {
+            while k.is_multiple_of(f) {
                 k /= f;
             }
         }
