@@ -329,6 +329,87 @@ mod tests {
         assert!(max_off_chord(&r, 1000.0, 1150.0, world(&far.notes[0]), world(&far.notes[1])) < 0.02, "normal movement stays straight");
     }
 
+    /// A stream (notes faster than eight per second) is taken in one
+    /// sweep: no dance belly however wild, so a line of notes is a line.
+    #[test]
+    fn a_stream_in_a_line_goes_straight_even_in_wild_dance() {
+        let map = map_with(&[(1000, 0.0, 1.0), (1048, 1.0, 1.0), (1096, 2.0, 1.0), (1144, 2.0, 0.0), (1192, 1.0, 0.0)]);
+        let s = AutoplaySettings { movement: Movement::Dance, dance: DanceAmount::Wild, ..Default::default() };
+        let r = generate(&map, &s, 120, &dice()).unwrap();
+        let off = max_off_chord(&r, 1000.0, 1048.0, world(&map.notes[0]), world(&map.notes[1]));
+        assert!(off < 0.03, "a stream line arcs by {off}");
+        let out = rhythia_sim::hitreg::match_hits(&map.notes, &r.frames, rhythia_sim::hitreg::hit_window_ms(&r));
+        assert_eq!(out.derived_hits(), 5);
+    }
+
+    /// A corner inside a stream is rounded a little, not taken as a hard
+    /// turn at the note and not hooked like a dance arc; the note itself is
+    /// still visited on time.
+    #[test]
+    fn a_stream_corner_is_rounded_not_hooked() {
+        let map = map_with(&[(1000, 0.0, 0.0), (1048, 0.0, 1.0), (1096, 0.0, 2.0), (1144, 1.0, 2.0), (1192, 2.0, 2.0)]);
+        for movement in [Movement::Normal, Movement::Dance] {
+            let s = AutoplaySettings { movement, dance: DanceAmount::Wild, ..Default::default() };
+            let r = generate(&map, &s, 120, &dice()).unwrap();
+            let off = max_off_chord(&r, 1048.0, 1096.0, world(&map.notes[1]), world(&map.notes[2]));
+            assert!(off > 0.03 && off < 0.2, "{movement:?}: the corner segment leaves the chord by {off}");
+            let (wx, wy) = world(&map.notes[2]);
+            let at = r.frames.iter().find(|f| f.hit && (f.ms - 1096.0).abs() < 0.5).unwrap();
+            assert!((at.x - wx).abs() < 0.02 && (at.y - wy).abs() < 0.02, "{movement:?}: corner note visited at {at:?}");
+            let out = rhythia_sim::hitreg::match_hits(&map.notes, &r.frames, rhythia_sim::hitreg::hit_window_ms(&r));
+            assert_eq!(out.derived_hits(), 5);
+        }
+    }
+
+    /// The jumps into and out of a stream belong to the stream's sweep: the
+    /// cursor arrives at the first note already heading the way it leaves,
+    /// and leaves the last note the way it arrived, instead of hooking in
+    /// from a dance arc and turning on the spot. Measured on the plan
+    /// itself, a millisecond either side of the note.
+    #[test]
+    fn the_jump_into_a_stream_arrives_heading_the_streams_way() {
+        let map = map_with(&[(1000, 1.0, 2.0), (1190, 0.0, 0.0), (1238, 0.0, 1.0), (1286, 0.0, 2.0), (1334, 1.0, 2.0), (1524, 2.0, 0.0)]);
+        let points: Vec<Waypoint> = map
+            .notes
+            .iter()
+            .map(|n| {
+                let (x, y) = world(n);
+                Waypoint { t_ms: n.time_ms as f64, x, y }
+            })
+            .collect();
+        let field = field_for(&map);
+        let angle = |u: (f32, f32), v: (f32, f32)| {
+            let dot = u.0 * v.0 + u.1 * v.1;
+            let len = (u.0 * u.0 + u.1 * u.1).sqrt() * (v.0 * v.0 + v.1 * v.1).sqrt();
+            (dot / len.max(1e-12)).clamp(-1.0, 1.0).acos().to_degrees()
+        };
+        for movement in [Movement::Dance, Movement::Normal] {
+            let s = AutoplaySettings { movement, ..Default::default() };
+            let p = plan(&points, &s, &field, &dice());
+            let step = |from: f64, to: f64| {
+                let (a, b) = (sample(&p, from, &field), sample(&p, to, &field));
+                (b.0 - a.0, b.1 - a.1)
+            };
+            let turn = angle(step(1189.0, 1190.0), step(1190.0, 1191.0));
+            assert!(turn < 30.0, "{movement:?}: the cursor turns {turn:.0} degrees at the stream's first note");
+            let turn_out = angle(step(1333.0, 1334.0), step(1334.0, 1335.0));
+            assert!(turn_out < 30.0, "{movement:?}: the cursor turns {turn_out:.0} degrees at the stream's last note");
+        }
+    }
+
+    /// A chord is two waypoints half a millisecond apart on the same spot;
+    /// that is not a stream, and the jump into it keeps its dance arc.
+    #[test]
+    fn a_chord_does_not_pull_the_jump_before_it_into_a_stream_sweep() {
+        let map = map_with(&[(1000, 0.0, 1.0), (1190, 2.0, 1.0), (1190, 2.0, 2.0), (1380, 0.0, 1.0)]);
+        let s = AutoplaySettings { movement: Movement::Dance, dance: DanceAmount::Medium, ..Default::default() };
+        let r = generate(&map, &s, 120, &dice()).unwrap();
+        let a = world(&map.notes[0]);
+        let b = ((world(&map.notes[1]).0 + world(&map.notes[2]).0) / 2.0, (world(&map.notes[1]).1 + world(&map.notes[2]).1) / 2.0);
+        let off = max_off_chord(&r, 1000.0, 1190.0, a, b);
+        assert!(off > 0.3, "the jump into the chord arcs by only {off}");
+    }
+
     #[test]
     fn same_spot_with_time_makes_a_boomerang_and_short_gaps_hold() {
         let map = map_with(&[(1000, 2.0, 1.0), (2500, 2.0, 1.0), (2700, 2.0, 1.0)]);

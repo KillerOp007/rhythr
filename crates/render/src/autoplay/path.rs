@@ -26,6 +26,15 @@ pub const L_MAX_FACTOR: f32 = 1.5;
 /// reaches three quarters of that); time to spare widens it, the amount
 /// scales it, the barrier has the last word.
 pub const BELLY_PER_UNIT: f32 = 0.3;
+/// Notes closer than this in real seconds (faster than eight per second)
+/// are a stream: taken in one sweep, straight between the notes with the
+/// corners rounded, no dance belly. Real maps place their jumps at 150 ms
+/// and more; their 1/16 and 1/32 runs sit well below this.
+pub const STREAM_GAP_SECS: f64 = 0.125;
+/// A stream segment's control points sit this fraction of the chord from
+/// the notes, along the direction the neighbours give (the Catmull-Rom
+/// third); collinear notes make it a straight line, a corner a rounded one.
+pub const STREAM_TANGENT: f32 = 1.0 / 3.0;
 /// Samples per segment for the arc-length table.
 const ARC_SAMPLES: usize = 48;
 
@@ -162,9 +171,73 @@ fn chord_curve(t0: f64, t1: f64, a: (f32, f32), b: (f32, f32), belly: f32, kind:
     Segment::new(t0, t1, kind, [a, p1, p2, b])
 }
 
+/// A cubic from `a` to `b` whose end tangents follow the neighbours (a
+/// Catmull-Rom spline on the notes): `va` and `vb` are the cursor's
+/// direction at `a` and `b`, taken from the notes before and after. The
+/// control points sit `STREAM_TANGENT` of the chord along those directions,
+/// so collinear notes give a straight line and a corner a rounded one. A
+/// direction that says nothing (an exact reversal, or no neighbour) falls
+/// back to the chord: straight.
+fn stream_curve(t0: f64, t1: f64, a: (f32, f32), b: (f32, f32), va: (f32, f32), vb: (f32, f32)) -> Segment {
+    let d = dist(a, b).max(1e-6);
+    let reach = d * STREAM_TANGENT;
+    let chord = ((b.0 - a.0) / d, (b.1 - a.1) / d);
+    let along = |v: (f32, f32)| {
+        let len = (v.0 * v.0 + v.1 * v.1).sqrt();
+        if len > 1e-9 {
+            (v.0 / len * reach, v.1 / len * reach)
+        } else {
+            (chord.0 * reach, chord.1 * reach)
+        }
+    };
+    let oa = along(va);
+    let ob = along(vb);
+    Segment::new(t0, t1, SegmentKind::Straight, [a, (a.0 + oa.0, a.1 + oa.1), (b.0 - ob.0, b.1 - ob.1), b])
+}
+
+/// The cursor's velocity at waypoint `k` in units per millisecond (the
+/// sweep uses its direction): the finite difference between its
+/// neighbours, `k - 1` and `k + 1`, with the start of the run (the centre
+/// at time 0) standing in before the first note and the last note for
+/// anything after it. Zero when both neighbours share a spot.
+fn velocity_at(points: &[Waypoint], k: usize) -> (f32, f32) {
+    let start = Waypoint { t_ms: 0.0, x: 0.0, y: 0.0 };
+    let at = |j: isize| -> Waypoint {
+        if j < 0 {
+            start
+        } else {
+            points[(j as usize).min(points.len() - 1)]
+        }
+    };
+    let (p, n) = (at(k as isize - 1), at(k as isize + 1));
+    let dt = (n.t_ms - p.t_ms) as f32;
+    if dt <= 1e-6 {
+        return (0.0, 0.0);
+    }
+    ((n.x - p.x) / dt, (n.y - p.y) / dt)
+}
+
 /// Real seconds of a map gap under the speed mod.
 fn real_secs(ms: f64, settings: &AutoplaySettings) -> f64 {
     ms / 1000.0 / f64::from(settings.speed_mod.max(0.01))
+}
+
+/// Whether the segment ending at waypoint `k` is a stream gap: a real move
+/// (a chord's two waypoints on one spot are not one) within
+/// `STREAM_GAP_SECS`.
+fn short_gap(points: &[Waypoint], k: usize, settings: &AutoplaySettings) -> bool {
+    let (t0, from) = if k == 0 { (0.0, (0.0, 0.0)) } else { (points[k - 1].t_ms, (points[k - 1].x, points[k - 1].y)) };
+    let gap = points[k].t_ms - t0;
+    gap > 0.0 && real_secs(gap, settings) <= STREAM_GAP_SECS && dist(from, (points[k].x, points[k].y)) >= SAME_SPOT
+}
+
+/// Whether the segment ending at waypoint `k` belongs to a stream's sweep:
+/// its own gap is short, or the gap just before or just after it is, so the
+/// jump into a stream and the jump out of it flow with it.
+fn in_sweep(points: &[Waypoint], k: usize, settings: &AutoplaySettings) -> bool {
+    short_gap(points, k, settings)
+        || (k > 0 && short_gap(points, k - 1, settings))
+        || (k + 1 < points.len() && short_gap(points, k + 1, settings))
 }
 
 /// Picks a side (+1 or -1) from the dice for decision `i`.
@@ -234,6 +307,11 @@ pub fn plan(points: &[Waypoint], settings: &AutoplaySettings, field: &Field, dic
             } else {
                 segs.push(Segment::hold(t0, t1, b));
             }
+        } else if in_sweep(points, i, settings) {
+            // a stream, or the jump into or out of one: straight to the
+            // note, the corner rounded by the neighbours' direction, no belly
+            let va = if i == 0 { (0.0, 0.0) } else { velocity_at(points, i - 1) };
+            segs.push(stream_curve(t0, t1, a, b, va, velocity_at(points, i)));
         } else {
             let l_max = 2.0 * field.bound * L_MAX_FACTOR;
             let l = ((CRUISE as f64 * t) as f32).clamp(d, l_max);
