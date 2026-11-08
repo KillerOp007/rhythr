@@ -23,6 +23,9 @@ plays every note). Every such video carries three marks:
 You need `rhythr-cli` (part of every rhythr release, next to the app) and the
 key file the owner gave you (one line of 64 hex characters). Keep the key
 file private: whoever has it can verify, and could also remove the mark.
+The check reads the video through ffmpeg: the CLI finds the one the rhythr
+installer put next to the app, one placed next to `rhythr-cli` itself, or
+one on PATH; `--ffmpeg <path>` points at another.
 
 ```
 rhythr-cli mark-check video.mp4 --key rhythr-autoplay-mark.key

@@ -118,9 +118,11 @@ struct VideoCommon {
     /// back to software x264; force one with x264/vaapi.
     #[arg(long, default_value = "auto")]
     encoder: String,
-    /// ffmpeg executable (path or bare name on PATH).
-    #[arg(long, default_value = "ffmpeg")]
-    ffmpeg: String,
+    /// ffmpeg executable (a path, or a bare name looked up on PATH).
+    /// Without it the CLI uses the copy next to itself, the one the
+    /// rhythr installer put next to the app, or the one on PATH.
+    #[arg(long)]
+    ffmpeg: Option<String>,
     /// The player's config.json or exported .rhs skin.
     #[arg(long)]
     config: Option<PathBuf>,
@@ -187,8 +189,9 @@ enum Command {
         width: u32,
         #[arg(long, default_value_t = 1080, value_parser = clap::value_parser!(u32).range(240..=4320))]
         height: u32,
-        #[arg(long, default_value = "ffmpeg")]
-        ffmpeg: String,
+        /// ffmpeg executable; found as for `video` when not given.
+        #[arg(long)]
+        ffmpeg: Option<String>,
     },
     /// Print a replay's header and frame statistics.
     Info {
@@ -301,8 +304,9 @@ enum Command {
         /// Emit machine-readable JSON instead of text.
         #[arg(long)]
         json: bool,
-        #[arg(long, default_value = "ffmpeg")]
-        ffmpeg: String,
+        /// ffmpeg executable; found as for `video` when not given.
+        #[arg(long)]
+        ffmpeg: Option<String>,
         /// Stop reading after this many frames.
         #[arg(long, default_value_t = 3000)]
         max_frames: usize,
@@ -535,6 +539,72 @@ fn read_key_file(path: &Path) -> Result<rhythia_render::mark::Seed, String> {
     rhythia_render::mark::seed_from_hex(&text).map_err(|e| format!("{}: {e}", path.display()))
 }
 
+/// Where an ffmpeg may be when `--ffmpeg` is not given. The release ships
+/// the CLI on its own, so unlike the app it cannot count on a copy next to
+/// itself; it looks there first all the same (Windows), then in the app's
+/// install folder (the Windows installer puts ffmpeg.exe next to rhythr.exe,
+/// so a CLI downloaded by itself finds the ffmpeg the app brought along),
+/// then on PATH. On Linux and macOS the distro's or brew's ffmpeg on PATH
+/// comes first, as in the app: its VAAPI and NVENC are linked against the
+/// system's own driver libraries, where a static build can misbehave, and
+/// the copy next to the CLI is the fallback. Nothing found: the bare name,
+/// so the error names what was tried.
+struct FfmpegPlaces {
+    /// `ffmpeg.exe` on Windows, `ffmpeg` elsewhere.
+    name: String,
+    /// Whether PATH has one.
+    in_path: bool,
+    /// The copy next to this executable.
+    sibling: Option<PathBuf>,
+    /// The copies an installed rhythr app leaves at a known place.
+    installs: Vec<PathBuf>,
+    /// Whether the copies on disk win over PATH (Windows) or PATH wins
+    /// (Linux, macOS).
+    sibling_first: bool,
+}
+
+impl FfmpegPlaces {
+    /// The places on this machine.
+    fn here() -> Self {
+        let name = if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" }.to_string();
+        let in_path = std::env::var_os("PATH")
+            .is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(&name).is_file()));
+        let sibling = std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.join(&name)));
+        let mut installs = Vec::new();
+        if cfg!(windows) {
+            // The NSIS installer's per-user folder, then the per-machine one.
+            for var in ["LOCALAPPDATA", "ProgramFiles"] {
+                if let Some(base) = std::env::var_os(var) {
+                    installs.push(PathBuf::from(base).join("rhythr").join(&name));
+                }
+            }
+        }
+        Self { name, in_path, sibling, installs, sibling_first: cfg!(windows) }
+    }
+
+    /// The ffmpeg to run: `explicit` when given, else the first place that
+    /// exists in the order described above.
+    fn pick(&self, explicit: Option<&str>) -> String {
+        if let Some(f) = explicit.map(str::trim).filter(|f| !f.is_empty()) {
+            return f.to_string();
+        }
+        if !self.sibling_first && self.in_path {
+            return self.name.clone();
+        }
+        self.sibling
+            .iter()
+            .chain(self.installs.iter())
+            .find(|p| p.is_file())
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|| self.name.clone())
+    }
+}
+
+/// The ffmpeg to run for a `--ffmpeg` given or not.
+fn resolve_ffmpeg(explicit: Option<&str>) -> String {
+    FfmpegPlaces::here().pick(explicit)
+}
+
 /// Width, height and black level of a video from ffmpeg's `-i` banner (the
 /// bundled ffmpeg comes without ffprobe). Black is 16 unless the stream
 /// says full range (`pc`).
@@ -577,6 +647,12 @@ fn run_mark_check(video: &Path, keys: &[PathBuf], json: bool, ffmpeg: &str, max_
     use rhythia_render::mark::{self, Seed};
     use std::io::Read;
 
+    if !rhythia_render::video::ffmpeg_runs(ffmpeg) {
+        anyhow::bail!(
+            "ffmpeg could not be run ({ffmpeg}); pass --ffmpeg <path>, or put {} next to rhythr-cli",
+            FfmpegPlaces::here().name
+        );
+    }
     let (w, h, black) = probe_video(ffmpeg, video)
         .with_context(|| format!("could not read the video's size with {ffmpeg} ({})", video.display()))?;
     let mut cmd = std::process::Command::new(ffmpeg);
@@ -704,6 +780,7 @@ fn run() -> anyhow::Result<bool> {
             height,
             ffmpeg,
         } => {
+            let ffmpeg = resolve_ffmpeg(ffmpeg.as_deref());
             // Distinguish "ffmpeg cannot run" from "every transport failed":
             // without this the whole table printed "failed" and the command
             // still exited 0, so a script could not tell a broken ffmpeg from
@@ -813,6 +890,7 @@ fn run() -> anyhow::Result<bool> {
             Ok(true)
         }
         Command::MarkCheck { video, keys, json, ffmpeg, max_frames } => {
+            let ffmpeg = resolve_ffmpeg(ffmpeg.as_deref());
             let code = run_mark_check(&video, &keys, json, &ffmpeg, max_frames)?;
             if code == 0 {
                 Ok(true)
@@ -892,6 +970,7 @@ fn render_run(source: RunSource, common: VideoCommon, extra: VideoExtra) -> anyh
         background_start,
         background_sync,
     } = common;
+    let ffmpeg = resolve_ffmpeg(ffmpeg.as_deref());
     let VideoExtra { ghost_replay, results_secs, app_layout, app_layout_file } = extra;
     let autoplay = matches!(source, RunSource::Autoplay(_));
     let source_name: String = match &source {
@@ -1455,7 +1534,7 @@ mod mark_check_tests {
                 assert_eq!(video, PathBuf::from("v.mp4"));
                 assert_eq!(keys, vec![PathBuf::from("a.txt"), PathBuf::from("b.txt")]);
                 assert!(json);
-                assert_eq!(ffmpeg, "ffmpeg");
+                assert_eq!(ffmpeg, None);
                 assert_eq!(max_frames, 3000);
             }
             _ => panic!("wrong command"),
@@ -1500,5 +1579,102 @@ mod mark_check_tests {
         assert!(read_key_file(&f).is_ok());
         std::fs::write(&f, "nope").unwrap();
         assert!(read_key_file(&f).unwrap_err().contains("64 hex"));
+    }
+}
+
+#[cfg(test)]
+mod ffmpeg_lookup_tests {
+    use super::*;
+
+    /// Lays the asked-for copies out under `dir` ("bin" stands for the
+    /// folder this CLI runs from, "install" for the app's install folder)
+    /// and describes them the way `FfmpegPlaces::here` would.
+    fn places(dir: &Path, sibling: bool, install: bool, in_path: bool, sibling_first: bool) -> FfmpegPlaces {
+        let sib = dir.join("bin").join("ffmpeg");
+        let inst = dir.join("install").join("ffmpeg");
+        for (want, p) in [(sibling, &sib), (install, &inst)] {
+            if want {
+                std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+                std::fs::write(p, b"").unwrap();
+            }
+        }
+        FfmpegPlaces { name: "ffmpeg".into(), in_path, sibling: Some(sib), installs: vec![inst], sibling_first }
+    }
+
+    #[test]
+    fn an_explicit_ffmpeg_wins_over_everything() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = places(dir.path(), true, true, true, true);
+        assert_eq!(p.pick(Some("C:/tools/ffmpeg.exe")), "C:/tools/ffmpeg.exe");
+        assert_eq!(p.pick(Some("  ")), p.pick(None), "a blank value counts as none");
+    }
+
+    #[test]
+    fn the_copy_next_to_the_cli_comes_before_the_apps_install_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = places(dir.path(), true, true, true, true);
+        assert_eq!(PathBuf::from(p.pick(None)), dir.path().join("bin").join("ffmpeg"));
+    }
+
+    #[test]
+    fn a_cli_on_its_own_finds_the_ffmpeg_the_app_installed() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = places(dir.path(), false, true, true, true);
+        assert_eq!(PathBuf::from(p.pick(None)), dir.path().join("install").join("ffmpeg"));
+    }
+
+    #[test]
+    fn where_the_distros_ffmpeg_comes_first_the_bare_name_is_used_when_path_has_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = places(dir.path(), true, true, true, false);
+        assert_eq!(p.pick(None), "ffmpeg");
+        let p = places(dir.path(), true, false, false, false);
+        assert_eq!(
+            PathBuf::from(p.pick(None)),
+            dir.path().join("bin").join("ffmpeg"),
+            "without one on PATH the copy next to the CLI serves"
+        );
+    }
+
+    #[test]
+    fn with_nothing_found_the_bare_name_is_tried_so_the_error_names_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = places(dir.path(), false, false, false, true);
+        assert_eq!(p.pick(None), "ffmpeg");
+    }
+
+    #[test]
+    fn the_places_on_this_machine_follow_the_platforms_rule() {
+        let p = FfmpegPlaces::here();
+        assert_eq!(p.name, if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" });
+        assert_eq!(p.sibling_first, cfg!(windows), "Windows trusts the shipped copy, Linux the distro's");
+        let exe_dir = std::env::current_exe().unwrap().parent().unwrap().to_path_buf();
+        assert_eq!(p.sibling, Some(exe_dir.join(&p.name)));
+        assert_eq!(p.installs.is_empty(), !cfg!(windows), "only the Windows installer leaves an ffmpeg at a known place");
+    }
+
+    #[test]
+    fn the_ffmpeg_flag_is_optional_and_taken_as_given() {
+        let cli = Cli::try_parse_from(["rhythr-cli", "mark-check", "v.mp4"]).unwrap();
+        match cli.command {
+            Command::MarkCheck { ffmpeg, .. } => assert_eq!(ffmpeg, None),
+            _ => panic!("wrong command"),
+        }
+        let cli = Cli::try_parse_from(["rhythr-cli", "mark-check", "v.mp4", "--ffmpeg", "D:/ff/ffmpeg.exe"]).unwrap();
+        match cli.command {
+            Command::MarkCheck { ffmpeg, .. } => assert_eq!(ffmpeg.as_deref(), Some("D:/ff/ffmpeg.exe")),
+            _ => panic!("wrong command"),
+        }
+    }
+
+    #[test]
+    fn mark_check_says_how_to_point_at_ffmpeg_when_it_cannot_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("nowhere").join("ffmpeg");
+        let err = run_mark_check(Path::new("no-such-video.mp4"), &[], false, missing.to_str().unwrap(), 10).unwrap_err();
+        let text = format!("{err:#}");
+        assert!(text.contains("ffmpeg could not be run"), "{text}");
+        assert!(text.contains(missing.to_str().unwrap()), "{text}");
+        assert!(text.contains("--ffmpeg"), "{text}");
     }
 }

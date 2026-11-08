@@ -12,7 +12,9 @@ endorsed by Rhythia or Capo Games.
   Every Autoplay video is marked as one: a ticker across the top, a hidden
   mark in the picture that `rhythr-cli mark-check` finds, and a metadata tag.
   Results screen, score card, Analyze and ghost races are off for Autoplay.
-  CLI: `rhythr-cli autoplay` and `rhythr-cli mark-check`. Codes `RH-AUT`.
+  CLI: `rhythr-cli autoplay` and `rhythr-cli mark-check`; the CLI finds
+  ffmpeg next to itself, in the rhythr app's install folder or on PATH
+  (`--ffmpeg` for another). Codes `RH-AUT`.
 
 ## v0.7.0 (2026-11-01)
 

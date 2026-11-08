@@ -436,7 +436,9 @@ map, not for anything that could pass as a real play.
 - **CLI**: `rhythr-cli autoplay --map song.rhm -o out.mp4` with
   `--movement normal|dance`, `--aim centre|flow`, `--dance subtle|medium|wild`, `--rest <s>`,
   `--speed-mod <x>` and the same output options as `video` (`--speed` is
-  still the playback speed of the output).
+  still the playback speed of the output). Without `--ffmpeg` the CLI uses
+  the ffmpeg next to itself, the one the rhythr installer put next to the
+  app, or the one on PATH (on Linux and macOS the distro's comes first).
 
 ## The Analyze window
 

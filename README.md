@@ -92,7 +92,8 @@ cargo run -p rhythia-cli -- check testdata
 cargo run -p rhythia-cli -- frame testdata/pass_long_score77.rhr \
     --map testdata/pass_long_map_map_json.json --at 1:30 -o frame.png
 
-# A video clip (frames → ffmpeg + audio; needs ffmpeg on PATH):
+# A video clip (frames → ffmpeg + audio; ffmpeg from PATH, next to the CLI or in
+# the rhythr app's install folder, --ffmpeg picks another):
 cargo run -p rhythia-cli -- video testdata/pass_long_score77.rhr \
     --map testdata/pass_long_map_map_json.json --start 1:25 --end 1:37 -o clip.mp4
 
