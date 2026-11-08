@@ -399,12 +399,17 @@ map, not for anything that could pass as a real play.
 - **How the cursor moves**: close notes are an almost straight line; the
   farther the next note, the wider the arc, and wider still when there is
   time to spare. A stream (notes faster than eight per second, in real
-  time) is taken in one sweep: straight from note to note, the corners
-  rounded, no arcs, and the jump into it and out of it flow with it; an
-  exact back-and-forth goes straight there and back. The same spot twice in
-  quick succession is a hold; the same spot with time is a boomerang out
-  and back. On a long pause it goes to the centre, waits, and leaves in
-  time for the next note. It never leaves the field and never jumps.
+  time) is planned as one flow, the way a player's hand takes it: the jump
+  into it accelerates, the cursor passes the notes a little inside the
+  corners instead of turning on each centre (always inside the hit area,
+  the hit fires at the note's time), back-and-forth on a line becomes a
+  narrow loop, and the speed stays the same as long as the rhythm does,
+  changing only where a longer hop or a faster rhythm demands it, and then
+  over a ramp rather than from one frame to the next. A chord is passed
+  exactly. The same spot twice in quick succession is a hold; the same spot
+  with time is a boomerang out and back. On a long pause it goes to the
+  centre, waits, and leaves in time for the next note. It never leaves the
+  field and never jumps.
 - **What is not there**: no results screen, no score card, no Analyze
   window, no ghost race. Each of those would be a real-play artefact on a
   synthetic run.

@@ -150,19 +150,21 @@ pub fn generate(map: &Map, settings: &AutoplaySettings, fps: u32, dice: &[f32]) 
         let count = j - i;
         let t = notes[i].0 as f64;
         if count == 1 {
-            visits.push(Waypoint { t_ms: t, x: notes[i].1, y: notes[i].2 });
+            visits.push(Waypoint { t_ms: t, x: notes[i].1, y: notes[i].2, exact: false });
         } else if count == 2
             && (notes[i].1 - notes[i + 1].1).abs() <= 2.0 * HITBOX_HALF
             && (notes[i].2 - notes[i + 1].2).abs() <= 2.0 * HITBOX_HALF
         {
+            // one spot in both hit areas: it has no room to spare, so the
+            // planner keeps the cursor exactly there at exactly these times
             let mx = (notes[i].1 + notes[i + 1].1) / 2.0;
             let my = (notes[i].2 + notes[i + 1].2) / 2.0;
-            visits.push(Waypoint { t_ms: t, x: mx, y: my });
-            visits.push(Waypoint { t_ms: t + 0.5, x: mx, y: my });
+            visits.push(Waypoint { t_ms: t, x: mx, y: my, exact: true });
+            visits.push(Waypoint { t_ms: t + 0.5, x: mx, y: my, exact: true });
         } else {
             let dt = frame_ms.min(window_ms / count as f64);
             for (k, n) in notes[i..j].iter().enumerate() {
-                visits.push(Waypoint { t_ms: t + k as f64 * dt, x: n.1, y: n.2 });
+                visits.push(Waypoint { t_ms: t + k as f64 * dt, x: n.1, y: n.2, exact: false });
             }
         }
         i = j;
@@ -172,7 +174,8 @@ pub fn generate(map: &Map, settings: &AutoplaySettings, fps: u32, dice: &[f32]) 
     let last_note = notes.last().map(|n| n.0 as f64).unwrap_or(0.0);
     let end_ms = audio_end_ms(map).filter(|&a| a > last_note).unwrap_or(last_note + END_PAD_MS);
 
-    // the regular frames, then one flagged frame per note at its visit time
+    // the regular frames, then one flagged frame per note where the plan
+    // passes it (its chart time, or the closest approach inside a sweep)
     let count = (end_ms / frame_ms).ceil() as usize + 1;
     let mut frames: Vec<Frame> = Vec::with_capacity(count + visits.len());
     for k in 0..count {
@@ -180,9 +183,9 @@ pub fn generate(map: &Map, settings: &AutoplaySettings, fps: u32, dice: &[f32]) 
         let (x, y) = sample(&plan, ms, &field);
         frames.push(Frame { ms, x, y, health: 1.0, hit: false });
     }
-    for v in &visits {
-        let (x, y) = sample(&plan, v.t_ms, &field);
-        frames.push(Frame { ms: v.t_ms, x, y, health: 1.0, hit: true });
+    for &t in &plan.visits {
+        let (x, y) = sample(&plan, t, &field);
+        frames.push(Frame { ms: t, x, y, health: 1.0, hit: true });
     }
     frames.sort_by(|a, b| a.ms.partial_cmp(&b.ms).unwrap().then(b.hit.cmp(&a.hit)));
 
@@ -235,6 +238,34 @@ mod tests {
 
     fn world(n: &Note) -> (f32, f32) {
         crate::scene::grid_to_world(n.x, n.y)
+    }
+
+    /// The game's own test, with the planner's margin: every note's flag
+    /// frame has the cursor inside the note's hit area, flags come in note
+    /// order and never before the note, and the matcher attributes each
+    /// flag to its own note. Counting hits alone cannot see any of this:
+    /// the matcher's first pass is timing only.
+    fn assert_every_note_covered(map: &Map, r: &Replay, what: &str) {
+        let flags: Vec<&Frame> = r.frames.iter().filter(|f| f.hit).collect();
+        assert_eq!(flags.len(), map.notes.len(), "{what}: one flag per note");
+        let out = rhythia_sim::hitreg::match_hits(&map.notes, &r.frames, rhythia_sim::hitreg::hit_window_ms(r));
+        assert_eq!(out.derived_hits() as usize, map.notes.len(), "{what}: full combo");
+        assert_eq!(out.orphan_flags, 0, "{what}: orphan flags");
+        let mut last = f64::MIN;
+        for (i, (n, f)) in map.notes.iter().zip(&flags).enumerate() {
+            let (wx, wy) = world(n);
+            // a note sharing its time with another is served from one spot
+            // between them, which the chord rule puts inside both hit areas
+            // but with no margin to spare; a note on its own keeps the
+            // planner's margin
+            let chord = (i > 0 && map.notes[i - 1].time_ms == n.time_ms) || (i + 1 < map.notes.len() && map.notes[i + 1].time_ms == n.time_ms);
+            let limit = if chord { HITBOX_HALF - 0.002 } else { HITBOX_HALF - path::HIT_MARGIN + 1e-4 };
+            assert!((f.x - wx).abs() <= limit && (f.y - wy).abs() <= limit, "{what}: note {i} at {} ms ({},{}) flagged at {} ms with the cursor at ({:.3},{:.3}), {:.3} off per axis", n.time_ms, n.x, n.y, f.ms, f.x, f.y, (f.x - wx).abs().max((f.y - wy).abs()));
+            assert!(f.ms >= n.time_ms as f64 - 1e-6, "{what}: note {i} flagged {:.1} ms early", n.time_ms as f64 - f.ms);
+            assert!(f.ms >= last, "{what}: flags out of order at note {i}");
+            last = f.ms;
+            assert_eq!(out.results[i].hit_ms, Some(f.ms), "{what}: note {i} attributed to another flag");
+        }
     }
 
     #[test]
@@ -342,22 +373,239 @@ mod tests {
         assert_eq!(out.derived_hits(), 5);
     }
 
-    /// A corner inside a stream is rounded a little, not taken as a hard
-    /// turn at the note and not hooked like a dance arc; the note itself is
-    /// still visited on time.
+    /// Heading of the run 20 ms before and after `ms`, as the angle between
+    /// the two chords, in degrees.
+    fn turn_at(r: &Replay, ms: f64) -> f32 {
+        let at = |t: f64| {
+            let f = r.frames.iter().filter(|f| !f.hit).min_by(|a, b| (a.ms - t).abs().partial_cmp(&(b.ms - t).abs()).unwrap()).unwrap();
+            (f.x, f.y)
+        };
+        let (a, p, b) = (at(ms - 20.0), at(ms), at(ms + 20.0));
+        let u = (p.0 - a.0, p.1 - a.1);
+        let v = (b.0 - p.0, b.1 - p.1);
+        let len = (u.0 * u.0 + u.1 * u.1).sqrt() * (v.0 * v.0 + v.1 * v.1).sqrt();
+        ((u.0 * v.0 + u.1 * v.1) / len.max(1e-9)).clamp(-1.0, 1.0).acos().to_degrees()
+    }
+
+    /// Inside a stream the cursor flows like a player's: it cuts the corner
+    /// a little instead of turning on the note centre (players pass about a
+    /// quarter of a unit beside it), the hit fires as it passes, and every
+    /// note still registers. Measured on a ring of one-unit hops at 48 ms,
+    /// in both movements.
     #[test]
-    fn a_stream_corner_is_rounded_not_hooked() {
-        let map = map_with(&[(1000, 0.0, 0.0), (1048, 0.0, 1.0), (1096, 0.0, 2.0), (1144, 1.0, 2.0), (1192, 2.0, 2.0)]);
+    fn a_stream_cuts_its_corners_like_a_player_and_still_hits_every_note() {
+        let map = map_with(&[(1000, 0.0, 0.0), (1048, 0.0, 1.0), (1096, 0.0, 2.0), (1144, 1.0, 2.0), (1192, 2.0, 2.0), (1240, 2.0, 1.0), (1288, 2.0, 0.0), (1336, 1.0, 0.0), (1384, 0.0, 0.0)]);
         for movement in [Movement::Normal, Movement::Dance] {
             let s = AutoplaySettings { movement, dance: DanceAmount::Wild, ..Default::default() };
+            let r = generate(&map, &s, 240, &dice()).unwrap();
+            // the corner notes (0,2), (2,2), (2,0): the turn is spread along
+            // the arc instead of taken on the note (a ring of unit hops turns
+            // 45 degrees per hop whatever the path; the question is where)
+            for t in [1096.0, 1192.0, 1288.0] {
+                let on = turn_at(&r, t);
+                assert!(on < 45.0, "{movement:?}: the corner at {t} turns {on} degrees on the note (a hard corner is 65)");
+            }
+            // the corner is cut, but never by more than the cap, and the hit
+            // fires where the cursor passes the note, inside its hit area
+            for n in &map.notes[1..map.notes.len() - 1] {
+                let (wx, wy) = world(n);
+                let flag = r.frames.iter().find(|f| f.hit && (f.ms - n.time_ms as f64).abs() <= 30.0).expect("a flag near the note");
+                let d = ((flag.x - wx).powi(2) + (flag.y - wy).powi(2)).sqrt();
+                assert!(d <= 0.31, "{movement:?}: note at {} flagged {d} from its centre", n.time_ms);
+            }
+            let corner = world(&map.notes[2]);
+            let closest = r.frames.iter().filter(|f| f.ms > 1070.0 && f.ms < 1122.0).map(|f| ((f.x - corner.0).powi(2) + (f.y - corner.1).powi(2)).sqrt()).fold(f32::INFINITY, f32::min);
+            assert!(closest > 0.1, "{movement:?}: the corner is not cut (closest {closest})");
+            assert_every_note_covered(&map, &r, &format!("ring {movement:?}"));
+        }
+    }
+
+    /// One steady speed where the hops are equal, and a long hop among
+    /// them does not double the speed for exactly that hop: the change is
+    /// spread, as a player's would be.
+    #[test]
+    fn a_stream_keeps_one_speed_and_spreads_the_change_for_a_long_hop() {
+        // four one-unit hops, a two-unit hop, four one-unit hops, 48 ms each
+        let map = map_with(&[
+            (1000, 0.0, 0.0), (1048, 0.0, 1.0), (1096, 0.0, 2.0), (1144, 1.0, 2.0), (1192, 2.0, 2.0),
+            (1240, 2.0, 0.0), (1288, 1.0, 0.0), (1336, 1.0, 1.0), (1384, 1.0, 2.0), (1432, 0.0, 2.0),
+        ]);
+        let s = AutoplaySettings { movement: Movement::Normal, ..Default::default() };
+        let r = generate(&map, &s, 240, &dice()).unwrap();
+        let steps: Vec<(f64, f32)> = r
+            .frames
+            .iter()
+            .filter(|f| !f.hit && f.ms >= 1000.0 && f.ms <= 1432.0)
+            .collect::<Vec<_>>()
+            .windows(2)
+            .map(|w| (w[1].ms, ((w[1].x - w[0].x).powi(2) + (w[1].y - w[0].y).powi(2)).sqrt()))
+            .collect();
+        let ratio_max = steps.windows(2).map(|w| w[1].1 / w[0].1.max(1e-6)).fold(0.0f32, f32::max);
+        assert!(ratio_max < 1.6, "the speed jumps by {ratio_max}x between two frames (a hop planned on its own doubles it)");
+        // the equal-hop stretches away from the long hop run at one speed
+        // (after the ramp in from the centre, and clear of the long hop's)
+        let early: Vec<f32> = steps.iter().filter(|(t, _)| *t > 1090.0 && *t < 1140.0).map(|s| s.1).collect();
+        let late: Vec<f32> = steps.iter().filter(|(t, _)| *t > 1300.0 && *t < 1425.0).map(|s| s.1).collect();
+        for (name, v) in [("early", early), ("late", late)] {
+            let (lo, hi) = v.iter().fold((f32::INFINITY, 0.0f32), |(lo, hi), &x| (lo.min(x), hi.max(x)));
+            assert!(hi / lo < 1.08, "{name} stretch: speed varies from {lo} to {hi} per frame");
+        }
+        let out = rhythia_sim::hitreg::match_hits(&map.notes, &r.frames, rhythia_sim::hitreg::hit_window_ms(&r));
+        assert_eq!(out.derived_hits() as usize, map.notes.len());
+    }
+
+    /// Back and forth on a line (a jack at 1/32) is a narrow loop: the
+    /// cursor turns around each note on a small arc, never stops dead and
+    /// snaps back, and still passes within a tenth of a unit of the note.
+    #[test]
+    fn a_jack_is_a_loop_not_a_dead_stop() {
+        let map = map_with(&[(1000, 0.0, 1.0), (1048, 1.0, 1.0), (1096, 0.0, 1.0), (1144, 1.0, 1.0), (1192, 0.0, 1.0), (1240, 1.0, 1.0), (1288, 0.0, 1.0), (1336, 1.0, 1.0)]);
+        let s = AutoplaySettings { movement: Movement::Normal, ..Default::default() };
+        let r = generate(&map, &s, 240, &dice()).unwrap();
+        for t in [1096.0, 1144.0, 1192.0, 1240.0] {
+            let turn = turn_at(&r, t);
+            assert!(turn < 120.0, "the cursor turns {turn} degrees on the note at {t}: a dead stop");
+        }
+        // it loops beside the line, by a visible but small amount, on both sides
+        let (above, below) = r.frames.iter().filter(|f| !f.hit && f.ms > 1090.0 && f.ms < 1250.0).fold((0.0f32, 0.0f32), |(a, b), f| (a.max(f.y), b.min(f.y)));
+        assert!(above > 0.08 && below < -0.08 && above < 0.4 && below > -0.4, "the loop spans {below}..{above} beside the line");
+        // it comes within a tenth of a unit of every note
+        for n in &map.notes[1..map.notes.len() - 1] {
+            let (wx, wy) = world(n);
+            let t = n.time_ms as f64;
+            let closest = r.frames.iter().filter(|f| (f.ms - t).abs() <= 24.0).map(|f| ((f.x - wx).powi(2) + (f.y - wy).powi(2)).sqrt()).fold(f32::INFINITY, f32::min);
+            assert!(closest <= path::TIP_CUT + 0.02, "note at {} passed {closest} from its centre", n.time_ms);
+        }
+        assert_every_note_covered(&map, &r, "jack");
+    }
+
+    /// A chord inside a stream: the two notes share one spot that is in
+    /// both hit areas with almost no room to spare, so the sweep passes it
+    /// exactly, on time, and both notes are covered at their flags. (The
+    /// matcher cannot tell: its first pass is timing only.)
+    #[test]
+    fn a_chord_inside_a_stream_is_passed_exactly_and_covers_both_notes() {
+        let map = map_with(&[(1000, 0.0, 0.0), (1048, 1.0, 0.0), (1096, 2.0, 0.0), (1144, 2.0, 1.0), (1144, 2.0, 2.0), (1192, 1.0, 2.0), (1240, 0.0, 2.0), (1288, 0.0, 1.0)]);
+        for movement in [Movement::Normal, Movement::Dance] {
+            let s = AutoplaySettings { movement, ..Default::default() };
+            let r = generate(&map, &s, 240, &dice()).unwrap();
+            assert_every_note_covered(&map, &r, &format!("chord in stream {movement:?}"));
+            let mid = ((world(&map.notes[3]).0 + world(&map.notes[4]).0) / 2.0, (world(&map.notes[3]).1 + world(&map.notes[4]).1) / 2.0);
+            let at = r.frames.iter().find(|f| f.hit && (f.ms - 1144.0).abs() < 1e-6).expect("the chord's flag at its time");
+            assert!((at.x - mid.0).abs() < 0.01 && (at.y - mid.1).abs() < 0.01, "{movement:?}: the chord's spot is passed at ({},{}) instead of exactly", at.x, at.y);
+        }
+    }
+
+    /// Two streams with one jump between them are one sweep, and a map of
+    /// many streams sweeps every one of them (the runs never overlap, so
+    /// none is skipped).
+    #[test]
+    fn every_stream_in_a_map_is_swept() {
+        let mut notes: Vec<(i64, f32, f32)> = Vec::new();
+        let mut t = 1000;
+        for block in 0..6 {
+            for k in 0..5 {
+                notes.push((t, (k % 3) as f32, (block % 3) as f32));
+                t += 48;
+            }
+            t += if block % 2 == 0 { 190 - 48 } else { 400 - 48 };
+        }
+        let map = map_with(&notes);
+        let points: Vec<Waypoint> = map
+            .notes
+            .iter()
+            .map(|n| {
+                let (x, y) = world(n);
+                Waypoint { t_ms: n.time_ms as f64, x, y, exact: false }
+            })
+            .collect();
+        let p = plan(&points, &AutoplaySettings::default(), &field_for(&map), &dice());
+        let kinds: Vec<path::SegmentKind> = p.segments.iter().map(|s| s.kind).collect();
+        let sweep = kinds.iter().filter(|k| **k == path::SegmentKind::Sweep).count();
+        // 30 notes: everything but the first jump from the centre and the
+        // final ease is swept, including the three 190 ms jumps between
+        // blocks and the jumps into and out of the 400 ms gaps
+        assert!(sweep >= 29, "{sweep} sweep pieces of {} segments: {kinds:?}", kinds.len());
+        let last_note_piece = &p.segments[p.segments.len() - 2];
+        assert_eq!(last_note_piece.kind, path::SegmentKind::Sweep, "the last stream is not swept");
+    }
+
+    /// The jump into a stream accelerates into it instead of switching
+    /// speed on the first note: no frame-to-frame speed jump around it.
+    #[test]
+    fn the_jump_into_a_stream_accelerates_instead_of_switching_speed() {
+        let map = map_with(&[(1000, 1.0, 2.0), (1190, 0.0, 0.0), (1238, 0.0, 1.0), (1286, 0.0, 2.0), (1334, 1.0, 2.0), (1382, 2.0, 2.0), (1572, 2.0, 0.0)]);
+        for movement in [Movement::Normal, Movement::Dance] {
+            let s = AutoplaySettings { movement, ..Default::default() };
+            let r = generate(&map, &s, 240, &dice()).unwrap();
+            let steps: Vec<f32> = r
+                .frames
+                .iter()
+                .filter(|f| !f.hit && f.ms >= 1100.0 && f.ms <= 1300.0)
+                .collect::<Vec<_>>()
+                .windows(2)
+                .map(|w| ((w[1].x - w[0].x).powi(2) + (w[1].y - w[0].y).powi(2)).sqrt())
+                .collect();
+            let worst = steps.windows(2).map(|w| w[1] / w[0].max(1e-6)).fold(0.0f32, f32::max);
+            assert!(worst < 1.25, "{movement:?}: the speed jumps by {worst}x between two frames around the stream's first note");
+            let (first, last) = (steps[0], steps[steps.len() - 1]);
+            assert!(last > first * 1.15, "{movement:?}: no acceleration into the stream ({first} to {last} per frame)");
+        }
+    }
+
+    /// Streams of every shape register every note: pseudo-random maps with
+    /// gaps from a chord's spacing to a jump, hops from half a unit to the
+    /// field's diagonal, a little off the grid, at every speed mod and in
+    /// both movements; and no frame leaves the field.
+    #[test]
+    fn random_streams_register_every_note_and_stay_in_the_field() {
+        let mut seed: u64 = 0x5eed_1234_abcd_0001;
+        let mut next = || {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (seed >> 33) as u32
+        };
+        let gaps = [20i64, 42, 48, 84, 95, 125, 190];
+        for case in 0..48 {
+            let mut notes: Vec<(i64, f32, f32)> = Vec::new();
+            let mut t = 600i64;
+            let (mut gx, mut gy) = (1.0f32, 1.0f32);
+            for _ in 0..70 {
+                t += gaps[(next() % gaps.len() as u32) as usize];
+                let step = |v: f32, r: u32| -> f32 {
+                    let d = match r % 5 {
+                        0 => -1.0,
+                        1 => 1.0,
+                        2 => -2.0,
+                        3 => 2.0,
+                        _ => 0.0,
+                    };
+                    (v + d).clamp(0.0, 2.0)
+                };
+                gx = step(gx, next());
+                gy = step(gy, next());
+                let jitter = |r: u32| (r % 25) as f32 / 100.0 - 0.12;
+                let (jx, jy) = if next() % 3 == 0 { (jitter(next()), jitter(next())) } else { (0.0, 0.0) };
+                notes.push((t, gx + jx, gy + jy));
+                // now and then a chord: a twin at the same time one unit
+                // over (merged to one spot), or two units over (swept)
+                if next() % 9 == 0 {
+                    let far = if next() % 2 == 0 { 1.0 } else { 2.0 };
+                    let tx = if gx + far <= 2.0 { gx + far } else { gx - far };
+                    if (0.0..=2.0).contains(&tx) {
+                        notes.push((t, tx, gy));
+                    }
+                }
+            }
+            let map = map_with(&notes);
+            let speed = [0.8f32, 1.0, 1.5, 2.0][case % 4];
+            let movement = if case % 2 == 0 { Movement::Normal } else { Movement::Dance };
+            let s = AutoplaySettings { movement, speed_mod: speed, ..Default::default() };
             let r = generate(&map, &s, 120, &dice()).unwrap();
-            let off = max_off_chord(&r, 1048.0, 1096.0, world(&map.notes[1]), world(&map.notes[2]));
-            assert!(off > 0.03 && off < 0.2, "{movement:?}: the corner segment leaves the chord by {off}");
-            let (wx, wy) = world(&map.notes[2]);
-            let at = r.frames.iter().find(|f| f.hit && (f.ms - 1096.0).abs() < 0.5).unwrap();
-            assert!((at.x - wx).abs() < 0.02 && (at.y - wy).abs() < 0.02, "{movement:?}: corner note visited at {at:?}");
-            let out = rhythia_sim::hitreg::match_hits(&map.notes, &r.frames, rhythia_sim::hitreg::hit_window_ms(&r));
-            assert_eq!(out.derived_hits(), 5);
+            assert_every_note_covered(&map, &r, &format!("case {case} ({movement:?} at {speed}), notes {notes:?}"));
+            let bound = 1.12 + (0.5 - rhythia_sim::hitreg::CURSOR_EDGE_INSET);
+            for f in &r.frames {
+                assert!(f.x.abs() <= bound + 1e-4 && f.y.abs() <= bound + 1e-4, "case {case}: {f:?}");
+            }
         }
     }
 
@@ -374,7 +622,7 @@ mod tests {
             .iter()
             .map(|n| {
                 let (x, y) = world(n);
-                Waypoint { t_ms: n.time_ms as f64, x, y }
+                Waypoint { t_ms: n.time_ms as f64, x, y, exact: false }
             })
             .collect();
         let field = field_for(&map);
