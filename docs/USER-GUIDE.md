@@ -389,7 +389,11 @@ map, not for anything that could pass as a real play.
   "Back to replay", or dropping a `.rhr`, ends the session. The app
   restores the session on the next start as long as the export still
   exists.
-- **Settings** (Autoplay tab): Movement, **Normal** (soft, direct curves) or
+- **Settings** (Autoplay tab): Aim, **Centre** (through the centre of every
+  note; in a stream a corner is turned on the note itself) or **Flow** (like
+  a player's flow aim: a little inside the corners of a stream, always
+  within the hit area, so the turn spreads along the path); Movement,
+  **Normal** (soft, direct curves) or
   **Cursor dance**; Dance amount, subtle, medium or wild; Rest in the centre
   after 2 to 8 real seconds without a note (with a speed mod the map time is
   divided by it, so the feel stays the same); Speed mod, 0.80x to 2.00x in
@@ -401,8 +405,9 @@ map, not for anything that could pass as a real play.
   time to spare. A stream (notes faster than eight per second, in real
   time) is planned as one flow, the way a player's hand takes it: the jump
   into it accelerates, the cursor passes the notes a little inside the
-  corners instead of turning on each centre (always inside the hit area,
-  the hit fires at the note's time), back-and-forth on a line becomes a
+  corners instead of turning on each centre when the aim is Flow (always
+  inside the hit area, the hit fires at the note's time) and through every
+  centre when it is Centre, back-and-forth on a line becomes a
   narrow loop, and the speed stays the same as long as the rhythm does,
   changing only where a longer hop or a faster rhythm demands it, and then
   over a ramp rather than from one frame to the next. A chord is passed
@@ -429,7 +434,7 @@ map, not for anything that could pass as a real play.
   says so) and marks with the public dev key, which the checker reports as
   such. `docs/AUTOPLAY-VERIFICATION.md` is the one-page guide for the team.
 - **CLI**: `rhythr-cli autoplay --map song.rhm -o out.mp4` with
-  `--movement normal|dance`, `--dance subtle|medium|wild`, `--rest <s>`,
+  `--movement normal|dance`, `--aim centre|flow`, `--dance subtle|medium|wild`, `--rest <s>`,
   `--speed-mod <x>` and the same output options as `video` (`--speed` is
   still the playback speed of the output).
 

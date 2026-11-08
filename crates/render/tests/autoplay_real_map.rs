@@ -1,6 +1,6 @@
 //! A real map (the long test map, 5004 notes): every note registers, no flag
 //! is orphaned, and the time base normaliser leaves the synthetic run alone.
-use rhythia_render::autoplay::{generate, AutoplaySettings, Movement};
+use rhythia_render::autoplay::{generate, Aim, AutoplaySettings, Movement};
 
 fn real_map(name: &str) -> rhythia_formats::map::Map {
     let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata").join(name);
@@ -15,12 +15,12 @@ fn a_real_map_is_a_full_combo_at_every_speed() {
     let dice = rhythia_render::mark::pattern(&rhythia_render::mark::seed_from_hex(rhythia_render::mark::DEV_KEY_HEX).unwrap());
     for name in ["pass_long_map_map_json.json", "hardrock_map_map_json.json"] {
         let map = real_map(name);
-        for (speed, movement) in [(0.8f32, Movement::Dance), (1.0, Movement::Dance), (1.5, Movement::Normal), (2.0, Movement::Dance)] {
-            let s = AutoplaySettings { speed_mod: speed, movement, ..Default::default() };
+        for (speed, movement, aim) in [(0.8f32, Movement::Dance, Aim::Flow), (1.0, Movement::Dance, Aim::Centre), (1.0, Movement::Normal, Aim::Flow), (1.5, Movement::Normal, Aim::Flow), (2.0, Movement::Dance, Aim::Flow), (2.0, Movement::Dance, Aim::Centre)] {
+            let s = AutoplaySettings { speed_mod: speed, movement, aim, ..Default::default() };
             let mut r = generate(&map, &s, 60, &dice).unwrap();
             let out = rhythia_sim::hitreg::match_hits(&map.notes, &r.frames, rhythia_sim::hitreg::hit_window_ms(&r));
-            assert_eq!(out.derived_hits() as usize, map.notes.len(), "{name} at {speed}");
-            assert_eq!(out.orphan_flags, 0, "{name} at {speed}");
+            assert_eq!(out.derived_hits() as usize, map.notes.len(), "{name} at {speed} {aim:?}");
+            assert_eq!(out.orphan_flags, 0, "{name} at {speed} {aim:?}");
             // the matcher's first pass is timing only: check the geometry
             // the game would check, note by note, at the flag frame
             let flags: Vec<_> = r.frames.iter().filter(|f| f.hit).collect();

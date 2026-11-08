@@ -276,6 +276,10 @@ enum Command {
         /// How the cursor moves: "normal" (soft, direct) or "dance".
         #[arg(long, default_value = "dance", value_parser = ["normal", "dance"])]
         movement: String,
+        /// Where it goes inside a stream: "centre" (through every note's
+        /// centre) or "flow" (a little inside the corners, like a player).
+        #[arg(long, default_value = "centre", value_parser = ["centre", "flow"])]
+        aim: String,
         /// How wide the arcs and boomerangs get under "dance".
         #[arg(long, default_value = "medium", value_parser = ["subtle", "medium", "wild"])]
         dance: String,
@@ -821,10 +825,11 @@ fn run() -> anyhow::Result<bool> {
             common,
             VideoExtra { ghost_replay, results_secs, app_layout, app_layout_file },
         ),
-        Command::Autoplay { common, movement, dance, rest, speed_mod } => {
-            use rhythia_render::autoplay::{AutoplaySettings, DanceAmount, Movement};
+        Command::Autoplay { common, movement, aim, dance, rest, speed_mod } => {
+            use rhythia_render::autoplay::{Aim, AutoplaySettings, DanceAmount, Movement};
             let settings = AutoplaySettings {
                 movement: if movement == "normal" { Movement::Normal } else { Movement::Dance },
+                aim: if aim == "flow" { Aim::Flow } else { Aim::Centre },
                 dance: match dance.as_str() {
                     "subtle" => DanceAmount::Subtle,
                     "wild" => DanceAmount::Wild,
@@ -1460,13 +1465,14 @@ mod mark_check_tests {
     #[test]
     fn autoplay_parses_its_flags() {
         let cli = Cli::try_parse_from([
-            "rhythr-cli", "autoplay", "--map", "m.rhm", "-o", "o.mp4", "--movement", "normal", "--dance", "wild",
+            "rhythr-cli", "autoplay", "--map", "m.rhm", "-o", "o.mp4", "--movement", "normal", "--aim", "flow", "--dance", "wild",
             "--rest", "6", "--speed-mod", "1.5", "--fps", "30",
         ])
         .unwrap();
         match cli.command {
-            Command::Autoplay { movement, dance, rest, speed_mod, common } => {
+            Command::Autoplay { movement, aim, dance, rest, speed_mod, common } => {
                 assert_eq!(movement, "normal");
+                assert_eq!(aim, "flow");
                 assert_eq!(dance, "wild");
                 assert!((rest - 6.0).abs() < 1e-9 && (speed_mod - 1.5).abs() < 1e-6 && common.fps == 30);
                 assert_eq!(common.map, PathBuf::from("m.rhm"));
@@ -1474,6 +1480,7 @@ mod mark_check_tests {
             _ => panic!("wrong command"),
         }
         assert!(Cli::try_parse_from(["rhythr-cli", "autoplay", "--map", "m.rhm", "-o", "o.mp4", "--movement", "sideways"]).is_err());
+        assert!(Cli::try_parse_from(["rhythr-cli", "autoplay", "--map", "m.rhm", "-o", "o.mp4", "--aim", "corners"]).is_err());
         // the video command keeps its shape
         let cli = Cli::try_parse_from(["rhythr-cli", "video", "r.rhr", "--map", "m.rhm", "-o", "o.mp4", "--speed", "0.5", "--results-secs", "2"]).unwrap();
         match cli.command {

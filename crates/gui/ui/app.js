@@ -254,6 +254,12 @@ function renderAutoplayTab() {
   $("tab-btn-autoplay").hidden = !a;
   if (!a) return;
   const s = a.settings;
+  const flow = s.aim === "flow";
+  $("ap-aim-flow").classList.toggle("on", flow);
+  $("ap-aim-centre").classList.toggle("on", !flow);
+  $("ap-aim-hint").textContent = flow
+    ? "Like a player's flow aim: in a stream the cursor passes a little inside the corners, always within the hit area, so the turn spreads along the path. The hit still fires at the note's time."
+    : "Through the centre of every note. In a stream the speed stays steady and a back-and-forth loops, but a corner is turned on the note itself.";
   const dance = s.movement === "dance";
   $("ap-movement-dance").classList.toggle("on", dance);
   $("ap-movement-normal").classList.toggle("on", !dance);
@@ -342,6 +348,8 @@ function initAutoplay() {
     if ($("autoplay-picker").contains(e.target) || $("btn-autoplay").contains(e.target) || $("btn-replay").contains(e.target)) return;
     closePicker();
   });
+  $("ap-aim-centre").addEventListener("click", () => pushAutoplay({ aim: "centre" }));
+  $("ap-aim-flow").addEventListener("click", () => pushAutoplay({ aim: "flow" }));
   $("ap-movement-normal").addEventListener("click", () => pushAutoplay({ movement: "normal" }));
   $("ap-movement-dance").addEventListener("click", () => pushAutoplay({ movement: "dance" }));
   $("ap-dance").addEventListener("input", () => {

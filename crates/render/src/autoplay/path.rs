@@ -1,6 +1,6 @@
 //! Planning the cursor between the waypoints of a run and sampling it by
 //! time. Every constant that shapes the look is named here.
-use super::{AutoplaySettings, Movement, CRUISE};
+use super::{Aim, AutoplaySettings, Movement, CRUISE};
 use rhythia_sim::hitreg::{BASE_HIT_WINDOW_MS, HITBOX_HALF};
 
 /// Below this gap in real seconds a same-spot pair is a hold, above it a
@@ -35,6 +35,11 @@ pub const STREAM_GAP_SECS: f64 = 0.125;
 /// ends, along the direction the neighbours give (the Catmull-Rom third);
 /// collinear notes make it a straight line, a corner a rounded one.
 pub const STREAM_TANGENT: f32 = 1.0 / 3.0;
+/// The same reach when the aim is the centre of every note: the path must
+/// turn on the note, so it swings wider around it to spread the turn.
+/// Measured on the Lionheart map at 60 fps: frames turning more than 60
+/// degrees 83 at a third, 30 at a half, 73 at 0.65 (the loops get too wide).
+pub const CENTRE_TANGENT: f32 = 0.5;
 /// Players do not turn on the centre of a stream note, they pass beside
 /// it (a quarter of a unit in the median, measured on real replays). An
 /// inner note of a sweep is passed at the cubic B-spline knot position, the
@@ -58,12 +63,18 @@ pub const TIP_CUT: f32 = 0.1;
 /// at the note's time, where the hit flag stays.
 pub const TUBE: f32 = 0.18;
 /// The tube is also never more than this much of the slower neighbouring
-/// hop's time, so the slack is a timing slack a player would have too.
-pub const SLACK_MS: f64 = 25.0;
-/// A speed change inside a sweep (a faster rhythm, the jump into the
-/// stream) is spread over up to this many map ms around the point where
-/// the string changes its slope, instead of switching between two frames.
-pub const RAMP_MS: f64 = 150.0;
+/// hop's time (real seconds), so the slack is a timing slack a player
+/// would have too.
+pub const SLACK_SECS: f64 = 0.025;
+/// A speed change inside a sweep (a faster rhythm, a longer hop) is spread
+/// over up to this many real seconds around the point where the string
+/// changes its slope, instead of switching between two frames.
+pub const RAMP_SECS: f64 = 0.15;
+/// The jump into a run winds up: the cursor holds a slower pace (or waits
+/// in the centre at the start of the map) and accelerates over the last
+/// part of the jump, up to this fraction of it, so that it reaches the
+/// stream's pace exactly at the stream's first note.
+pub const WIND_UP_FRACTION: f64 = 0.6;
 /// A ramp moves the cursor off the string's arc by at most this much (a
 /// ramp of half-width `h` between speeds `v0` and `v1` is `|v1 - v0| h / 4`
 /// off at its centre); a ramp that would move it more is made shorter.
@@ -253,14 +264,14 @@ fn chord_curve(t0: f64, t1: f64, a: (f32, f32), b: (f32, f32), belly: f32, kind:
 
 /// A piece of a sweep from `a` to `b` whose end tangents follow the
 /// neighbours (a Catmull-Rom spline on the passed points): `da` and `db`
-/// are the directions at `a` and `b`. The control points sit
-/// `STREAM_TANGENT` of the chord along them, so collinear points give a
+/// are the directions at `a` and `b`. The control points sit `tangent`
+/// of the chord along them, so collinear points give a
 /// straight line and a corner a rounded one. A direction that says nothing
 /// falls back to the chord. The times and the pace are filled in after
 /// the taut string.
-fn sweep_piece(a: (f32, f32), b: (f32, f32), da: (f32, f32), db: (f32, f32)) -> Segment {
+fn sweep_piece(a: (f32, f32), b: (f32, f32), da: (f32, f32), db: (f32, f32), tangent: f32) -> Segment {
     let d = dist(a, b).max(1e-6);
-    let reach = d * STREAM_TANGENT;
+    let reach = d * tangent;
     let chord = ((b.0 - a.0) / d, (b.1 - a.1) / d);
     let along = |v: (f32, f32)| {
         let len = (v.0 * v.0 + v.1 * v.1).sqrt();
@@ -437,16 +448,39 @@ struct Profile {
 
 impl Profile {
     /// The string's piecewise-constant speed with every step replaced by a
-    /// ramp of up to `RAMP_MS` centred on the breakpoint (a symmetric ramp
+    /// ramp of up to `ramp_ms` centred on the breakpoint (a symmetric ramp
     /// covers the same distance as the step, so the arc at the knots away
-    /// from it is untouched).
-    fn smoothed(string: &[(usize, f32)], times: &[f64], exact_times: &[f64]) -> Profile {
+    /// from it is untouched), shortened so it moves the cursor at most
+    /// `RAMP_DEV` off the arc and never reaches an exact knot (a step with
+    /// no room stays a step). With `wind_up`, and the string's first bend
+    /// at the end of the first piece towards a faster pace, that piece
+    /// instead holds a slower pace and accelerates over its last part, so
+    /// the pace is the stream's exactly at the stream's first note and the
+    /// arc there is still the string's own.
+    fn smoothed(string: &[(usize, f32)], times: &[f64], exact_times: &[f64], ramp_ms: f64, wind_up: bool) -> Profile {
         let bp: Vec<(f64, f32)> = string.iter().map(|&(k, s)| (times[k], s)).collect();
         let speeds: Vec<f32> = bp.windows(2).map(|w| ((w[1].1 - w[0].1) / ((w[1].0 - w[0].0).max(1e-6)) as f32).max(0.0)).collect();
-        let mut knots: Vec<(f64, f32)> = vec![(bp[0].0, speeds[0])];
-        for i in 1..speeds.len() {
+        let mut knots: Vec<(f64, f32)> = Vec::new();
+        let mut first = 1;
+        if wind_up && speeds.len() >= 2 && string[1].0 == 1 && speeds[1] > speeds[0] {
+            let (t0, s0) = bp[0];
+            let (t1, s1) = bp[1];
+            let span_t = t1 - t0;
+            let span_s = f64::from(s1 - s0);
+            let v_s = f64::from(speeds[1]);
+            // as long a ramp as the piece allows without a pace below zero
+            let h = (WIND_UP_FRACTION * span_t).min(2.0 * span_s / v_s.max(1e-9)).max(0.0);
+            let v_flat = ((span_s - v_s * h / 2.0) / (span_t - h / 2.0).max(1e-9)).max(0.0) as f32;
+            knots.push((t0, v_flat));
+            knots.push((t1 - h, v_flat));
+            knots.push((t1, speeds[1]));
+            first = 2;
+        } else {
+            knots.push((bp[0].0, speeds[0]));
+        }
+        for i in first..speeds.len() {
             let t_b = bp[i].0;
-            let mut h = (RAMP_MS / 2.0).min((t_b - bp[i - 1].0) / 2.0).min((bp[i + 1].0 - t_b) / 2.0);
+            let mut h = (ramp_ms / 2.0).min((t_b - bp[i - 1].0) / 2.0).min((bp[i + 1].0 - t_b) / 2.0);
             // a ramp never reaches across an exact knot, and none is
             // centred on one: the arc there must be the string's own
             for &te in exact_times {
@@ -537,18 +571,30 @@ fn plan_run(points: &[Waypoint], run: (usize, usize), settings: &AutoplaySetting
         })
         .collect();
     let exact: Vec<bool> = (0..=m).map(|j| j == 0 || j == m || knot(j).exact).collect();
-    // the passed points: inner knots beside their centres (a reversal
-    // tip close to it), the ends and the exact ones on the spot
+    let flow = settings.aim == Aim::Flow;
+    let tangent = if flow { STREAM_TANGENT } else { CENTRE_TANGENT };
+    // the passed points: with the flow aim the inner knots beside their
+    // centres (a reversal tip close to it); with the centre aim, the ends
+    // and the exact ones always, on the spot
     let mut q = centres.clone();
     let mut tip = vec![false; m + 1];
     for j in 1..m {
         let (p, c, n) = (centres[j - 1], centres[j], centres[j + 1]);
         let (u, w) = ((c.0 - p.0, c.1 - p.1), (n.0 - c.0, n.1 - c.1));
         let (lu, lw) = ((u.0 * u.0 + u.1 * u.1).sqrt(), (w.0 * w.0 + w.1 * w.1).sqrt());
-        // (the run's start in the centre is not a note to turn around)
-        tip[j] = (j > 1 || a > 0) && lu > 1e-6 && lw > 1e-6 && (u.0 * w.0 + u.1 * w.1) / (lu * lw) < TIP_COS;
-        let cap = if exact[j] { 0.0 } else if tip[j] { TIP_CUT } else { CORNER_CUT_MAX };
-        let mut off = ((p.0 - 2.0 * c.0 + n.0) / 6.0, (p.1 - 2.0 * c.1 + n.1) / 6.0);
+        // (a reversal right after the start in the centre is one too: the
+        // way out and the way back share the line)
+        tip[j] = lu > 1e-6 && lw > 1e-6 && (u.0 * w.0 + u.1 * w.1) / (lu * lw) < TIP_COS;
+        let cap = if exact[j] || !flow { 0.0 } else if tip[j] { TIP_CUT } else { CORNER_CUT_MAX };
+        // the B-spline pull of two equal hops, with the shorter hop's
+        // length for both, so a corner next to a long hop is cut like any
+        // other instead of being dragged into the long hop
+        let mut off = if lu > 1e-6 && lw > 1e-6 {
+            let scale = lu.min(lw) / 6.0;
+            ((w.0 / lw - u.0 / lu) * scale, (w.1 / lw - u.1 / lu) * scale)
+        } else {
+            (0.0, 0.0)
+        };
         let len = (off.0 * off.0 + off.1 * off.1).sqrt();
         if len > cap {
             off = (off.0 * cap / len, off.1 * cap / len);
@@ -572,7 +618,11 @@ fn plan_run(points: &[Waypoint], run: (usize, usize), settings: &AutoplaySetting
             dir[j] = (n.0 * side_now, n.1 * side_now);
             side_now = -side_now;
         } else {
-            dir[j] = (q[j + 1].0 - q[j - 1].0, q[j + 1].1 - q[j - 1].1);
+            // the velocity through the knot, each hop weighted by its own
+            // time, so a long jump in does not drag the heading along
+            let dt_in = ((times[j] - times[j - 1]).max(1e-6)) as f32;
+            let dt_out = ((times[j + 1] - times[j]).max(1e-6)) as f32;
+            dir[j] = ((q[j + 1].0 - q[j].0) / dt_out + (q[j].0 - q[j - 1].0) / dt_in, (q[j + 1].1 - q[j].1) / dt_out + (q[j].1 - q[j - 1].1) / dt_in);
         }
     }
     // the pieces and the arc length at each knot
@@ -582,14 +632,16 @@ fn plan_run(points: &[Waypoint], run: (usize, usize), settings: &AutoplaySetting
         let chord = (q[j + 1].0 - q[j].0, q[j + 1].1 - q[j].1);
         let da = if j == 0 { chord } else { dir[j] };
         let db = if j + 1 == m { chord } else { dir[j + 1] };
-        let piece = sweep_piece(q[j], q[j + 1], da, db);
+        let piece = sweep_piece(q[j], q[j + 1], da, db, tangent);
         arc[j + 1] = arc[j] + piece.length();
         pieces.push(piece);
     }
-    // the tube: TUBE along the arc, but never more than SLACK_MS of the
+    // the tube: TUBE along the arc, but never more than SLACK_SECS of the
     // slower neighbouring hop's time, so a slow jump into the stream cannot
     // arrive a tenth of a second early; nothing at the ends and the exact
     // knots
+    let to_map_ms = 1000.0 * f64::from(settings.speed_mod);
+    let slack_ms = (SLACK_SECS * to_map_ms) as f32;
     let mut lo = arc.clone();
     let mut hi = arc.clone();
     for j in 1..m {
@@ -598,13 +650,16 @@ fn plan_run(points: &[Waypoint], run: (usize, usize), settings: &AutoplaySetting
         }
         let v_in = (arc[j] - arc[j - 1]) / ((times[j] - times[j - 1]).max(1e-6)) as f32;
         let v_out = (arc[j + 1] - arc[j]) / ((times[j + 1] - times[j]).max(1e-6)) as f32;
-        let tube = TUBE.min(SLACK_MS as f32 * v_in.min(v_out));
+        let tube = TUBE.min(slack_ms * v_in.min(v_out));
         lo[j] = arc[j] - tube;
         hi[j] = arc[j] + tube;
     }
     let string = taut_string(&times, &lo, &hi);
     let exact_times: Vec<f64> = (1..m).filter(|&j| exact[j]).map(|j| times[j]).collect();
-    let profile = Profile::smoothed(&string, &times, &exact_times);
+    // the run's first piece is the jump in when it is a jump at all (the
+    // start of the map counts): it winds up instead of switching pace
+    let wind_up = classify(points, a, settings) == Gap::Jump;
+    let profile = Profile::smoothed(&string, &times, &exact_times, RAMP_SECS * to_map_ms, wind_up);
     // when the cursor reaches each knot: the pass times
     let mut pass = vec![0.0f64; m + 1];
     pass[0] = times[0];
@@ -810,4 +865,73 @@ pub fn sample(plan: &Plan, t_ms: f64, field: &Field) -> (f32, f32) {
         return field.clamp(s.p[3]);
     }
     field.clamp(s.at(t_ms))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tube_walls(arc: &[f32]) -> (Vec<f32>, Vec<f32>) {
+        let n = arc.len();
+        let lo = arc.iter().enumerate().map(|(k, a)| if k == 0 || k + 1 == n { *a } else { a - TUBE }).collect();
+        let hi = arc.iter().enumerate().map(|(k, a)| if k == 0 || k + 1 == n { *a } else { a + TUBE }).collect();
+        (lo, hi)
+    }
+
+    #[test]
+    fn the_taut_string_runs_straight_through_a_uniform_stream() {
+        let times: Vec<f64> = (0..8).map(|k| 1000.0 + 48.0 * k as f64).collect();
+        let arc: Vec<f32> = (0..8).map(|k| k as f32).collect();
+        let (lo, hi) = tube_walls(&arc);
+        assert_eq!(taut_string(&times, &lo, &hi), vec![(0, 0.0), (7, 7.0)]);
+    }
+
+    #[test]
+    fn the_taut_string_bends_at_the_walls_of_a_long_hop() {
+        // hops 1, 1, 1, 2, 1, 1 at 48 ms: the string rises to the ceiling
+        // before the long hop and falls to the floor after it
+        let times: Vec<f64> = (0..7).map(|k| 1000.0 + 48.0 * k as f64).collect();
+        let arc = [0.0f32, 1.0, 2.0, 3.0, 5.0, 6.0, 7.0];
+        let (lo, hi) = tube_walls(&arc);
+        let s = taut_string(&times, &lo, &hi);
+        let knots: Vec<usize> = s.iter().map(|b| b.0).collect();
+        assert_eq!(knots, vec![0, 3, 4, 6], "{s:?}");
+        assert!((s[1].1 - (3.0 + TUBE)).abs() < 1e-5 && (s[2].1 - (5.0 - TUBE)).abs() < 1e-5, "{s:?}");
+    }
+
+    #[test]
+    fn an_exact_knot_pins_the_string_and_the_profile_keeps_the_arc_there() {
+        let times: Vec<f64> = (0..7).map(|k| 1000.0 + 48.0 * k as f64).collect();
+        let arc = [0.0f32, 1.0, 2.0, 3.0, 5.0, 6.0, 7.0];
+        let (mut lo, mut hi) = tube_walls(&arc);
+        lo[2] = 2.0;
+        hi[2] = 2.0;
+        let s = taut_string(&times, &lo, &hi);
+        assert!(s.iter().any(|b| b.0 == 2 && (b.1 - 2.0).abs() < 1e-6), "{s:?}");
+        let p = Profile::smoothed(&s, &times, &[times[2]], 150.0, false);
+        assert!((p.arc(times[2]) - 2.0).abs() < 1e-4, "arc at the exact knot {}", p.arc(times[2]));
+        assert!((p.arc(times[6]) - 7.0).abs() < 1e-3, "arc at the end {}", p.arc(times[6]));
+        for w in p.knots.windows(2) {
+            assert!(w[1].0 >= w[0].0, "profile knots out of order: {:?}", p.knots);
+        }
+    }
+
+    #[test]
+    fn the_wind_up_waits_and_reaches_the_streams_pace_at_its_first_note() {
+        // a second from the centre to the first note, then unit hops at 48 ms
+        let times = [0.0f64, 1000.0, 1048.0, 1096.0, 1144.0];
+        let arc = [0.0f32, 1.0, 2.0, 3.0, 4.0];
+        let (mut lo, mut hi) = tube_walls(&arc);
+        // the slow approach leaves the first note no slack
+        lo[1] = 1.0;
+        hi[1] = 1.0;
+        let s = taut_string(&times, &lo, &hi);
+        assert_eq!(s[1].0, 1, "{s:?}");
+        let p = Profile::smoothed(&s, &times, &[], 150.0, true);
+        let stream = 1.0 / 48.0;
+        assert!(p.speed(500.0) < 0.1 * stream, "still crawling at 500 ms: {}", p.speed(500.0));
+        assert!((p.speed(999.0) - stream).abs() < 0.1 * stream, "pace at the first note {} vs {stream}", p.speed(999.0));
+        assert!((p.arc(1000.0) - 1.0).abs() < 1e-3, "arc at the first note {}", p.arc(1000.0));
+        assert!((p.arc(1144.0) - 4.0).abs() < 1e-3, "arc at the end {}", p.arc(1144.0));
+    }
 }

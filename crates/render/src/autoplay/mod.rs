@@ -37,11 +37,24 @@ impl DanceAmount {
     }
 }
 
+/// Where the cursor goes inside a stream.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Aim {
+    /// Through the centre of every note, as a perfect player would hit it;
+    /// a corner is turned on the note itself.
+    Centre,
+    /// Like a player's flow aim: a little inside the corners, always within
+    /// the hit area, so the turn spreads along the path.
+    Flow,
+}
+
 #[derive(Clone, Copy, PartialEq, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AutoplaySettings {
     pub movement: Movement,
     pub dance: DanceAmount,
+    pub aim: Aim,
     /// Real seconds without a note before the cursor rests in the centre.
     pub rest_secs: f64,
     /// The game's speed mod, 0.80 to 2.00 in steps of 0.05.
@@ -50,7 +63,7 @@ pub struct AutoplaySettings {
 
 impl Default for AutoplaySettings {
     fn default() -> Self {
-        AutoplaySettings { movement: Movement::Dance, dance: DanceAmount::Medium, rest_secs: 4.5, speed_mod: 1.0 }
+        AutoplaySettings { movement: Movement::Dance, dance: DanceAmount::Medium, aim: Aim::Centre, rest_secs: 4.5, speed_mod: 1.0 }
     }
 }
 
@@ -362,15 +375,39 @@ mod tests {
 
     /// A stream (notes faster than eight per second) is taken in one
     /// sweep: no dance belly however wild, so a line of notes is a line.
+    /// (The line runs along the top row: a first note on the centre row
+    /// would send the cursor out from the centre and straight back, a
+    /// reversal, which is a loop by design.)
     #[test]
     fn a_stream_in_a_line_goes_straight_even_in_wild_dance() {
-        let map = map_with(&[(1000, 0.0, 1.0), (1048, 1.0, 1.0), (1096, 2.0, 1.0), (1144, 2.0, 0.0), (1192, 1.0, 0.0)]);
-        let s = AutoplaySettings { movement: Movement::Dance, dance: DanceAmount::Wild, ..Default::default() };
-        let r = generate(&map, &s, 120, &dice()).unwrap();
-        let off = max_off_chord(&r, 1000.0, 1048.0, world(&map.notes[0]), world(&map.notes[1]));
-        assert!(off < 0.03, "a stream line arcs by {off}");
+        let map = map_with(&[(1000, 0.0, 0.0), (1048, 1.0, 0.0), (1096, 2.0, 0.0), (1144, 2.0, 1.0), (1192, 1.0, 1.0)]);
+        let s = AutoplaySettings { movement: Movement::Dance, dance: DanceAmount::Wild, aim: Aim::Flow, ..Default::default() };
+        let r = generate(&map, &s, 240, &dice()).unwrap();
+        // the note in the middle of the line is passed on the line, through
+        // its centre, heading straight on (the corners at either end are
+        // cut, that is the flow aim's job)
+        let mid = passes_within(&r, 1048.0, world(&map.notes[1]));
+        assert!(mid < 0.02, "a straight pass is cut by {mid}");
+        let turn = turn_at(&r, 1048.0);
+        assert!(turn < 10.0, "a stream line bends {turn} degrees at its middle note");
         let out = rhythia_sim::hitreg::match_hits(&map.notes, &r.frames, rhythia_sim::hitreg::hit_window_ms(&r));
         assert_eq!(out.derived_hits(), 5);
+    }
+
+    /// How close the sampled path comes to `c` within 24 ms of `ms`: the
+    /// distance to the nearest segment between two consecutive frames (the
+    /// frames themselves may straddle the point).
+    fn passes_within(r: &Replay, ms: f64, c: (f32, f32)) -> f32 {
+        let fr: Vec<&Frame> = r.frames.iter().filter(|f| !f.hit && (f.ms - ms).abs() <= 24.0).collect();
+        fr.windows(2)
+            .map(|w| {
+                let (a, b) = ((w[0].x, w[0].y), (w[1].x, w[1].y));
+                let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+                let len2 = dx * dx + dy * dy;
+                let t = if len2 > 1e-12 { (((c.0 - a.0) * dx + (c.1 - a.1) * dy) / len2).clamp(0.0, 1.0) } else { 0.0 };
+                ((a.0 + dx * t - c.0).powi(2) + (a.1 + dy * t - c.1).powi(2)).sqrt()
+            })
+            .fold(f32::INFINITY, f32::min)
     }
 
     /// Heading of the run 20 ms before and after `ms`, as the angle between
@@ -396,7 +433,7 @@ mod tests {
     fn a_stream_cuts_its_corners_like_a_player_and_still_hits_every_note() {
         let map = map_with(&[(1000, 0.0, 0.0), (1048, 0.0, 1.0), (1096, 0.0, 2.0), (1144, 1.0, 2.0), (1192, 2.0, 2.0), (1240, 2.0, 1.0), (1288, 2.0, 0.0), (1336, 1.0, 0.0), (1384, 0.0, 0.0)]);
         for movement in [Movement::Normal, Movement::Dance] {
-            let s = AutoplaySettings { movement, dance: DanceAmount::Wild, ..Default::default() };
+            let s = AutoplaySettings { movement, dance: DanceAmount::Wild, aim: Aim::Flow, ..Default::default() };
             let r = generate(&map, &s, 240, &dice()).unwrap();
             // the corner notes (0,2), (2,2), (2,0): the turn is spread along
             // the arc instead of taken on the note (a ring of unit hops turns
@@ -430,28 +467,29 @@ mod tests {
             (1000, 0.0, 0.0), (1048, 0.0, 1.0), (1096, 0.0, 2.0), (1144, 1.0, 2.0), (1192, 2.0, 2.0),
             (1240, 2.0, 0.0), (1288, 1.0, 0.0), (1336, 1.0, 1.0), (1384, 1.0, 2.0), (1432, 0.0, 2.0),
         ]);
-        let s = AutoplaySettings { movement: Movement::Normal, ..Default::default() };
-        let r = generate(&map, &s, 240, &dice()).unwrap();
-        let steps: Vec<(f64, f32)> = r
-            .frames
-            .iter()
-            .filter(|f| !f.hit && f.ms >= 1000.0 && f.ms <= 1432.0)
-            .collect::<Vec<_>>()
-            .windows(2)
-            .map(|w| (w[1].ms, ((w[1].x - w[0].x).powi(2) + (w[1].y - w[0].y).powi(2)).sqrt()))
-            .collect();
-        let ratio_max = steps.windows(2).map(|w| w[1].1 / w[0].1.max(1e-6)).fold(0.0f32, f32::max);
-        assert!(ratio_max < 1.6, "the speed jumps by {ratio_max}x between two frames (a hop planned on its own doubles it)");
-        // the equal-hop stretches away from the long hop run at one speed
-        // (after the ramp in from the centre, and clear of the long hop's)
-        let early: Vec<f32> = steps.iter().filter(|(t, _)| *t > 1090.0 && *t < 1140.0).map(|s| s.1).collect();
-        let late: Vec<f32> = steps.iter().filter(|(t, _)| *t > 1300.0 && *t < 1425.0).map(|s| s.1).collect();
-        for (name, v) in [("early", early), ("late", late)] {
-            let (lo, hi) = v.iter().fold((f32::INFINITY, 0.0f32), |(lo, hi), &x| (lo.min(x), hi.max(x)));
-            assert!(hi / lo < 1.08, "{name} stretch: speed varies from {lo} to {hi} per frame");
+        for aim in [Aim::Centre, Aim::Flow] {
+            let s = AutoplaySettings { movement: Movement::Normal, aim, ..Default::default() };
+            let r = generate(&map, &s, 240, &dice()).unwrap();
+            let steps: Vec<(f64, f32)> = r
+                .frames
+                .iter()
+                .filter(|f| !f.hit && f.ms >= 1000.0 && f.ms <= 1432.0)
+                .collect::<Vec<_>>()
+                .windows(2)
+                .map(|w| (w[1].ms, ((w[1].x - w[0].x).powi(2) + (w[1].y - w[0].y).powi(2)).sqrt()))
+                .collect();
+            let ratio_max = steps.windows(2).map(|w| w[1].1 / w[0].1.max(1e-6)).fold(0.0f32, f32::max);
+            assert!(ratio_max < 1.6, "{aim:?}: the speed jumps by {ratio_max}x between two frames (a hop planned on its own doubles it)");
+            // the equal-hop stretches away from the long hop run at one speed
+            // (after the ramp in from the centre, and clear of the long hop's)
+            let early: Vec<f32> = steps.iter().filter(|(t, _)| *t > 1090.0 && *t < 1140.0).map(|s| s.1).collect();
+            let late: Vec<f32> = steps.iter().filter(|(t, _)| *t > 1300.0 && *t < 1425.0).map(|s| s.1).collect();
+            for (name, v) in [("early", early), ("late", late)] {
+                let (lo, hi) = v.iter().fold((f32::INFINITY, 0.0f32), |(lo, hi), &x| (lo.min(x), hi.max(x)));
+                assert!(hi / lo < 1.08, "{aim:?} {name} stretch: speed varies from {lo} to {hi} per frame");
+            }
+            assert_every_note_covered(&map, &r, &format!("long hop {aim:?}"));
         }
-        let out = rhythia_sim::hitreg::match_hits(&map.notes, &r.frames, rhythia_sim::hitreg::hit_window_ms(&r));
-        assert_eq!(out.derived_hits() as usize, map.notes.len());
     }
 
     /// Back and forth on a line (a jack at 1/32) is a narrow loop: the
@@ -460,23 +498,46 @@ mod tests {
     #[test]
     fn a_jack_is_a_loop_not_a_dead_stop() {
         let map = map_with(&[(1000, 0.0, 1.0), (1048, 1.0, 1.0), (1096, 0.0, 1.0), (1144, 1.0, 1.0), (1192, 0.0, 1.0), (1240, 1.0, 1.0), (1288, 0.0, 1.0), (1336, 1.0, 1.0)]);
-        let s = AutoplaySettings { movement: Movement::Normal, ..Default::default() };
-        let r = generate(&map, &s, 240, &dice()).unwrap();
-        for t in [1096.0, 1144.0, 1192.0, 1240.0] {
-            let turn = turn_at(&r, t);
-            assert!(turn < 120.0, "the cursor turns {turn} degrees on the note at {t}: a dead stop");
+        for aim in [Aim::Centre, Aim::Flow] {
+            let s = AutoplaySettings { movement: Movement::Normal, aim, ..Default::default() };
+            let r = generate(&map, &s, 240, &dice()).unwrap();
+            for t in [1096.0, 1144.0, 1192.0, 1240.0] {
+                let turn = turn_at(&r, t);
+                assert!(turn < 120.0, "{aim:?}: the cursor turns {turn} degrees on the note at {t}: a dead stop");
+            }
+            // it loops beside the line, by a visible but small amount, on both sides
+            let (above, below) = r.frames.iter().filter(|f| !f.hit && f.ms > 1090.0 && f.ms < 1250.0).fold((0.0f32, 0.0f32), |(a, b), f| (a.max(f.y), b.min(f.y)));
+            assert!(above > 0.08 && below < -0.08 && above < 0.4 && below > -0.4, "{aim:?}: the loop spans {below}..{above} beside the line");
+            // it comes close to every note: through the centre with the
+            // centre aim, within a tenth of a unit with the flow aim
+            let near = if aim == Aim::Flow { path::TIP_CUT + 0.02 } else { 0.02 };
+            for n in &map.notes[1..map.notes.len() - 1] {
+                let closest = passes_within(&r, n.time_ms as f64, world(n));
+                assert!(closest <= near, "{aim:?}: note at {} passed {closest} from its centre", n.time_ms);
+            }
+            assert_every_note_covered(&map, &r, &format!("jack {aim:?}"));
         }
-        // it loops beside the line, by a visible but small amount, on both sides
-        let (above, below) = r.frames.iter().filter(|f| !f.hit && f.ms > 1090.0 && f.ms < 1250.0).fold((0.0f32, 0.0f32), |(a, b), f| (a.max(f.y), b.min(f.y)));
-        assert!(above > 0.08 && below < -0.08 && above < 0.4 && below > -0.4, "the loop spans {below}..{above} beside the line");
-        // it comes within a tenth of a unit of every note
-        for n in &map.notes[1..map.notes.len() - 1] {
-            let (wx, wy) = world(n);
-            let t = n.time_ms as f64;
-            let closest = r.frames.iter().filter(|f| (f.ms - t).abs() <= 24.0).map(|f| ((f.x - wx).powi(2) + (f.y - wy).powi(2)).sqrt()).fold(f32::INFINITY, f32::min);
-            assert!(closest <= path::TIP_CUT + 0.02, "note at {} passed {closest} from its centre", n.time_ms);
+    }
+
+    /// With the centre aim the stream is still one flow (steady speed,
+    /// rounded through the neighbours' direction, the jump in ramps), but
+    /// the cursor goes through the centre of every note.
+    #[test]
+    fn the_centre_aim_passes_through_every_stream_note() {
+        let map = map_with(&[(1000, 0.0, 0.0), (1048, 0.0, 1.0), (1096, 0.0, 2.0), (1144, 1.0, 2.0), (1192, 2.0, 2.0), (1240, 2.0, 1.0), (1288, 2.0, 0.0), (1336, 1.0, 0.0), (1384, 0.0, 0.0)]);
+        for movement in [Movement::Normal, Movement::Dance] {
+            let s = AutoplaySettings { movement, aim: Aim::Centre, ..Default::default() };
+            let r = generate(&map, &s, 240, &dice()).unwrap();
+            for n in &map.notes[1..map.notes.len() - 1] {
+                let closest = passes_within(&r, n.time_ms as f64, world(n));
+                assert!(closest <= 0.02, "{movement:?}: note at {} passed {closest} from its centre", n.time_ms);
+            }
+            for t in [1096.0, 1192.0, 1288.0] {
+                let on = turn_at(&r, t);
+                assert!(on < 80.0, "{movement:?}: the corner at {t} turns {on} degrees: a kink, not a curve");
+            }
+            assert_every_note_covered(&map, &r, &format!("centre ring {movement:?}"));
         }
-        assert_every_note_covered(&map, &r, "jack");
     }
 
     /// A chord inside a stream: the two notes share one spot that is in
@@ -486,10 +547,10 @@ mod tests {
     #[test]
     fn a_chord_inside_a_stream_is_passed_exactly_and_covers_both_notes() {
         let map = map_with(&[(1000, 0.0, 0.0), (1048, 1.0, 0.0), (1096, 2.0, 0.0), (1144, 2.0, 1.0), (1144, 2.0, 2.0), (1192, 1.0, 2.0), (1240, 0.0, 2.0), (1288, 0.0, 1.0)]);
-        for movement in [Movement::Normal, Movement::Dance] {
-            let s = AutoplaySettings { movement, ..Default::default() };
+        for (movement, aim) in [(Movement::Normal, Aim::Flow), (Movement::Dance, Aim::Flow), (Movement::Dance, Aim::Centre)] {
+            let s = AutoplaySettings { movement, aim, ..Default::default() };
             let r = generate(&map, &s, 240, &dice()).unwrap();
-            assert_every_note_covered(&map, &r, &format!("chord in stream {movement:?}"));
+            assert_every_note_covered(&map, &r, &format!("chord in stream {movement:?} {aim:?}"));
             let mid = ((world(&map.notes[3]).0 + world(&map.notes[4]).0) / 2.0, (world(&map.notes[3]).1 + world(&map.notes[4]).1) / 2.0);
             let at = r.frames.iter().find(|f| f.hit && (f.ms - 1144.0).abs() < 1e-6).expect("the chord's flag at its time");
             assert!((at.x - mid.0).abs() < 0.01 && (at.y - mid.1).abs() < 0.01, "{movement:?}: the chord's spot is passed at ({},{}) instead of exactly", at.x, at.y);
@@ -535,8 +596,8 @@ mod tests {
     #[test]
     fn the_jump_into_a_stream_accelerates_instead_of_switching_speed() {
         let map = map_with(&[(1000, 1.0, 2.0), (1190, 0.0, 0.0), (1238, 0.0, 1.0), (1286, 0.0, 2.0), (1334, 1.0, 2.0), (1382, 2.0, 2.0), (1572, 2.0, 0.0)]);
-        for movement in [Movement::Normal, Movement::Dance] {
-            let s = AutoplaySettings { movement, ..Default::default() };
+        for (movement, aim) in [(Movement::Normal, Aim::Centre), (Movement::Dance, Aim::Centre), (Movement::Normal, Aim::Flow)] {
+            let s = AutoplaySettings { movement, aim, ..Default::default() };
             let r = generate(&map, &s, 240, &dice()).unwrap();
             let steps: Vec<f32> = r
                 .frames
@@ -599,13 +660,48 @@ mod tests {
             let map = map_with(&notes);
             let speed = [0.8f32, 1.0, 1.5, 2.0][case % 4];
             let movement = if case % 2 == 0 { Movement::Normal } else { Movement::Dance };
-            let s = AutoplaySettings { movement, speed_mod: speed, ..Default::default() };
+            let aim = if (case / 2) % 2 == 0 { Aim::Flow } else { Aim::Centre };
+            let s = AutoplaySettings { movement, aim, speed_mod: speed, ..Default::default() };
             let r = generate(&map, &s, 120, &dice()).unwrap();
-            assert_every_note_covered(&map, &r, &format!("case {case} ({movement:?} at {speed}), notes {notes:?}"));
+            assert_every_note_covered(&map, &r, &format!("case {case} ({movement:?} {aim:?} at {speed}), notes {notes:?}"));
             let bound = 1.12 + (0.5 - rhythia_sim::hitreg::CURSOR_EDGE_INSET);
             for f in &r.frames {
                 assert!(f.x.abs() <= bound + 1e-4 && f.y.abs() <= bound + 1e-4, "case {case}: {f:?}");
             }
+        }
+    }
+
+    /// A map that opens with a stream: the cursor waits in the centre and
+    /// winds up into the stream, instead of crawling for a second and
+    /// switching pace on the first note.
+    #[test]
+    fn a_map_that_opens_with_a_stream_winds_up_from_the_centre() {
+        let map = map_with(&[(1000, 0.0, 1.0), (1048, 1.0, 1.0), (1096, 2.0, 1.0), (1144, 2.0, 2.0), (1192, 1.0, 2.0), (1240, 0.0, 2.0)]);
+        for aim in [Aim::Centre, Aim::Flow] {
+            let s = AutoplaySettings { movement: Movement::Normal, aim, ..Default::default() };
+            let r = generate(&map, &s, 240, &dice()).unwrap();
+            let at = |t: f64| r.frames.iter().filter(|f| !f.hit).min_by(|a, b| (a.ms - t).abs().partial_cmp(&(b.ms - t).abs()).unwrap()).unwrap();
+            let early = at(500.0);
+            assert!(early.x.abs() < 0.1 && early.y.abs() < 0.1, "{aim:?}: left the centre long before the stream: {early:?}");
+            let steps: Vec<f32> = r
+                .frames
+                .iter()
+                .filter(|f| !f.hit && f.ms >= 800.0 && f.ms <= 1140.0)
+                .collect::<Vec<_>>()
+                .windows(2)
+                .map(|w| ((w[1].x - w[0].x).powi(2) + (w[1].y - w[0].y).powi(2)).sqrt())
+                .collect();
+            // from rest the pace can only grow by a fraction of itself per
+            // frame, so the measure is the change of the step itself: a
+            // smooth wind-up over a tenth of a second changes it by a
+            // thirtieth of the stream's step per frame, a switch on the
+            // first note by the whole step at once
+            let in_stream: f32 = steps[steps.len() - 6..].iter().sum::<f32>() / 6.0;
+            let worst = steps.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+            assert!(worst < 0.15 * in_stream, "{aim:?}: the step changes by {worst} between two frames on the way into the stream (the stream's step is {in_stream})");
+            let at_note: f32 = steps[steps.len() - 36..steps.len() - 30].iter().sum::<f32>() / 6.0;
+            assert!(at_note > 0.75 * in_stream, "{aim:?}: not up to pace at the first note ({at_note} vs {in_stream} per frame)");
+            assert_every_note_covered(&map, &r, &format!("opening stream {aim:?}"));
         }
     }
 
@@ -722,6 +818,15 @@ mod tests {
         assert_eq!(ticker_text(&s), "AUTOPLAY   rendered with rhythr   not a real play   cursor dance   1.25x");
         let s = AutoplaySettings { movement: Movement::Normal, ..Default::default() };
         assert!(ticker_text(&s).ends_with("normal movement   1.00x"));
+    }
+
+    #[test]
+    fn the_aim_defaults_to_the_centre_and_reads_both_words() {
+        assert_eq!(AutoplaySettings::default().aim, Aim::Centre);
+        let s: AutoplaySettings = serde_json::from_str(r#"{"movement":"dance","aim":"flow"}"#).unwrap();
+        assert_eq!(s.aim, Aim::Flow);
+        let s: AutoplaySettings = serde_json::from_str(r#"{"movement":"normal"}"#).unwrap();
+        assert_eq!(s.aim, Aim::Centre, "a settings file from before the aim existed reads as the centre");
     }
 
     #[test]
