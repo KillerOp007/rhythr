@@ -4141,9 +4141,10 @@ fn ensure_preview_ctx(app: &App, _time_ms: f64) -> Result<(), String> {
             let renderer =
                 rhythia_render::Renderer::new(pw.max(64), ph, cfg.hud_fonts().as_slice())
                     .map_err(|e| gpu_err(&e))?;
-            // The preview shows the Autoplay video as it will be: ticker and mark.
+            // The preview shows the Autoplay video as it will be: the ticker
+            // when the banner is on, and the mark.
             if let Some(sess) = &inner.autoplay {
-                renderer.set_ticker(Some(rhythia_render::autoplay::ticker_text(&sess.settings)));
+                renderer.set_ticker(rhythia_render::autoplay::ticker_for(&sess.settings));
                 renderer.set_mark(Some(autoplay_commands::mark_pattern()));
             }
             let mut params = SceneParams::from(&cfg);
@@ -5217,7 +5218,7 @@ fn start_render(
             map: map.clone(),
             cfg: render_config(&inner),
             autoplay: inner.autoplay.is_some(),
-            ticker: inner.autoplay.as_ref().map(|a| rhythia_render::autoplay::ticker_text(&a.settings)),
+            ticker: inner.autoplay.as_ref().and_then(|a| rhythia_render::autoplay::ticker_for(&a.settings)),
             mark: inner.autoplay.as_ref().map(|_| autoplay_commands::mark_pattern().to_vec()),
             width: s.width,
             height: s.height,

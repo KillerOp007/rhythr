@@ -272,7 +272,8 @@ enum Command {
         app_layout_file: Option<PathBuf>,
     },
     /// Render a map with a synthetic cursor (no replay). The video carries
-    /// the AUTOPLAY ticker, the hidden mark and a metadata tag.
+    /// the hidden mark and a metadata tag, and the AUTOPLAY ticker unless
+    /// --no-banner is given.
     Autoplay {
         #[command(flatten)]
         common: VideoCommon,
@@ -292,6 +293,10 @@ enum Command {
         /// The game's speed mod, 0.80 to 2.00 in steps of 0.05 (song, approach and cursor follow it).
         #[arg(long, default_value_t = 1.0)]
         speed_mod: f32,
+        /// Leave the AUTOPLAY ticker off the top of the video. The hidden
+        /// mark and the metadata tag stay.
+        #[arg(long)]
+        no_banner: bool,
     },
     /// Look for the hidden Autoplay mark in a video. Exit code 0 when the
     /// mark is found, 2 when it is weak, 1 when there is none.
@@ -903,7 +908,7 @@ fn run() -> anyhow::Result<bool> {
             common,
             VideoExtra { ghost_replay, results_secs, app_layout, app_layout_file },
         ),
-        Command::Autoplay { common, movement, aim, dance, rest, speed_mod } => {
+        Command::Autoplay { common, movement, aim, dance, rest, speed_mod, no_banner } => {
             use rhythia_render::autoplay::{Aim, AutoplaySettings, DanceAmount, Movement};
             let settings = AutoplaySettings {
                 movement: if movement == "normal" { Movement::Normal } else { Movement::Dance },
@@ -915,6 +920,7 @@ fn run() -> anyhow::Result<bool> {
                 },
                 rest_secs: rest,
                 speed_mod,
+                banner: !no_banner,
             }
             .normalized();
             if (settings.speed_mod - speed_mod).abs() > 1e-6 || (settings.rest_secs - rest).abs() > 1e-9 {
@@ -1135,7 +1141,7 @@ fn render_run(source: RunSource, common: VideoCommon, extra: VideoExtra) -> anyh
             renderer.ensure_hud_text(&rhythia_render::hud::atlas_text(&m, &r));
             if let (RunSource::Autoplay(settings), Some(pattern)) = (&source, &mark_pattern) {
                 renderer.set_mark(Some(pattern));
-                renderer.set_ticker(Some(rhythia_render::autoplay::ticker_text(settings)));
+                renderer.set_ticker(rhythia_render::autoplay::ticker_for(settings));
             }
 
             // Pick the fastest working encoder: probe the hardware encoders
@@ -1549,9 +1555,10 @@ mod mark_check_tests {
         ])
         .unwrap();
         match cli.command {
-            Command::Autoplay { movement, aim, dance, rest, speed_mod, common } => {
+            Command::Autoplay { movement, aim, dance, rest, speed_mod, no_banner, common } => {
                 assert_eq!(movement, "normal");
                 assert_eq!(aim, "flow");
+                assert!(!no_banner, "the banner is on unless asked away");
                 assert_eq!(dance, "wild");
                 assert!((rest - 6.0).abs() < 1e-9 && (speed_mod - 1.5).abs() < 1e-6 && common.fps == 30);
                 assert_eq!(common.map, PathBuf::from("m.rhm"));
@@ -1567,6 +1574,15 @@ mod mark_check_tests {
                 assert_eq!(replay, PathBuf::from("r.rhr"));
                 assert!((common.speed - 0.5).abs() < 1e-9 && (results_secs - 2.0).abs() < 1e-9);
             }
+            _ => panic!("wrong command"),
+        }
+    }
+
+    #[test]
+    fn autoplay_can_leave_the_banner_out() {
+        let cli = Cli::try_parse_from(["rhythr-cli", "autoplay", "--map", "m.rhm", "-o", "o.mp4", "--no-banner"]).unwrap();
+        match cli.command {
+            Command::Autoplay { no_banner, .. } => assert!(no_banner),
             _ => panic!("wrong command"),
         }
     }

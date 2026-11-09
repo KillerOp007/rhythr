@@ -5,11 +5,13 @@ For the Rhythia team, and for anyone the owner hands the key to. One page.
 ## What the mark is
 
 rhythr can render a map without a replay (Autoplay: a synthetic cursor that
-plays every note). Every such video carries three marks:
+plays every note). Every such video carries up to three marks:
 
 1. A visible ticker across the top: `AUTOPLAY   rendered with rhythr   not a real play`,
-   plus the movement style and the speed mod. Anyone can see it, and anyone
-   with a video editor can paint over it.
+   plus the movement style and the speed mod. It is on by default and the
+   person rendering can switch it off (Autoplay tab, Banner; CLI
+   `--no-banner`), so its absence says nothing about a video. Anyone with a
+   video editor can paint over it in any case.
 2. A hidden mark in the picture: a faint noise pattern derived from a secret
    key, added to every frame. Measured with this checker it survives
    re-encodes down to 480p and 1 Mbit/s, cropping, and strong denoising
@@ -83,7 +85,7 @@ A missing mark does not prove a real play:
 - A deliberate black-crush filter (every near-black pixel set to pure black)
   removes the hidden mark; the ticker and the tag are gone long before.
 - Someone who compiles rhythr from source without the owner's key gets no
-  owner mark; the ticker is in the source too and can be removed there.
+  owner mark (the ticker is a setting in any build).
 - The key sits inside every release binary (something has to generate the
   pattern), obfuscated but not beyond a determined engineer.
 

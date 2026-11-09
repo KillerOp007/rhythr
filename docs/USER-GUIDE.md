@@ -398,8 +398,10 @@ map, not for anything that could pass as a real play.
   after 2 to 8 real seconds without a note (with a speed mod the map time is
   divided by it, so the feel stays the same); Speed mod, 0.80x to 2.00x in
   steps of 0.05, which drives the song, the approach and the cursor like the
-  game's own. The player name is Autoplay and the accuracy 100 percent,
-  always; neither is a setting.
+  game's own; Banner, **On** or **Off**, whether the AUTOPLAY ticker runs
+  across the top (the hidden mark and the metadata tag stay either way). The
+  player name is Autoplay and the accuracy 100 percent, always; neither is a
+  setting.
 - **How the cursor moves**: close notes are an almost straight line; the
   farther the next note, the wider the arc, and wider still when there is
   time to spare. A stream (notes faster than eight per second, in real
@@ -418,11 +420,13 @@ map, not for anything that could pass as a real play.
 - **What is not there**: no results screen, no score card, no Analyze
   window, no ghost race. Each of those would be a real-play artefact on a
   synthetic run.
-- **The marks**: every Autoplay video carries a ticker across the top
+- **The marks**: every Autoplay video carries a hidden mark in the picture
+  that survives re-encoding, resizing, cropping and light filtering, and a
+  metadata comment; neither can be switched off. The ticker across the top
   (AUTOPLAY, rendered with rhythr, not a real play, plus the movement and the
-  speed mod), a hidden mark in the picture that survives re-encoding,
-  resizing, cropping and light filtering, and a metadata comment. None of
-  the three can be switched off. The hidden mark has limits, stated plainly:
+  speed mod) is on by default and can be switched off under Banner in the
+  Autoplay tab, or with `--no-banner` on the CLI, for a cleaner picture. The
+  hidden mark has limits, stated plainly:
   a deliberate black-crush filter removes it, a self-compiled rhythr without
   the owner's key does not carry it, and the key can be dug out of a release
   binary by someone who takes it apart. It stops the ordinary fake; the
@@ -580,10 +584,10 @@ check. It is **not** an official Rhythia score verification. Music,
 beatmaps and artwork belong to their creators; you are responsible for
 the rights needed to publish rendered videos.
 
-Autoplay videos are marked as such: the ticker, a hidden mark and a
-metadata tag. Removing the marks to pass an Autoplay video off as a real
-play is misuse; the Rhythia team can check any video with the key and act
-on it.
+Autoplay videos are marked as such: a hidden mark and a metadata tag
+always, and the ticker unless it is switched off. Removing the marks to
+pass an Autoplay video off as a real play is misuse; the Rhythia team can
+check any video with the key and act on it.
 
 ## Licenses
 

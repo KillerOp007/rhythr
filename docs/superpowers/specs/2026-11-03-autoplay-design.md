@@ -12,7 +12,7 @@ The owner's one hard condition, settled before anything else: Autoplay must not 
 
 - Render a map with a synthetic cursor straight from the game's export folder, in the main window, with the existing render pipeline, output settings, HUD and skin.
 - Two movement styles: Normal (soft, direct curves) and Cursor dance (the flowing style of the reference videos, scaled to Rhythia's small playfield).
-- Every Autoplay video is marked as such in three layers: a visible ticker, a hidden mark in the picture, and a metadata tag. Only the owner and the Rhythia team can check the hidden mark, with a key that never enters the repository.
+- Every Autoplay video is marked as such in three layers: a visible ticker (a setting since 2026-11-09, on by default), a hidden mark in the picture, and a metadata tag. Only the owner and the Rhythia team can check the hidden mark, with a key that never enters the repository.
 - A verification command in `rhythr-cli` that reports whether a video carries the hidden mark.
 
 ## Non-goals
@@ -25,8 +25,8 @@ The owner's one hard condition, settled before anything else: Autoplay must not 
 ## Anti-goals (what would make this a failure even if it works)
 
 - Any code path that serialises a `Replay`. The synthetic cursor is a value in memory and nothing else; the anti-cheat statement in `README.md` stays literally true and gains a sentence about Autoplay.
-- A marker that can be switched off. There is no setting, no config key, no hidden flag for the ticker or the hidden mark.
-- A render that looks like a real play to a casual viewer: player name, HUD and ticker say Autoplay.
+- A hidden mark or metadata tag that can be switched off. There is no setting, no config key, no hidden flag for them. (The ticker stood in this list until 2026-11-09, when the owner made it a setting: the mark and the tag carry the proof, the ticker is cosmetic, and some people want the clean picture.)
+- A render that looks like a real play to a casual viewer: player name and HUD say Autoplay, and so does the ticker while it is on.
 
 ## Constraints and facts the builder relies on
 
@@ -49,11 +49,12 @@ The owner's one hard condition, settled before anything else: Autoplay must not 
    - Dance amount: three steps, subtle, medium, wild (default medium). Disabled under Normal.
    - Rest in the centre after: 2.0 to 8.0 s in steps of 0.5, default 4.5 s, with the hint "Real seconds without a note. With a speed mod the map time is divided by it, so the feel stays the same." and, when a speed mod is set, the map-time equivalent ("at 1.50x that is a gap of 6.8 s in the map").
    - Speed mod: 0.80x to 2.00x in steps of 0.05, default 1.00x, with 1.10, 1.25, 1.50, 1.75, 2.00 as quick picks. It drives song speed and pitch through the existing rules, the approach, and the path's real-time thresholds.
+   - Banner (since 2026-11-09): On or Off, default On. Off leaves the ticker out of the preview and the video; the hidden mark and the metadata tag stay.
    - Fixed rows, not editable: Player name "Autoplay"; Accuracy "100.00%, full combo".
-   - A note: "Marked as autoplay. Every autoplay render carries the AUTOPLAY ticker across the top and a hidden mark that survives re-encoding. Neither can be switched off."
+   - A note: "Marked as autoplay. Every autoplay render carries a hidden mark that survives re-encoding and a metadata tag; neither can be switched off. The banner across the top is yours to keep or drop."
    All Autoplay settings persist like the other settings.
 5. **Session restore**: the app remembers the last picked `.rhm` path and the Autoplay settings. On the next launch it restores the Autoplay session when that file still exists, otherwise it starts in the replay flow. Exported maps do not enter the Recent list; the picker is their list.
-6. **Preview and render**: the preview shows the synthetic run exactly as the video will look, ticker included. Clip range, scrubbing, the live preview and Render video work as for a replay. The render bar's ready line names the map and the output settings. The suggested file name starts with `Autoplay - ` followed by the map title. Analyze and Save thumbnail are hidden while Autoplay is active (tooltips are not needed; the buttons are simply not there). The results screen at the end of a video (`results_secs`) is forced off for Autoplay: an SS results frame with 100 percent is exactly the fake score image this design wants to avoid, so the run ends on the playfield. The Ghost race card is hidden as well; a real player's run never appears inside a marked video in this round.
+6. **Preview and render**: the preview shows the synthetic run exactly as the video will look, ticker included while the banner is on. Clip range, scrubbing, the live preview and Render video work as for a replay. The render bar's ready line names the map and the output settings. The suggested file name starts with `Autoplay - ` followed by the map title. Analyze and Save thumbnail are hidden while Autoplay is active (tooltips are not needed; the buttons are simply not there). The results screen at the end of a video (`results_secs`) is forced off for Autoplay: an SS results frame with 100 percent is exactly the fake score image this design wants to avoid, so the run ends on the playfield. The Ghost race card is hidden as well; a real player's run never appears inside a marked video in this round.
 7. **Status and errors**: the Autoplay card and the status line carry the messages; codes follow the error-code convention (area below).
 
 The click-through mockup the owner accepted is at https://claude.ai/artifact/QqfHHxTsqFvFePfjfKXbu2; its layout, labels and copy are the reference for the builder.
@@ -94,6 +95,8 @@ Unit tests on the generator with synthetic maps: exact position at every note ti
 ### Layer 1, visible: the ticker
 
 A band across the top of the picture, inside the safe area of the HUD, with the text `AUTOPLAY   rendered with rhythr   not a real play   <movement>   <speed>x` moving continuously from left to right and wrapping, at a readable size (about 1.8 percent of the frame height), white at 65 percent opacity on a dark pill at 35 percent, drawn by the HUD layer after every other element so nothing covers it. Motion is continuous, roughly 12 s per pass at 1080p, so a frame grab always shows part of it. It appears in the preview as well. It has no setting.
+
+Since 2026-11-09 the ticker is a setting (Banner in the Autoplay tab, on by default; `--no-banner` on the CLI). The two hidden layers are not, and the CLI flag has no counterpart for them.
 
 ### Layer 2, hidden: the picture mark
 

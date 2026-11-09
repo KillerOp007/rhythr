@@ -256,10 +256,18 @@
           <select id="ap-speed"></select>
           <span class="sub">Song, approach and the cursor all follow it, like the game's own speed mod.</span>
         </div>
+        <div class="field">
+          <span>Banner</span>
+          <div class="seg" role="group" aria-label="Banner">
+            <button type="button" id="ap-banner-on" class="on">On</button>
+            <button type="button" id="ap-banner-off">Off</button>
+          </div>
+          <span class="sub" id="ap-banner-hint">The AUTOPLAY ticker runs across the top of the video.</span>
+        </div>
         <div class="ap-fixed"><span>Player name</span><span class="mono">Autoplay</span></div>
         <div class="ap-fixed"><span>Accuracy</span><span class="mono">100.00%, full combo</span></div>
         <div class="ap-note" id="ap-note" hidden></div>
-        <div class="ap-note"><b>Marked as autoplay.</b> Every autoplay render carries the AUTOPLAY ticker across the top and a hidden mark that survives re-encoding. Neither can be switched off.</div>
+        <div class="ap-note"><b>Marked as autoplay.</b> Every autoplay render carries a hidden mark that survives re-encoding and a metadata tag; neither can be switched off. The banner across the top is yours to keep or drop.</div>
       </div>
 
       <div class="tab-page" id="tab-output">

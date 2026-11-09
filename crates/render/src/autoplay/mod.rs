@@ -59,11 +59,14 @@ pub struct AutoplaySettings {
     pub rest_secs: f64,
     /// The game's speed mod, 0.80 to 2.00 in steps of 0.05.
     pub speed_mod: f32,
+    /// Whether the AUTOPLAY ticker runs across the top of the video. The
+    /// hidden mark and the metadata tag do not depend on it.
+    pub banner: bool,
 }
 
 impl Default for AutoplaySettings {
     fn default() -> Self {
-        AutoplaySettings { movement: Movement::Dance, dance: DanceAmount::Medium, aim: Aim::Centre, rest_secs: 4.5, speed_mod: 1.0 }
+        AutoplaySettings { movement: Movement::Dance, dance: DanceAmount::Medium, aim: Aim::Centre, rest_secs: 4.5, speed_mod: 1.0, banner: true }
     }
 }
 
@@ -113,6 +116,11 @@ pub fn ticker_text(settings: &AutoplaySettings) -> String {
         Movement::Normal => "normal movement",
     };
     format!("AUTOPLAY   rendered with rhythr   not a real play   {movement}   {:.2}x", settings.speed_mod)
+}
+
+/// The ticker for these settings, or none when the banner is switched off.
+pub fn ticker_for(settings: &AutoplaySettings) -> Option<String> {
+    settings.banner.then(|| ticker_text(settings))
 }
 
 /// The field barrier for these notes: the normal grid or wider when a note
@@ -818,6 +826,23 @@ mod tests {
         assert_eq!(ticker_text(&s), "AUTOPLAY   rendered with rhythr   not a real play   cursor dance   1.25x");
         let s = AutoplaySettings { movement: Movement::Normal, ..Default::default() };
         assert!(ticker_text(&s).ends_with("normal movement   1.00x"));
+    }
+
+    #[test]
+    fn the_banner_is_on_unless_switched_off_and_old_settings_keep_it() {
+        assert!(AutoplaySettings::default().banner);
+        let old: AutoplaySettings = serde_json::from_str("{}").unwrap();
+        assert!(old.banner, "a settings file from before the switch keeps the ticker");
+        let off: AutoplaySettings = serde_json::from_str(r#"{"banner":false}"#).unwrap();
+        assert!(!off.banner);
+    }
+
+    #[test]
+    fn the_ticker_goes_with_the_banner() {
+        let on = AutoplaySettings::default();
+        assert_eq!(ticker_for(&on), Some(ticker_text(&on)));
+        let off = AutoplaySettings { banner: false, ..Default::default() };
+        assert_eq!(ticker_for(&off), None);
     }
 
     #[test]

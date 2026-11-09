@@ -9,8 +9,9 @@ endorsed by Rhythia or Capo Games.
   (right-click, Export), press Autoplay above the preview and pick it from
   the list. A synthetic cursor plays every note, Normal or Cursor dance, with
   a rest in the centre on long pauses and the game's speed mod as a setting.
-  Every Autoplay video is marked as one: a ticker across the top, a hidden
-  mark in the picture that `rhythr-cli mark-check` finds, and a metadata tag.
+  Every Autoplay video is marked as one: a hidden mark in the picture that
+  `rhythr-cli mark-check` finds and a metadata tag, plus a ticker across the
+  top that can be switched off (Autoplay tab, Banner; CLI `--no-banner`).
   Results screen, score card, Analyze and ghost races are off for Autoplay.
   CLI: `rhythr-cli autoplay` and `rhythr-cli mark-check`; the CLI finds
   ffmpeg next to itself, in the rhythr app's install folder or on PATH

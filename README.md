@@ -69,9 +69,10 @@ This tool is a strict **read-only renderer**:
   **not** an official Rhythia score verification.
 - **Autoplay** (a synthetic cursor on an exported map) touches no replay
   either: the run exists only in memory, never as a file. Every Autoplay
-  video carries a visible AUTOPLAY ticker, a hidden mark that
-  `rhythr-cli mark-check` finds, and a metadata tag. Removing them to pass
-  a video off as a real play is misuse; see `docs/AUTOPLAY-VERIFICATION.md`.
+  video carries a hidden mark that `rhythr-cli mark-check` finds and a
+  metadata tag; the visible AUTOPLAY ticker is on by default and can be
+  switched off. Removing the marks to pass a video off as a real play is
+  misuse; see `docs/AUTOPLAY-VERIFICATION.md`.
 
 ## Workspace
 

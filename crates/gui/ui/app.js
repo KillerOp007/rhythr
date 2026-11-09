@@ -260,6 +260,12 @@ function renderAutoplayTab() {
   $("ap-aim-hint").textContent = flow
     ? "Like a player's flow aim: in a stream the cursor passes a little inside the corners, always within the hit area, so the turn spreads along the path. The hit still fires at the note's time."
     : "Through the centre of every note. In a stream the speed stays steady and a back-and-forth loops, but a corner is turned on the note itself.";
+  const banner = s.banner !== false;
+  $("ap-banner-on").classList.toggle("on", banner);
+  $("ap-banner-off").classList.toggle("on", !banner);
+  $("ap-banner-hint").textContent = banner
+    ? "The AUTOPLAY ticker runs across the top of the video."
+    : "No ticker. The hidden mark and the metadata tag stay in the video either way.";
   const dance = s.movement === "dance";
   $("ap-movement-dance").classList.toggle("on", dance);
   $("ap-movement-normal").classList.toggle("on", !dance);
@@ -350,6 +356,8 @@ function initAutoplay() {
   });
   $("ap-aim-centre").addEventListener("click", () => pushAutoplay({ aim: "centre" }));
   $("ap-aim-flow").addEventListener("click", () => pushAutoplay({ aim: "flow" }));
+  $("ap-banner-on").addEventListener("click", () => pushAutoplay({ banner: true }));
+  $("ap-banner-off").addEventListener("click", () => pushAutoplay({ banner: false }));
   $("ap-movement-normal").addEventListener("click", () => pushAutoplay({ movement: "normal" }));
   $("ap-movement-dance").addEventListener("click", () => pushAutoplay({ movement: "dance" }));
   $("ap-dance").addEventListener("input", () => {
