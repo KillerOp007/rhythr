@@ -9,7 +9,9 @@ set -euo pipefail
 # Prereqs: podman; a static linux64 ffmpeg + its LICENSE staged as
 # crates/gui/ffmpeg and crates/gui/ffmpeg-LICENSE.txt (see
 # docs/LINUX-BUILD.md); TAURI_SIGNING_PRIVATE_KEY for the updater .sig.
-# Output: target-linux22/release/bundle/{appimage,deb,rpm}/
+# Output: target-linux22/release/bundle/{appimage,deb,rpm}/ and the CLI
+# for the release page at target-linux22/release/rhythr-cli (same glibc
+# baseline; it is not inside the packages).
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 IMG=rhythr-linux-build
@@ -79,6 +81,9 @@ podman run --rm \
         OUTPUT="$out" ARCH=x86_64 /root/.cache/tauri/linuxdeploy-plugin-appimage.AppImage \
             --appdir "$bundle/rhythr.AppDir"
         cargo tauri signer sign "$out"
+        # The CLI (mark-check for the team) goes on the release page on
+        # its own, built here for the same glibc baseline.
+        cargo build --release -p rhythia-cli
     '
 
 # The AppImage must leave the display stack to the host: these libraries
@@ -97,3 +102,4 @@ echo
 echo "bundles:"
 find "$ROOT/target-linux22/release/bundle" -maxdepth 2 -type f \
     \( -name "*.AppImage" -o -name "*.deb" -o -name "*.rpm" -o -name "*.sig" \) | sort
+echo "cli: $ROOT/target-linux22/release/rhythr-cli"

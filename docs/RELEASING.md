@@ -75,6 +75,14 @@ once.
    is fine for a test build, never for a release. The key lives next to the
    updater key and is backed up with it.
 
+   The artefacts on the release page: the installer, the AppImage, the deb,
+   the rpm, `latest.json` (`scripts/make-latest-json.py <version>` after both
+   platforms are built), and `rhythr-cli` for both platforms, which the build
+   scripts produce next to the bundles (`target/x86_64-pc-windows-msvc/release/rhythr-cli.exe`,
+   `target-linux22/release/rhythr-cli`). Upload them as
+   `rhythr-cli_<version>_x64.exe` and `rhythr-cli_<version>_amd64`: the team's
+   guide (`docs/AUTOPLAY-VERIFICATION.md`) names them so.
+
 ## After the artefacts exist
 
 10. **The AUR package comes last, and only now.** It repackages the published

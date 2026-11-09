@@ -22,7 +22,9 @@ plays every note). Every such video carries up to three marks:
 
 ## Running the check
 
-You need `rhythr-cli` (part of every rhythr release, next to the app) and the
+You need `rhythr-cli` (on every release page next to the app's installers:
+`rhythr-cli_<version>_x64.exe` for Windows, `rhythr-cli_<version>_amd64` for
+Linux; from 0.8.0 on) and the
 key file the owner gave you (one line of 64 hex characters). Keep the key
 file private: whoever has it can verify, and could also remove the mark.
 The check reads the video through ffmpeg: the CLI finds the one the rhythr

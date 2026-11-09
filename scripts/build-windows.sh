@@ -9,6 +9,8 @@ set -euo pipefail
 # cargo-xwin, a Tauri CLI, ffmpeg.exe + ffmpeg-LICENSE.txt staged in
 # crates/gui; TAURI_SIGNING_PRIVATE_KEY for the updater .sig.
 # Output: target/x86_64-pc-windows-msvc/release/bundle/nsis/rhythr_<ver>_x64-setup.exe
+# and, for the release page, target/x86_64-pc-windows-msvc/release/rhythr-cli.exe
+# (the team's mark checker; it is not inside the installer).
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TAURI="${TAURI_CLI:-/home/killer/tools/tauri-cli/node_modules/.bin/tauri}"
@@ -27,4 +29,8 @@ if [ ! -x "$TAURI" ]; then
 fi
 
 cd "$ROOT/crates/gui"
-exec "$TAURI" build --runner cargo-xwin --target x86_64-pc-windows-msvc "$@"
+"$TAURI" build --runner cargo-xwin --target x86_64-pc-windows-msvc "$@"
+cd "$ROOT"
+cargo xwin build --release -p rhythia-cli --target x86_64-pc-windows-msvc
+echo
+echo "cli: $ROOT/target/x86_64-pc-windows-msvc/release/rhythr-cli.exe"

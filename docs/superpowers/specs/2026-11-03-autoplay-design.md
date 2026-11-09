@@ -130,3 +130,14 @@ A mark inside the rendered content that survives everything short of a re-render
 - Where the compositor pass sits in the existing frame graph and how the pattern texture is sampled for non-16:9 outputs (keep the canonical grid stretched to the frame; the checker does the same).
 - The Rust port of the detector's maths (FFT via an existing crate or a direct correlation on the coarse grid; speed is not critical, a minute per video is fine).
 - The order of the three settings in the tab and the exact copy, as long as the mockup's wording is kept where it exists.
+
+## As built (addendum, 2026-11-09, release 0.8.0)
+
+The build followed this document with these departures, each decided by the owner during the test rounds:
+
+- The dance belly scales with the distance between notes (plus the time to spare), not with time alone: on a real map almost no segment had time to spare, so Dance looked like Normal (round 1).
+- A stream is planned as one flow, not note by note: runs of stream gaps, Catmull-Rom pieces, a taut string for the speed profile with ramps at speed changes, loops at reversals, exact passes at chords, a wind-up from the centre into a map's first stream. The design and its measurements are in `2026-11-08-autoplay-stream-flow-design.md`.
+- A fourth setting, Aim: Centre (through every note's centre, the default) or Flow (a little inside the corners of a stream, always within the hit area). CLI `--aim centre|flow`.
+- The ticker is a fifth setting, Banner, see the anti-goals above. The hidden mark and the tag stay unconditional.
+- `rhythr-cli` looks for ffmpeg next to itself, in the app's install folder and on PATH, and ships on the release page for Windows and Linux; the team's guide names the files.
+

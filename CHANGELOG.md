@@ -3,19 +3,24 @@
 rhythr is an unofficial community tool and is not affiliated with or
 endorsed by Rhythia or Capo Games.
 
-## Unreleased
+## v0.8.0 (2026-11-09)
 
 - **Autoplay.** Render a map without a replay: export it from the game
   (right-click, Export), press Autoplay above the preview and pick it from
   the list. A synthetic cursor plays every note, Normal or Cursor dance, with
   a rest in the centre on long pauses and the game's speed mod as a setting.
-  Every Autoplay video is marked as one: a hidden mark in the picture that
-  `rhythr-cli mark-check` finds and a metadata tag, plus a ticker across the
-  top that can be switched off (Autoplay tab, Banner; CLI `--no-banner`).
+  A stream is played as one flow, not a hop per note: steady speed, a loop at
+  every reversal, a wind-up into the first note. Aim chooses Centre (through
+  every note's centre) or Flow (a little inside the corners, like a player).
   Results screen, score card, Analyze and ghost races are off for Autoplay.
-  CLI: `rhythr-cli autoplay` and `rhythr-cli mark-check`; the CLI finds
-  ffmpeg next to itself, in the rhythr app's install folder or on PATH
-  (`--ffmpeg` for another). Codes `RH-AUT`.
+  CLI: `rhythr-cli autoplay`. Codes `RH-AUT`.
+- **Every Autoplay video is marked as one.** A hidden mark in the picture
+  that `rhythr-cli mark-check` finds and a metadata tag, both always; plus a
+  ticker across the top that can be switched off (Autoplay tab, Banner; CLI
+  `--no-banner`). `docs/AUTOPLAY-VERIFICATION.md` explains the check.
+- **`rhythr-cli` is on the release page** for Windows and Linux, next to the
+  installers, and finds ffmpeg next to itself, in the rhythr app's install
+  folder or on PATH (`--ffmpeg` for another).
 
 ## v0.7.0 (2026-11-01)
 
