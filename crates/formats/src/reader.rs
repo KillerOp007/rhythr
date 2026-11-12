@@ -36,6 +36,35 @@ impl<'a> Reader<'a> {
         Ok(self.u8()? != 0)
     }
 
+    pub fn u16(&mut self) -> Result<u16> {
+        Ok(u16::from_le_bytes(self.take(2)?.try_into().unwrap()))
+    }
+
+    pub fn u32(&mut self) -> Result<u32> {
+        Ok(u32::from_le_bytes(self.take(4)?.try_into().unwrap()))
+    }
+
+    pub fn u64(&mut self) -> Result<u64> {
+        Ok(u64::from_le_bytes(self.take(8)?.try_into().unwrap()))
+    }
+
+    /// A Godot `store_line` string: UTF-8 bytes up to a newline, which is
+    /// consumed; a carriage return before it is dropped like `get_line`
+    /// does.
+    pub fn line(&mut self) -> Result<String> {
+        let start = self.pos;
+        let rest = &self.data[self.pos..];
+        let Some(len) = rest.iter().position(|&b| b == b'\n') else {
+            return Err(Error::UnexpectedEof {
+                at: self.data.len(),
+                wanted: 1,
+            });
+        };
+        let bytes = self.take(len + 1)?;
+        let text = bytes[..len].strip_suffix(b"\r").unwrap_or(&bytes[..len]);
+        String::from_utf8(text.to_vec()).map_err(|_| Error::InvalidUtf8 { at: start })
+    }
+
     pub fn i32(&mut self) -> Result<i32> {
         Ok(i32::from_le_bytes(self.take(4)?.try_into().unwrap()))
     }

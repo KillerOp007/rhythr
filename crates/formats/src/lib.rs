@@ -1,4 +1,5 @@
-//! Read-only parsers for Rhythia file formats.
+//! Read-only parsers for Rhythia file formats, and for the legacy
+//! Sound Space Plus replay format (`.sspre`).
 //!
 //! Hard project rule: replay data is never written, re-encoded or modified.
 //! This crate deliberately has no `.rhr` serializer and must never grow one;
@@ -7,6 +8,7 @@
 pub mod map;
 pub mod rhr;
 pub mod sspm;
+pub mod sspre;
 
 mod reader;
 
@@ -40,6 +42,8 @@ pub enum Error {
     UnsupportedExtension(String),
     #[error(".sspm map: {0}")]
     Malformed(String),
+    #[error(".sspre replay: {0}")]
+    BadSspre(String),
     #[error(transparent)]
     Io(#[from] io::Error),
 }

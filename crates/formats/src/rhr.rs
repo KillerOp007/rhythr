@@ -33,7 +33,7 @@ pub const V_PITCH_LOCK: i32 = 20260803;
 
 /// Offset between .NET DateTime ticks (100 ns since 0001-01-01) and the
 /// Unix epoch, in ticks.
-const UNIX_EPOCH_TICKS: i64 = 621_355_968_000_000_000;
+pub(crate) const UNIX_EPOCH_TICKS: i64 = 621_355_968_000_000_000;
 
 /// Bytes one frame occupies on the wire: 4 (time, i32 or f32) + 4 (x) +
 /// 4 (y) + 4 (health) + 1 (hit flag).
@@ -55,7 +55,36 @@ pub struct Frame {
     pub hit: bool,
 }
 
-/// A fully parsed `.rhr` replay.
+/// Where a [`Replay`] came from.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum Origin {
+    /// A `.rhr` file, read as stored.
+    #[default]
+    Rhr,
+    /// Converted from a legacy Sound Space Plus `.sspre` file
+    /// ([`crate::sspre`]). Its frame times are already song time.
+    Sspre {
+        /// Where the player skipped ahead. A skip lands a fixed lead before
+        /// the next note, a distance only the map knows, so
+        /// `rhythia_sim::timebase::normalize` sizes each one once the map
+        /// is at hand (and again when the map changes).
+        skips: Vec<Skip>,
+    },
+}
+
+/// A skip in a converted legacy replay.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Skip {
+    /// Song time of the skip on the run's own clock, as if no skip had
+    /// ever jumped it forward.
+    pub at_ms: f64,
+    /// The forward jump currently applied to every later frame; 0 until a
+    /// map has sized it.
+    pub jump_ms: f64,
+}
+
+/// A fully parsed replay: a `.rhr` file, or another client's format
+/// converted into the same shape (see [`Origin`]).
 #[derive(Debug, Clone)]
 pub struct Replay {
     pub version: i32,
@@ -103,6 +132,7 @@ pub struct Replay {
     /// Bytes left after the last frame. Always 0 for well-formed files;
     /// nonzero is surfaced by the integrity check.
     pub trailing_bytes: usize,
+    pub origin: Origin,
 }
 
 impl Replay {
@@ -111,7 +141,12 @@ impl Replay {
         Replay::parse(&data)
     }
 
+    /// Parses a replay file. The format is recognised by content: a
+    /// legacy `.sspre` file is converted, anything else is read as `.rhr`.
     pub fn parse(data: &[u8]) -> Result<Replay> {
+        if crate::sspre::has_signature(data) {
+            return crate::sspre::Sspre::parse(data)?.to_replay();
+        }
         let mut r = Reader::new(data);
 
         let version = r.i32()?;
@@ -216,7 +251,20 @@ impl Replay {
             pitch_lock,
             frames,
             trailing_bytes: r.remaining(),
+            origin: Origin::Rhr,
         })
+    }
+
+    /// True when both runs were played on the same map: by online id when
+    /// both carry one, by legacy id otherwise (a converted legacy replay
+    /// has no online id, and two of those must not pass for the same map
+    /// just because both say 0).
+    pub fn same_map(&self, other: &Replay) -> bool {
+        if self.map_id > 0 && other.map_id > 0 {
+            self.map_id == other.map_id
+        } else {
+            self.legacy_map_id == other.legacy_map_id
+        }
     }
 
     pub fn failed(&self) -> bool {

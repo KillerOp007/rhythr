@@ -92,7 +92,7 @@ function renderReplayCard() {
   $("card-replay").querySelector("h2").textContent = "Replay";
   $("btn-replay").textContent = "Browse";
   if (!r) {
-    body.innerHTML = `<p class="hint">Drop a <code>.rhr</code> file anywhere</p>`;
+    body.innerHTML = `<p class="hint">Drop a <code>.rhr</code> or <code>.sspre</code> file anywhere</p>`;
     return;
   }
   const date = r.unix_ms ? new Date(r.unix_ms).toLocaleString() : "";
@@ -2237,11 +2237,14 @@ async function dropGhost(path) {
   }
 }
 
+// A replay rhythr can open: Rhythia (.rhr) or legacy Sound Space Plus (.sspre).
+const isReplayPath = (p) => /\.(rhr|sspre)$/i.test(p);
+
 async function loadPath(path) {
   const name = path.split(/[\\/]/).pop();
   const lower = path.toLowerCase();
   try {
-    if (lower.endsWith(".rhr")) {
+    if (isReplayPath(lower)) {
       await call(() => invoke("load_replay", { path }));
       loadNote(`Loaded replay: ${name}`);
     } else if (lower.endsWith(".sspm") || lower.endsWith(".rhm")) {
@@ -2333,13 +2336,13 @@ function initDragDrop() {
     clearHover();
     // Replays first: loading a replay may swap the auto-resolved map, so a
     // map dropped in the same gesture must land after it.
-    const rank = (p) => (p.toLowerCase().endsWith(".rhr") ? 0 : 1);
+    const rank = (p) => (isReplayPath(p) ? 0 : 1);
     let paths = [...(e.payload.paths || [])].sort((a, b) => rank(a) - rank(b));
     if (target?.kind === "ghost") {
       // ALL replays in the gesture go through the ghost route: two runs
       // dropped together become main + ghost instead of the second one
       // silently replacing the first.
-      const rhrs = paths.filter((p) => p.toLowerCase().endsWith(".rhr"));
+      const rhrs = paths.filter(isReplayPath);
       for (const p of rhrs) await dropGhost(p);
       paths = paths.filter((p) => !rhrs.includes(p));
     } else if (target?.kind === "background" && paths.length) {
@@ -2374,7 +2377,7 @@ function initDragDrop() {
 
 function initControls() {
   const pickReplay = async () => {
-    const p = await dialog.open({ filters: [{ name: "Rhythia replay", extensions: ["rhr"] }] });
+    const p = await dialog.open({ filters: [{ name: "Replay", extensions: ["rhr", "sspre"] }] });
     if (p) await loadPath(p);
   };
   $("btn-replay").addEventListener("click", () => {
@@ -2414,7 +2417,7 @@ function initControls() {
   });
   $("btn-config-clear").addEventListener("click", () => call(() => invoke("clear_config")).then(schedulePreview));
   $("btn-ghost").addEventListener("click", async () => {
-    const p = await dialog.open({ filters: [{ name: "Rhythia replay", extensions: ["rhr"] }] });
+    const p = await dialog.open({ filters: [{ name: "Replay", extensions: ["rhr", "sspre"] }] });
     if (!p) return;
     try {
       await call(() => invoke("load_ghost", { path: p }));

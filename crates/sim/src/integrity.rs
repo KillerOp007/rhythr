@@ -212,7 +212,10 @@ pub fn verify(replay: &Replay, map: &Map, outcome: &MatchOutcome) -> IntegrityRe
             |i| format!("frame {} steps back", i + 1),
         ),
     );
-    if let Some(online_id) = map.meta.online_id {
+    // A converted legacy replay names its map by legacy id only; it has no
+    // online id to compare.
+    let has_online_id = !matches!(replay.origin, rhythia_formats::rhr::Origin::Sspre { .. });
+    if let Some(online_id) = map.meta.online_id.filter(|_| has_online_id) {
         push(
             "map online id matches replay",
             Severity::Warning,
@@ -289,6 +292,70 @@ mod wrong_map_tests {
         // Heuristics deliberately quiet: flags==header, few orphans, most hits land.
         let report = report_with(vec![id_check(false)], 471, 366, 105);
         assert!(looks_like_the_wrong_map(471, &report, false));
+    }
+
+    /// A legacy Sound Space Plus replay knows its map by name only. Holding
+    /// its missing online id against a map that has one would call every
+    /// such run "the wrong map".
+    #[test]
+    fn a_converted_replay_is_not_checked_against_an_online_id() {
+        use rhythia_formats::map::{Map, MapMeta, Note};
+        use rhythia_formats::rhr::{Frame, Origin, Replay};
+        let map = Map {
+            meta: MapMeta {
+                online_id: Some(13076),
+                legacy_id: "some_map".into(),
+                ..Default::default()
+            },
+            notes: vec![Note {
+                time_ms: 1000,
+                x: 1.0,
+                y: 1.0,
+            }],
+            ..Default::default()
+        };
+        let frame = Frame {
+            ms: 1010.0,
+            x: 0.0,
+            y: 0.0,
+            health: 1.0,
+            hit: true,
+        };
+        let mut replay = Replay {
+            version: 5,
+            timestamp_ticks: 0,
+            player_name: String::new(),
+            legacy_map_id: "some_map".into(),
+            map_id: 0,
+            start_from_ms: 0,
+            mode: String::new(),
+            passed: true,
+            mods: "[]".into(),
+            spin: false,
+            speed: 1.0,
+            total_score: 0,
+            accuracy_pct: 100.0,
+            hits: 1,
+            misses: 0,
+            points: 0.0,
+            fail_time_ms: -1,
+            beatmap_hash: String::new(),
+            pitch_lock: false,
+            frames: vec![frame],
+            trailing_bytes: 0,
+            origin: Origin::Sspre { skips: vec![] },
+        };
+        let names = |r: &Replay| -> Vec<&'static str> {
+            verify_replay(r, &map)
+                .checks
+                .iter()
+                .map(|c| c.name)
+                .collect()
+        };
+        assert!(!names(&replay).contains(&"map online id matches replay"));
+        assert!(names(&replay).contains(&"map legacy id matches replay"));
+        replay.origin = Origin::Rhr;
+        assert!(names(&replay).contains(&"map online id matches replay"));
     }
 
     /// A passing id check with quiet heuristics is NOT the wrong map: this

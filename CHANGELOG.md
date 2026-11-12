@@ -3,6 +3,16 @@
 rhythr is an unofficial community tool and is not affiliated with or
 endorsed by Rhythia or Capo Games.
 
+## Unreleased
+
+- **Sound Space Plus replays (test builds only).** rhythr opens legacy
+  `.sspre` replays from Sound Space Plus next to `.rhr`: drop the file, then
+  pick its map (`.sspm`). The recording is stamped in real time, so song time
+  is rebuilt from its own pause, unpause and skip signals, the way the game
+  plays it back. The format stores no player name, no score and no health:
+  those stay empty and the health bar stays full. Checked against the game's
+  source and synthetic recordings so far, not yet against real ones.
+
 ## v0.8.0 (2026-11-09)
 
 - **Autoplay.** Render a map without a replay: export it from the game

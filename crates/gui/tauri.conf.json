@@ -49,6 +49,15 @@
         "description": "Rhythia replay file",
         "role": "Viewer",
         "mimeType": "application/x-rhythia-replay"
+      },
+      {
+        "ext": [
+          "sspre"
+        ],
+        "name": "Sound Space Plus Replay",
+        "description": "Sound Space Plus replay file",
+        "role": "Viewer",
+        "mimeType": "application/x-sound-space-plus-replay"
       }
     ],
     "windows": {

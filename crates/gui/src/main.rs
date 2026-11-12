@@ -2148,6 +2148,14 @@ fn notify_sources_changed(app_handle: &tauri::AppHandle) {
     let _ = app_handle.emit("sources-changed", ());
 }
 
+/// A file rhythr opens as a replay: Rhythia (`.rhr`) or legacy Sound Space
+/// Plus (`.sspre`). The parser tells the two apart by content; this only
+/// decides whether a path handed to the app is a replay at all.
+fn is_replay_path(path: &str) -> bool {
+    let lower = path.to_lowercase();
+    lower.ends_with(".rhr") || lower.ends_with(".sspre")
+}
+
 #[tauri::command]
 fn load_replay(
     state: tauri::State<'_, App>,
@@ -2164,7 +2172,7 @@ fn load_replay(
     // mismatch. Auto-resolved maps for another id are swapped out.
     let keep_map = inner.map.is_some()
         && (inner.map_source == "local"
-            || matches!(&inner.replay, Some((_, old)) if old.map_id == replay.map_id));
+            || matches!(&inner.replay, Some((_, old)) if old.same_map(&replay)));
     if !keep_map {
         inner.map = None;
         inner.map_source.clear();
@@ -4520,6 +4528,7 @@ fn preview_scene() -> (rhythia_formats::map::Map, rhythia_formats::rhr::Replay) 
             hit: false,
         }],
         trailing_bytes: 0,
+        origin: rhythia_formats::rhr::Origin::Rhr,
     };
     (map, replay)
 }
@@ -5974,9 +5983,7 @@ fn main() {
                 inner.base_config = SkinConfig::default();
             }
         }
-        let arg_replay = std::env::args()
-            .nth(1)
-            .filter(|a| a.to_lowercase().ends_with(".rhr"));
+        let arg_replay = std::env::args().nth(1).filter(|a| is_replay_path(a));
         // An Autoplay session comes back when its export still exists; a
         // replay on the command line wins over it.
         let restored_autoplay = arg_replay.is_none()
@@ -6175,7 +6182,7 @@ fn main() {
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             // A .rhr double-click while the app runs lands here as a second
             // instance's argv, so forward it and pull the window up.
-            if let Some(path) = argv.get(1).filter(|a| a.to_lowercase().ends_with(".rhr")) {
+            if let Some(path) = argv.get(1).filter(|a| is_replay_path(a)) {
                 let _ = app.emit("open-replay", path.clone());
             }
             if let Some(win) = app.get_webview_window("main") {

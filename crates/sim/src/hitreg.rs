@@ -329,6 +329,7 @@ mod tests {
             pitch_lock: false,
             frames: Vec::new(),
             trailing_bytes: 0,
+            origin: rhythia_formats::rhr::Origin::Rhr,
         }
     }
 
