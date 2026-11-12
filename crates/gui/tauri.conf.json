@@ -58,6 +58,15 @@
         "description": "Sound Space Plus replay file",
         "role": "Viewer",
         "mimeType": "application/x-sound-space-plus-replay"
+      },
+      {
+        "ext": [
+          "phxr"
+        ],
+        "name": "Community Client Replay",
+        "description": "Replay file of the free community client",
+        "role": "Viewer",
+        "mimeType": "application/x-phxr-replay"
       }
     ],
     "windows": {

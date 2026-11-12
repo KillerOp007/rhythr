@@ -2148,12 +2148,45 @@ fn notify_sources_changed(app_handle: &tauri::AppHandle) {
     let _ = app_handle.emit("sources-changed", ());
 }
 
-/// A file rhythr opens as a replay: Rhythia (`.rhr`) or legacy Sound Space
-/// Plus (`.sspre`). The parser tells the two apart by content; this only
-/// decides whether a path handed to the app is a replay at all.
+/// A file rhythr opens as a replay: Rhythia (`.rhr`), legacy Sound Space
+/// Plus (`.sspre`) or the free community client (`.phxr`). The parser
+/// tells them apart by content; this only decides whether a path handed
+/// to the app is a replay at all.
 fn is_replay_path(path: &str) -> bool {
     let lower = path.to_lowercase();
-    lower.ends_with(".rhr") || lower.ends_with(".sspre")
+    [".rhr", ".sspre", ".phxr"].iter().any(|ext| lower.ends_with(ext))
+}
+
+/// The map a `.phxr` was played on, when the replay still sits where the
+/// free client wrote it: `<user folder>/replays/<run>.phxr`, with the map
+/// in `<user folder>/maps/<map folder>/`. That copy lists the notes in
+/// exactly the order the replay's results count them in.
+fn client_map_beside(replay_path: &Path, replay: &Replay) -> Option<(PathBuf, Map)> {
+    if !matches!(replay.origin, rhythia_formats::rhr::Origin::Phxr(_)) {
+        return None;
+    }
+    // Older builds of the client stored the name with its export suffix.
+    let name = replay.legacy_map_id.strip_suffix(".phxm").unwrap_or(&replay.legacy_map_id);
+    // The name comes out of the file. It has to be one plain folder name,
+    // never a path that walks somewhere else.
+    let mut parts = Path::new(name).components();
+    if !matches!((parts.next(), parts.next()), (Some(std::path::Component::Normal(_)), None)) {
+        return None;
+    }
+    let folder = replay_path.parent()?.parent()?.join("maps").join(name);
+    let map = Map::from_path(&folder).ok()?;
+    Some((folder, map))
+}
+
+/// A map for this replay that needs no download and no browsing: the
+/// cached download of its online id, or the free client's own copy next
+/// to the replay. Returns the map, where it came from, and whether a
+/// cached copy no longer hashes to what the replay was recorded against.
+fn resolve_map_offline(replay_path: &Path, replay: &Replay) -> Option<(PathBuf, Map, &'static str, bool)> {
+    if let Some((path, map, mismatch)) = try_cached_map(replay) {
+        return Some((path, map, "cache", mismatch));
+    }
+    client_map_beside(replay_path, replay).map(|(path, map)| (path, map, "client", false))
 }
 
 #[tauri::command]
@@ -2177,9 +2210,9 @@ fn load_replay(
         inner.map = None;
         inner.map_source.clear();
         inner.map_hash_mismatch = false;
-        if let Some((p, m, mismatch)) = try_cached_map(&replay) {
+        if let Some((p, m, source, mismatch)) = resolve_map_offline(Path::new(&path), &replay) {
             inner.map = Some((p, m));
-            inner.map_source = "cache".into();
+            inner.map_source = source.into();
             inner.map_hash_mismatch = mismatch;
         }
     } else if inner.map_source != "local" {
@@ -6004,9 +6037,9 @@ fn main() {
                 // The mismatch verdict comes back with the map now, so
                 // restoring a session says the same thing about a re-uploaded
                 // map that loading the replay by hand would.
-                if let Some((p, m, mismatch)) = try_cached_map(&replay) {
+                if let Some((p, m, source, mismatch)) = resolve_map_offline(Path::new(&path), &replay) {
                     inner.map = Some((p, m));
-                    inner.map_source = "cache".into();
+                    inner.map_source = source.into();
                     inner.map_hash_mismatch = mismatch;
                 }
                 inner.replay = Some((PathBuf::from(path), replay));

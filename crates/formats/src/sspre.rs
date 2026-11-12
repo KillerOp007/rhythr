@@ -22,7 +22,7 @@
 //! serializer and none may be added.
 
 use crate::reader::Reader;
-use crate::rhr::{Frame, Origin, Replay, Skip, UNIX_EPOCH_TICKS, V_PITCH_LOCK};
+use crate::rhr::{civil_ticks, Frame, Origin, Replay, Skip, V_PITCH_LOCK};
 use crate::{Error, Result};
 
 /// `Ss*R`, the first four bytes of every `.sspre` file.
@@ -331,6 +331,7 @@ impl Sspre {
 
         let (mut hits, mut misses) = (0i32, 0i32);
         let (mut unflagged_hits, mut gave_up) = (0u32, false);
+        let mut judged_end: Option<u32> = None;
         let mut pause_ms = anchor_ms;
         // The furthest song time the run has reached; a pause counts, so
         // the run-up that replays the last stretch before it never does.
@@ -340,11 +341,15 @@ impl Sspre {
 
         for event in &self.events {
             match *event {
-                Event::Hit { .. } => {
+                Event::Hit { note } => {
                     hits += 1;
                     unflagged_hits += 1;
+                    judged_end = judged_end.max(Some(note.saturating_add(1)));
                 }
-                Event::Miss { .. } => misses += 1,
+                Event::Miss { note } => {
+                    misses += 1;
+                    judged_end = judged_end.max(Some(note.saturating_add(1)));
+                }
                 Event::Clock { rms, signal } => {
                     let now = real(rms);
                     let ms = anchor_ms + (now - anchor_rms) * rate;
@@ -425,7 +430,7 @@ impl Sspre {
             accuracy_pct: if judged > 0 {
                 hits as f32 / judged as f32 * 100.0
             } else {
-                0.0
+                100.0
             },
             hits,
             misses,
@@ -435,7 +440,7 @@ impl Sspre {
             pitch_lock: false,
             frames,
             trailing_bytes: self.trailing_bytes,
-            origin: Origin::Sspre { skips },
+            origin: Origin::Sspre { skips, judged_end },
         })
     }
 
@@ -446,25 +451,10 @@ impl Sspre {
         let (date, time) = stamp.split_once('_')?;
         let mut d = date.split('-').map(|p| p.parse::<i64>().ok());
         let mut t = time.split('-').map(|p| p.parse::<i64>().ok());
-        let (year, month, day) = (d.next()??, d.next()??, d.next()??);
-        let (hour, minute, second) = (t.next()??, t.next()??, t.next()??);
-        let in_range = (1..=9999).contains(&year)
-            && (1..=12).contains(&month)
-            && (1..=31).contains(&day)
-            && (0..24).contains(&hour)
-            && (0..60).contains(&minute)
-            && (0..60).contains(&second);
-        if !in_range {
-            return None;
-        }
-        // Days since 1970-01-01 (the civil-from-days algorithm, inverted).
-        let y = if month <= 2 { year - 1 } else { year };
-        let (era, year_of_era) = (y / 400, y % 400);
-        let day_of_year = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + day - 1;
-        let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
-        let days = era * 146_097 + day_of_era - 719_468;
-        let seconds = days * 86_400 + hour * 3600 + minute * 60 + second;
-        Some(seconds * 10_000_000 + UNIX_EPOCH_TICKS)
+        civil_ticks(
+            (d.next()??, d.next()??, d.next()??),
+            (t.next()??, t.next()??, t.next()??),
+        )
     }
 }
 
@@ -720,7 +710,36 @@ mod tests {
         assert_eq!(r.mode, MODE);
         assert_eq!(r.speed, 1.0);
         assert!(r.spin, "cam_unlock is the spin camera");
-        assert_eq!(r.origin, Origin::Sspre { skips: vec![] });
+        assert_eq!(
+            r.origin,
+            Origin::Sspre {
+                skips: vec![],
+                judged_end: None
+            }
+        );
+    }
+
+    #[test]
+    fn the_highest_judged_note_marks_where_the_run_got_to() {
+        let data = Fixture::new(4, ID, PLAIN)
+            .cursor(2999, 1.0, 1.0)
+            .signal(RS_HIT, 0)
+            .cursor(3009, 1.0, 1.0)
+            .signal(RS_MISS, 2)
+            .signal(RS_HIT, 1)
+            .cursor(3500, 1.0, 1.0)
+            .finish(3500);
+        let Origin::Sspre { judged_end, .. } = replay(&data).origin else {
+            panic!("not a legacy origin");
+        };
+        assert_eq!(judged_end, Some(3));
+    }
+
+    #[test]
+    fn a_run_that_judged_nothing_reads_as_full_accuracy() {
+        let data = Fixture::new(4, ID, PLAIN).cursor(10, 1.0, 1.0).finish(10);
+        let r = replay(&data);
+        assert_eq!((r.hits, r.misses, r.accuracy_pct), (0, 0, 100.0));
     }
 
     #[test]
@@ -800,7 +819,8 @@ mod tests {
                 skips: vec![Skip {
                     at_ms: 1000.0,
                     jump_ms: 0.0
-                }]
+                }],
+                judged_end: None
             }
         );
         assert_eq!(

@@ -414,11 +414,12 @@ pub fn render_video(
     }
     // Some wild replays store wall-clock frame times instead of song time
     // (speed already applied); normalise so the speed pipeline below never
-    // doubles up or drops the speed. A converted legacy replay may still
-    // carry skips only the map can size. No-op for well-formed replays.
+    // doubles up or drops the speed. A converted replay is always paired
+    // with the map here, which is cheap and settles what only the map can
+    // (skips, note results, an early end). No-op for well-formed `.rhr`.
     let mut replay_owned;
-    let replay = if rhythia_sim::timebase::time_scale(map, replay) != 1.0
-        || rhythia_sim::timebase::has_pending_skips(replay)
+    let replay = if replay.origin.converted()
+        || rhythia_sim::timebase::time_scale(map, replay) != 1.0
     {
         replay_owned = replay.clone();
         rhythia_sim::timebase::normalize(&mut replay_owned, map);

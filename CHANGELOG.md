@@ -5,13 +5,25 @@ endorsed by Rhythia or Capo Games.
 
 ## Unreleased
 
-- **Sound Space Plus replays (test builds only).** rhythr opens legacy
-  `.sspre` replays from Sound Space Plus next to `.rhr`: drop the file, then
-  pick its map (`.sspm`). The recording is stamped in real time, so song time
-  is rebuilt from its own pause, unpause and skip signals, the way the game
-  plays it back. The format stores no player name, no score and no health:
-  those stay empty and the health bar stays full. Checked against the game's
-  source and synthetic recordings so far, not yet against real ones.
+- **Replays from the free community clients (test builds only).** rhythr
+  opens two more replay formats next to `.rhr`.
+  - `.sspre`, legacy Sound Space Plus: drop the file, then pick its map
+    (`.sspm`). The recording is stamped in real time, so song time is rebuilt
+    from its own pause, unpause and skip signals, the way the game plays it
+    back.
+  - `.phxr`, the current free client (the Godot 4 rewrite): the file stores a
+    result per note instead of a hit flag per frame, and rhythr places the
+    hits once the map is loaded. A replay that still sits in the client's
+    `replays` folder finds its map in the `maps` folder next to it by itself.
+    Otherwise pick the map: the client's `.phxm` export, `objects.phxmo`
+    inside the client's folder for that map, or its `.sspm`.
+
+  Neither format stores a player name or a score. The health bar follows the
+  client's rule for `.phxr` and stays full for `.sspre`. A run that was failed
+  or abandoned ends where its recording ends. The check for `.phxr` covers
+  the file's checksum, the map's note count and whether the recorded cursor
+  was on the note at each hit. Checked against the clients' source and
+  synthetic recordings so far, not yet against real ones.
 
 ## v0.8.0 (2026-11-09)
 

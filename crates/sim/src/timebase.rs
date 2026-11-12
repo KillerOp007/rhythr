@@ -18,9 +18,10 @@ use crate::hitreg::{hit_window_ms, match_hits};
 /// 1.0 when they already are (or the replay has no speed mod), or the
 /// replay's speed when they are wall-clock.
 pub fn time_scale(map: &Map, replay: &Replay) -> f64 {
-    // A converted legacy replay had its song time rebuilt from the game's
-    // own clock signals; there is nothing to detect.
-    if matches!(replay.origin, Origin::Sspre { .. }) {
+    // A converted replay is song time by construction: a legacy one had
+    // it rebuilt from the game's own clock signals, the free client's
+    // format stores it. There is nothing to detect.
+    if replay.origin.converted() {
         return 1.0;
     }
     let speed = replay.speed as f64;
@@ -54,13 +55,6 @@ pub fn time_scale(map: &Map, replay: &Replay) -> f64 {
 /// song clock to `next note - 1000 - 1000 * speed` (`NoteManager.gd`).
 const SKIP_LEAD_MS: f64 = 1000.0;
 
-/// True while a converted legacy replay has a skip no map has sized yet
-/// (see [`Origin::Sspre`]); its later frame times are provisional until
-/// [`normalize`] has run.
-pub fn has_pending_skips(replay: &Replay) -> bool {
-    matches!(&replay.origin, Origin::Sspre { skips } if skips.iter().any(|s| s.jump_ms == 0.0))
-}
-
 /// Sizes the skips of a converted legacy replay against this map: each
 /// one shifts every later frame forward so that the skip moment lands the
 /// game's fixed lead before the next note. Jumps sized against an earlier
@@ -68,7 +62,7 @@ pub fn has_pending_skips(replay: &Replay) -> bool {
 /// then the right one ends in the right place. Returns true when a frame
 /// moved.
 fn resolve_skips(replay: &mut Replay, map: &Map) -> bool {
-    let Origin::Sspre { skips } = &mut replay.origin else {
+    let Origin::Sspre { skips, .. } = &mut replay.origin else {
         return false;
     };
     let lead = SKIP_LEAD_MS + SKIP_LEAD_MS * f64::from(replay.speed);
@@ -108,13 +102,26 @@ fn resolve_skips(replay: &mut Replay, map: &Map) -> bool {
     skips.iter().map(|s| s.jump_ms).ne(before)
 }
 
-/// Brings a replay's frame times into song time in place: sizes the skips
-/// of a converted legacy replay, and rescales a wall-clock `.rhr` (frames,
-/// fail time, start offset). Idempotent: once in song time this is a
-/// no-op. Returns true when frame times changed.
+/// Settles what a replay can only settle with its map, in place:
+///
+/// * a wall-clock `.rhr` is rescaled into song time (frames, fail time,
+///   start offset);
+/// * a converted legacy replay has its skips sized and, when it stopped
+///   short of the last note, its end marked;
+/// * a converted `.phxr` gets its note results placed as flagged frames
+///   (see [`crate::pairing`]).
+///
+/// Idempotent: a second pass over the same pair is a no-op, and pairing
+/// with another map replaces what the first one produced. Returns true
+/// when the replay changed.
 pub fn normalize(replay: &mut Replay, map: &Map) -> bool {
-    if resolve_skips(replay, map) {
-        return true;
+    match replay.origin {
+        Origin::Rhr => {}
+        Origin::Sspre { .. } => {
+            let moved = resolve_skips(replay, map);
+            return crate::pairing::mark_early_end(replay, map) || moved;
+        }
+        Origin::Phxr(_) => return crate::pairing::place_judgments(replay, map),
     }
     let scale = time_scale(map, replay);
     if scale == 1.0 {
@@ -198,14 +205,15 @@ mod tests {
                     jump_ms: 0.0,
                 })
                 .collect(),
+            judged_end: None,
         };
         r
     }
 
     fn jumps(r: &Replay) -> Vec<f64> {
         match &r.origin {
-            Origin::Sspre { skips } => skips.iter().map(|s| s.jump_ms).collect(),
-            Origin::Rhr => Vec::new(),
+            Origin::Sspre { skips, .. } => skips.iter().map(|s| s.jump_ms).collect(),
+            _ => Vec::new(),
         }
     }
 
@@ -221,7 +229,6 @@ mod tests {
         assert!(normalize(&mut r, &map));
         assert_eq!(times(&r), vec![1500.0, 2000.0, 58500.0, 59000.0]);
         assert_eq!(jumps(&r), vec![56000.0]);
-        assert!(!has_pending_skips(&r));
         assert!(!normalize(&mut r, &map), "a second pass changes nothing");
         assert_eq!(times(&r), vec![1500.0, 2000.0, 58500.0, 59000.0]);
     }
@@ -236,7 +243,6 @@ mod tests {
         let mut direct = fresh();
         normalize(&mut direct, &right);
         let mut detour = fresh();
-        assert!(has_pending_skips(&detour));
         normalize(&mut detour, &wrong);
         assert_ne!(times(&detour), times(&direct));
         assert!(normalize(&mut detour, &right));

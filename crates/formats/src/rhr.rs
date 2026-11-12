@@ -35,6 +35,32 @@ pub const V_PITCH_LOCK: i32 = 20260803;
 /// Unix epoch, in ticks.
 pub(crate) const UNIX_EPOCH_TICKS: i64 = 621_355_968_000_000_000;
 
+/// A calendar date and time of day (read as UTC) as .NET ticks, or None
+/// when a part is out of range. The other clients name their recordings
+/// by date; this is what turns such a name into [`Replay::timestamp_ticks`].
+pub(crate) fn civil_ticks(
+    (year, month, day): (i64, i64, i64),
+    (hour, minute, second): (i64, i64, i64),
+) -> Option<i64> {
+    let in_range = (1..=9999).contains(&year)
+        && (1..=12).contains(&month)
+        && (1..=31).contains(&day)
+        && (0..24).contains(&hour)
+        && (0..60).contains(&minute)
+        && (0..60).contains(&second);
+    if !in_range {
+        return None;
+    }
+    // Days since 1970-01-01 (the civil-from-days algorithm, inverted).
+    let y = if month <= 2 { year - 1 } else { year };
+    let (era, year_of_era) = (y / 400, y % 400);
+    let day_of_year = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    let days = era * 146_097 + day_of_era - 719_468;
+    let seconds = days * 86_400 + hour * 3600 + minute * 60 + second;
+    Some(seconds * 10_000_000 + UNIX_EPOCH_TICKS)
+}
+
 /// Bytes one frame occupies on the wire: 4 (time, i32 or f32) + 4 (x) +
 /// 4 (y) + 4 (health) + 1 (hit flag).
 const WIRE_FRAME_BYTES: usize = 17;
@@ -69,7 +95,57 @@ pub enum Origin {
         /// `rhythia_sim::timebase::normalize` sizes each one once the map
         /// is at hand (and again when the map changes).
         skips: Vec<Skip>,
+        /// One past the highest note index the run judged, None when it
+        /// judged nothing. A run that stops short of the map's last note
+        /// ended early (failed or given up); where exactly is only known
+        /// with the map.
+        judged_end: Option<u32>,
     },
+    /// Converted from a `.phxr` file of the free community client
+    /// ([`crate::phxr`]). Its frame times are song time as stored.
+    Phxr(Judgments),
+}
+
+impl Origin {
+    /// True for a replay converted from another client's format. Such a
+    /// replay names the notes it judged itself, and parts of it only take
+    /// their final shape once the map is at hand.
+    pub fn converted(&self) -> bool {
+        !matches!(self, Origin::Rhr)
+    }
+}
+
+/// What a `.phxr` file records about the notes: a result per note instead
+/// of a flag on a frame. `rhythia_sim::timebase::normalize` turns these
+/// into flagged frames once the map supplies the note times.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Judgments {
+    /// Index of the first note the run judged (above 0 for a run started
+    /// mid-map).
+    pub first_note: usize,
+    /// One entry per judged note, in map order: [`Judgments::MISS`], or
+    /// how late the hit came in quarter milliseconds of real time.
+    pub results: Vec<u8>,
+    /// Note count of the map the run was played on.
+    pub map_notes: u64,
+    /// The run was played with the notes mirrored (x, y).
+    pub flip: (bool, bool),
+    /// The file's SHA-256 trailer matches its content.
+    pub checksum_ok: bool,
+    /// Hits where the recorded cursor was not on the note. Counted when
+    /// the replay is paired with a map; None before that.
+    pub off_target_hits: Option<u32>,
+}
+
+impl Judgments {
+    /// The result byte of a missed note.
+    pub const MISS: u8 = 255;
+
+    /// How late a result byte says the note was hit, in real-time
+    /// milliseconds; None for a miss.
+    pub fn lateness_ms(result: u8) -> Option<f64> {
+        (result != Self::MISS).then(|| f64::from(result) / 4.0)
+    }
 }
 
 /// A skip in a converted legacy replay.
@@ -137,15 +213,29 @@ pub struct Replay {
 
 impl Replay {
     pub fn from_path(path: impl AsRef<Path>) -> Result<Replay> {
+        let path = path.as_ref();
         let data = std::fs::read(path)?;
-        Replay::parse(&data)
+        let mut replay = Replay::parse(&data)?;
+        // A `.phxr` stores no date; the name the client gives the file
+        // does.
+        if matches!(replay.origin, Origin::Phxr(_)) {
+            let stem = path.file_stem().and_then(|s| s.to_str());
+            if let Some(ticks) = stem.and_then(crate::phxr::recorded_ticks) {
+                replay.timestamp_ticks = ticks;
+            }
+        }
+        Ok(replay)
     }
 
     /// Parses a replay file. The format is recognised by content: a
-    /// legacy `.sspre` file is converted, anything else is read as `.rhr`.
+    /// legacy `.sspre` file or a `.phxr` file is converted, anything else
+    /// is read as `.rhr`.
     pub fn parse(data: &[u8]) -> Result<Replay> {
         if crate::sspre::has_signature(data) {
             return crate::sspre::Sspre::parse(data)?.to_replay();
+        }
+        if crate::phxr::has_signature(data) {
+            return Ok(crate::phxr::Phxr::parse(data)?.to_replay());
         }
         let mut r = Reader::new(data);
 

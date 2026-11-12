@@ -18,11 +18,11 @@ use crate::{Error, Result};
 /// Read limit for the "map" JSON inside a `.rhm`. The largest kit map
 /// (3402 notes) is 95 KiB, so 64 MiB leaves room for absurdly dense maps
 /// while keeping a forged zip header from driving a huge allocation.
-const MAX_MAP_JSON_BYTES: u64 = 64 << 20;
+pub(crate) const MAX_MAP_JSON_BYTES: u64 = 64 << 20;
 
 /// Read limit for the embedded audio/cover. The kit's longest song is a
 /// 14 MiB mp3; 512 MiB is far beyond any real map asset.
-const MAX_MEDIA_BYTES: u64 = 512 << 20;
+pub(crate) const MAX_MEDIA_BYTES: u64 = 512 << 20;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Note {
@@ -70,19 +70,31 @@ impl MapMeta {
 }
 
 impl Map {
-    /// Loads a map by file extension: `.rhm` (zip) or `.json` (cache format).
+    /// Loads a map by file extension: `.rhm` (zip), `.json` (cache
+    /// format), `.sspm`, or a map of the free community client: its
+    /// `.phxm` export, its map folder, or the `objects.phxmo` inside
+    /// that folder (see [`crate::phxm`]).
     pub fn from_path(path: impl AsRef<Path>) -> Result<Map> {
         let path = path.as_ref();
+        if path.is_dir() {
+            return crate::phxm::from_folder(path);
+        }
         let ext = path
             .extension()
             .and_then(|e| e.to_str())
             .unwrap_or_default()
             .to_ascii_lowercase();
+        if ext == "phxmo" {
+            // The notes file stands for the folder it lives in.
+            let folder = path.parent().unwrap_or(Path::new("."));
+            return crate::phxm::from_folder(folder);
+        }
         let data = std::fs::read(path)?;
         match ext.as_str() {
             "rhm" => Map::from_rhm(&data),
             "json" => Map::from_cache_json(&data),
             "sspm" => crate::sspm::parse(&data),
+            "phxm" => crate::phxm::from_zip(&data),
             other => Err(Error::UnsupportedExtension(other.to_string())),
         }
     }
