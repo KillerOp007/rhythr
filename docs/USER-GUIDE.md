@@ -390,11 +390,12 @@ map, not for anything that could pass as a real play.
   restores the session on the next start as long as the export still
   exists.
 - **Settings** (Autoplay tab): Aim, **Centre** (through the centre of every
-  note; in a stream a corner is turned on the note itself) or **Flow** (like
-  a player's flow aim: a little inside the corners of a stream, always
-  within the hit area, so the turn spreads along the path); Movement,
-  **Normal** (soft, direct curves) or
-  **Cursor dance**; Dance amount, subtle, medium or wild; Rest in the centre
+  note; a corner is turned on the note itself) or **Flow** (like a player's
+  flow aim, everywhere: a jump is a round arc, a stream is passed a little
+  inside its corners, a pause is waited out near the next note; always
+  within the hit area); Movement, **Normal** (calm and direct) or
+  **Cursor dance** (the same line swung wide); Dance amount, subtle, medium
+  or wild; Rest in the centre
   after 2 to 8 real seconds without a note (with a speed mod the map time is
   divided by it, so the feel stays the same); Speed mod, 0.80x to 2.00x in
   steps of 0.05, which drives the song, the approach and the cursor like the
@@ -402,9 +403,15 @@ map, not for anything that could pass as a real play.
   across the top (the hidden mark and the metadata tag stay either way). The
   player name is Autoplay and the accuracy 100 percent, always; neither is a
   setting.
-- **How the cursor moves**: close notes are an almost straight line; the
-  farther the next note, the wider the arc, and wider still when there is
-  time to spare. A stream (notes faster than eight per second, in real
+- **How the cursor moves**: with the Centre aim and Normal movement a jump
+  is a straight line and the cursor turns on the note. With the Flow aim a
+  jump is an arc of the circle through three notes in a row: the cursor
+  rounds every note, keeps its pace through it and still passes it close to
+  its centre; a sharp turn becomes a loop. The dance takes that same round
+  line and swings it wider, the more so the farther the next note and the
+  more time there is, and weaves from side to side through a straight row
+  of jumps; it no longer turns on a note with either aim. A stream (notes
+  faster than eight per second, in real
   time) is planned as one flow, the way a player's hand takes it: the jump
   into it accelerates, the cursor passes the notes a little inside the
   corners instead of turning on each centre when the aim is Flow (always
@@ -412,11 +419,20 @@ map, not for anything that could pass as a real play.
   centre when it is Centre, back-and-forth on a line becomes a
   narrow loop, and the speed stays the same as long as the rhythm does,
   changing only where a longer hop or a faster rhythm demands it, and then
-  over a ramp rather than from one frame to the next. A chord is passed
-  exactly. The same spot twice in quick succession is a hold; the same spot
-  with time is a boomerang out and back. On a long pause it goes to the
-  centre, waits, and leaves in time for the next note. It never leaves the
-  field and never jumps.
+  over a ramp rather than from one frame to the next. A chord of two
+  neighbours is hit from the one spot inside both hit areas; with the Flow
+  aim so is a corner of three or a block of four. The same spot twice in
+  quick succession is a hold with the Centre aim and a slow drift through
+  the hit area with Flow; the same spot with time is a boomerang out and
+  back in the dance. On a long pause the Centre aim goes to the centre,
+  stands there, and leaves in time for the next note. The Flow aim treats
+  every gap of 0.6 real seconds or more as a pause: the cursor's momentum
+  carries it on past the last note, it comes round to a waiting spot (near
+  the next note, or the centre from the rest setting on and before the
+  first note), drifts there in a slow figure of eight instead of standing
+  still, and comes in over the last third of a second. After the last note
+  it carries on and comes to rest in the centre. It never leaves the field
+  and never jumps.
 - **What is not there**: no results screen, no score card, no Analyze
   window, no ghost race. Each of those would be a real-play artefact on a
   synthetic run.

@@ -280,8 +280,10 @@ enum Command {
         /// How the cursor moves: "normal" (soft, direct) or "dance".
         #[arg(long, default_value = "dance", value_parser = ["normal", "dance"])]
         movement: String,
-        /// Where it goes inside a stream: "centre" (through every note's
-        /// centre) or "flow" (a little inside the corners, like a player).
+        /// How it aims: "centre" (through every note's centre, a corner
+        /// turned on the note) or "flow" (like a player: jumps as round
+        /// arcs, a little inside a stream's corners, a wait and a late way
+        /// in at a pause).
         #[arg(long, default_value = "centre", value_parser = ["centre", "flow"])]
         aim: String,
         /// How wide the arcs and boomerangs get under "dance".

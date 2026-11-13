@@ -3,6 +3,27 @@
 rhythr is an unofficial community tool and is not affiliated with or
 endorsed by Rhythia or Capo Games.
 
+## Unreleased
+
+- **The Flow aim flows everywhere, not only in streams.** A jump is now an
+  arc of the circle through three notes in a row: the cursor rounds every
+  note and keeps its pace through it instead of stopping on it and turning,
+  and still passes it close to its centre. A gap of 0.6 seconds or more is
+  a pause: the cursor carries on past the last note, comes round to a spot
+  near the next one, drifts there slowly instead of standing still, and
+  comes in over the last third of a second; before the first note and on a
+  rest it waits around the centre the same way. Notes on one spot are
+  drifted through, a corner of three or a block of four is hit from one
+  spot like a pair, and after the last note the cursor comes to rest in the
+  centre. Streams are as they were. Normal movement with the Centre aim is
+  unchanged, frame for frame.
+- **Cursor dance no longer turns on a note.** The dance used to give every
+  jump its own belly, to a side the dice picked, so two bellies met in a
+  spike on each note. It now swings the same round line wider (the amount
+  still scales it), weaves from side to side only where the notes run
+  straight, and takes its boomerangs in the same stroke. This changes the
+  default look: the dance is the default movement.
+
 ## v0.8.0 (2026-11-09)
 
 - **Autoplay.** Render a map without a replay: export it from the game

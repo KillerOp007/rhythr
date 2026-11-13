@@ -258,7 +258,7 @@ function renderAutoplayTab() {
   $("ap-aim-flow").classList.toggle("on", flow);
   $("ap-aim-centre").classList.toggle("on", !flow);
   $("ap-aim-hint").textContent = flow
-    ? "Like a player's flow aim: in a stream the cursor passes a little inside the corners, always within the hit area, so the turn spreads along the path. The hit still fires at the note's time."
+    ? "Like a player's flow aim, everywhere: a jump is a round arc and the pace runs through the note, a stream is passed a little inside its corners, notes on one spot are drifted through. In a pause the cursor carries on, waits near the next note and comes in late. Always within the hit area; the hit still fires at the note's time."
     : "Through the centre of every note. In a stream the speed stays steady and a back-and-forth loops, but a corner is turned on the note itself.";
   const banner = s.banner !== false;
   $("ap-banner-on").classList.toggle("on", banner);
@@ -272,8 +272,8 @@ function renderAutoplayTab() {
   $("ap-dance-field").classList.toggle("off", !dance);
   $("ap-dance").disabled = !dance;
   $("ap-movement-hint").textContent = dance
-    ? "Close notes: almost straight. The farther the next note and the more time, the wider the arc. Same spot with time: a boomerang out and back; same spot in quick succession: hold. Never a jump, never a rush."
-    : "The same soft curves, no detours, no boomerangs. Calm and direct. Never a jump.";
+    ? "One round line through the notes, swung wide: the farther the next note and the more time, the wider the arc, and a straight row of jumps is woven through from side to side. Same spot with time: a boomerang out and back. Never a jump, never a spike on a note."
+    : "No detours, no boomerangs. Calm and direct: straight between two notes with the Centre aim, a round arc with Flow. Never a jump.";
   $("ap-dance").value = AP_DANCE_IDX[s.dance] || 2;
   $("ap-dance-val").textContent = s.dance;
   $("ap-rest").value = s.rest_secs;

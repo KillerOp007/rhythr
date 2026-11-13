@@ -37,15 +37,18 @@ impl DanceAmount {
     }
 }
 
-/// Where the cursor goes inside a stream.
+/// How the cursor aims.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Aim {
     /// Through the centre of every note, as a perfect player would hit it;
     /// a corner is turned on the note itself.
     Centre,
-    /// Like a player's flow aim: a little inside the corners, always within
-    /// the hit area, so the turn spreads along the path.
+    /// Like a player's flow aim, everywhere: a jump is an arc of the circle
+    /// through three notes in a row, a stream is passed a little inside its
+    /// corners, notes on one spot are drifted through, and a pause is
+    /// waited out near the next note with a late way in. Always within the
+    /// hit area.
     Flow,
 }
 
@@ -170,8 +173,21 @@ pub fn generate(map: &Map, settings: &AutoplaySettings, fps: u32, dice: &[f32]) 
         }
         let count = j - i;
         let t = notes[i].0 as f64;
+        // the box around the chord's notes: when it is no wider than a hit
+        // area, its middle lies inside every one of them
+        let (lo_x, hi_x, lo_y, hi_y) = notes[i..j].iter().fold((f32::INFINITY, f32::NEG_INFINITY, f32::INFINITY, f32::NEG_INFINITY), |b, n| (b.0.min(n.1), b.1.max(n.1), b.2.min(n.2), b.3.max(n.2)));
+        let one_spot = hi_x - lo_x <= 2.0 * HITBOX_HALF && hi_y - lo_y <= 2.0 * HITBOX_HALF;
         if count == 1 {
             visits.push(Waypoint { t_ms: t, x: notes[i].1, y: notes[i].2, exact: false });
+        } else if count > 2 && one_spot && settings.aim == Aim::Flow {
+            // the flow aim takes a bigger chord from one spot too, when
+            // there is one (a corner of three, a block of four): the hits
+            // go half a millisecond apart, none before its note
+            let (mx, my) = ((lo_x + hi_x) / 2.0, (lo_y + hi_y) / 2.0);
+            let dt = (1.5 / (count - 1) as f64).min(0.5);
+            for (k, n) in notes[i..j].iter().enumerate() {
+                visits.push(Waypoint { t_ms: (t + k as f64 * dt).max(n.0 as f64), x: mx, y: my, exact: true });
+            }
         } else if count == 2
             && (notes[i].1 - notes[i + 1].1).abs() <= 2.0 * HITBOX_HALF
             && (notes[i].2 - notes[i + 1].2).abs() <= 2.0 * HITBOX_HALF
@@ -372,8 +388,11 @@ mod tests {
             let b = world(&map.notes[1]);
             max_off_chord(&r, 1000.0, 1150.0, a, b)
         };
-        assert!(off(&near, DanceAmount::Medium) < 0.15, "near: {}", off(&near, DanceAmount::Medium));
         let (subtle, medium, wild) = (off(&far, DanceAmount::Subtle), off(&far, DanceAmount::Medium), off(&far, DanceAmount::Wild));
+        // (the arc is a share of the hop: a hop a quarter as long arcs a
+        // quarter as much at most)
+        let close = off(&near, DanceAmount::Medium);
+        assert!(close < 0.2 && close < medium / 2.0, "near: {close} (far: {medium})");
         assert!(medium > 0.3, "far at medium: {medium}");
         assert!(subtle < medium && medium < wild, "subtle {subtle}, medium {medium}, wild {wild}");
         let s = AutoplaySettings { movement: Movement::Normal, ..Default::default() };
@@ -689,8 +708,11 @@ mod tests {
             let s = AutoplaySettings { movement: Movement::Normal, aim, ..Default::default() };
             let r = generate(&map, &s, 240, &dice()).unwrap();
             let at = |t: f64| r.frames.iter().filter(|f| !f.hit).min_by(|a, b| (a.ms - t).abs().partial_cmp(&(b.ms - t).abs()).unwrap()).unwrap();
+            // (the centre aim stands in the centre, the flow aim drifts
+            // around it while it waits)
             let early = at(500.0);
-            assert!(early.x.abs() < 0.1 && early.y.abs() < 0.1, "{aim:?}: left the centre long before the stream: {early:?}");
+            let near = if aim == Aim::Flow { path::DRIFT_LONG + 0.05 } else { 0.1 };
+            assert!(early.x.abs() < near && early.y.abs() < near, "{aim:?}: left the centre long before the stream: {early:?}");
             let steps: Vec<f32> = r
                 .frames
                 .iter()
@@ -860,5 +882,258 @@ mod tests {
         assert!((s.speed_mod - 1.35).abs() < 1e-6 && (s.rest_secs - 8.0).abs() < 1e-9);
         let s = AutoplaySettings { speed_mod: 0.1, rest_secs: 0.0, ..Default::default() }.normalized();
         assert!((s.speed_mod - 0.8).abs() < 1e-6 && (s.rest_secs - 2.0).abs() < 1e-9);
+    }
+
+    /// The run's own frames (no flags) between two times.
+    fn plain(r: &Replay, from_ms: f64, to_ms: f64) -> Vec<&Frame> {
+        r.frames.iter().filter(|f| !f.hit && f.ms >= from_ms && f.ms <= to_ms).collect()
+    }
+
+    /// The cursor's speed around `ms` in units per second of map time.
+    fn speed_at(r: &Replay, ms: f64) -> f32 {
+        let fr = plain(r, ms - 6.0, ms + 6.0);
+        let (a, b) = (fr[0], fr[fr.len() - 1]);
+        ((b.x - a.x).powi(2) + (b.y - a.y).powi(2)).sqrt() / (b.ms - a.ms) as f32 * 1000.0
+    }
+
+    /// Jumps around a square and across it, 180 ms apart, after a second
+    /// of nothing.
+    fn jump_pattern() -> Map {
+        map_with(&[(1000, 0.0, 0.0), (1180, 2.0, 0.0), (1360, 2.0, 2.0), (1540, 0.0, 2.0), (1720, 0.0, 0.0), (1900, 2.0, 2.0), (2080, 0.0, 2.0), (2260, 2.0, 0.0), (2440, 1.0, 2.0)])
+    }
+
+    /// With the flow aim a jump is an arc: the cursor rounds every note
+    /// instead of turning on it, keeps its pace through it, leaves the
+    /// straight line between two notes and still passes each note close to
+    /// its centre at its time. The centre aim with normal movement keeps
+    /// its straight lines and its corners.
+    #[test]
+    fn the_flow_aim_takes_jumps_as_arcs_and_keeps_its_pace_through_the_notes() {
+        let map = jump_pattern();
+        let inner: Vec<&Note> = map.notes[1..map.notes.len() - 1].iter().collect();
+        for movement in [Movement::Normal, Movement::Dance] {
+            let s = AutoplaySettings { movement, aim: Aim::Flow, ..Default::default() };
+            let r = generate(&map, &s, 240, &dice()).unwrap();
+            for n in &inner {
+                let t = n.time_ms as f64;
+                // (the sharpest turn of the pattern, 161 degrees, is taken
+                // as a loop; on a dead turn the heading would swing by all
+                // of it)
+                let turn = turn_at(&r, t);
+                assert!(turn < 60.0, "{movement:?}: the cursor turns {turn} degrees on the note at {t}");
+                let (at, between) = (speed_at(&r, t), speed_at(&r, t + 90.0));
+                assert!(at > 0.7 * between, "{movement:?}: the cursor slows to {at} on the note at {t} ({between} between the notes)");
+                let (wx, wy) = world(n);
+                let f = r.frames.iter().find(|f| f.hit && (f.ms - t).abs() < 1e-6).expect("the flag at the note's time");
+                let off = ((f.x - wx).powi(2) + (f.y - wy).powi(2)).sqrt();
+                assert!(off <= path::JUMP_TUBE + path::RAMP_DEV + 0.01, "{movement:?}: the note at {t} is hit {off} from its centre");
+            }
+            let bulge = max_off_chord(&r, 1180.0, 1360.0, world(&map.notes[1]), world(&map.notes[2]));
+            assert!(bulge > 0.15, "{movement:?}: the hop along the square's side bulges only {bulge}");
+            assert_every_note_covered(&map, &r, &format!("jumps {movement:?}"));
+        }
+        let s = AutoplaySettings { movement: Movement::Normal, aim: Aim::Centre, ..Default::default() };
+        let r = generate(&map, &s, 240, &dice()).unwrap();
+        assert!(turn_at(&r, 1360.0) > 80.0, "normal movement with the centre aim turns on the note");
+        assert!(max_off_chord(&r, 1180.0, 1360.0, world(&map.notes[1]), world(&map.notes[2])) < 0.02, "and goes straight between two notes");
+    }
+
+    /// The dance swings wider than the flow aim alone, but it no longer
+    /// turns on a jump's note either, with either aim: no spike where two
+    /// bellies meet, on a turning pattern and on a straight line of jumps.
+    #[test]
+    fn the_dance_swings_through_a_jumps_note_without_a_spike() {
+        // (five jumps in a row along the middle, then a corner)
+        let line = || map_with(&[(1000, 0.0, 1.0), (1180, 0.5, 1.0), (1360, 1.0, 1.0), (1540, 1.5, 1.0), (1720, 2.0, 1.0), (1900, 2.0, 2.0)]);
+        for map in [jump_pattern(), line()] {
+            for aim in [Aim::Centre, Aim::Flow] {
+                for dance in [DanceAmount::Subtle, DanceAmount::Medium, DanceAmount::Wild] {
+                    let s = AutoplaySettings { movement: Movement::Dance, dance, aim, ..Default::default() };
+                    let r = generate(&map, &s, 240, &dice()).unwrap();
+                    for n in &map.notes[1..map.notes.len() - 1] {
+                        let turn = turn_at(&r, n.time_ms as f64);
+                        assert!(turn < 60.0, "{aim:?} {dance:?}: the dance turns {turn} degrees on the note at {}", n.time_ms);
+                    }
+                    assert_every_note_covered(&map, &r, &format!("dance {aim:?} {dance:?}"));
+                }
+            }
+        }
+        // on the straight line the dance still leaves it (the dice pick
+        // the side), the flow aim alone does not
+        let line = line();
+        let off = |movement: Movement| {
+            let s = AutoplaySettings { movement, aim: Aim::Flow, ..Default::default() };
+            let r = generate(&line, &s, 240, &dice()).unwrap();
+            max_off_chord(&r, 1360.0, 1540.0, world(&line.notes[2]), world(&line.notes[3]))
+        };
+        assert!(off(Movement::Normal) < 0.01, "the flow aim leaves a straight line of jumps by {}", off(Movement::Normal));
+        assert!(off(Movement::Dance) > 0.03, "the dance stays on a straight line of jumps ({})", off(Movement::Dance));
+    }
+
+    /// A pause with the flow aim: the cursor does not stop on the last
+    /// note and crawl to the next one. Its momentum carries it on, it
+    /// waits near the next note, drifting slowly (it never stands), and
+    /// comes in over the last third of a second, landing on the note on
+    /// time. A rest and the time before the first note wait in the centre.
+    #[test]
+    fn the_flow_aim_carries_on_waits_and_comes_in_late_in_a_pause() {
+        let map = map_with(&[(3000, 0.0, 1.0), (3180, 1.0, 0.0), (3360, 2.0, 1.0), (6000, 0.0, 2.0), (6180, 1.0, 1.0), (13000, 2.0, 0.0)]);
+        let s = AutoplaySettings { movement: Movement::Normal, aim: Aim::Flow, ..Default::default() };
+        let r = generate(&map, &s, 240, &dice()).unwrap();
+        let far = |f: &Frame, n: &Note| {
+            let (wx, wy) = world(n);
+            ((f.x - wx).powi(2) + (f.y - wy).powi(2)).sqrt()
+        };
+        // before the first note: around the centre, moving, until late
+        for f in plain(&r, 100.0, 2600.0) {
+            assert!(f.x.abs() <= path::DRIFT_LONG + 0.05 && f.y.abs() <= path::DRIFT_LONG + 0.05, "left the centre before the first note: {f:?}");
+        }
+        let lead = speed_at(&r, 1500.0);
+        assert!(lead > 0.4 && lead < 1.5, "before the first note the cursor drifts at {lead} units per second");
+        // out of the phrase's last note: on, the way it was heading
+        let (last, next) = (&map.notes[2], &map.notes[3]);
+        let turn = turn_at(&r, 3360.0);
+        assert!(turn < 40.0, "the cursor turns {turn} degrees on the phrase's last note");
+        let after = plain(&r, 3420.0, 3424.5);
+        assert!(far(after[0], last) > 0.2, "60 ms after the last note the cursor is still {} from it", far(after[0], last));
+        // the wait: slow, never still, and not yet on the way in
+        for t in [4200.0, 4800.0, 5400.0] {
+            let v = speed_at(&r, t);
+            assert!(v > 0.4 && v < 1.5, "in the pause the cursor moves at {v} units per second at {t}");
+        }
+        let (nx, ny) = world(next);
+        let waiting = plain(&r, 5550.0, 5554.5)[0];
+        let to_spot = ((waiting.x - nx * path::WAIT_TOWARDS).powi(2) + (waiting.y - ny * path::WAIT_TOWARDS).powi(2)).sqrt();
+        assert!(to_spot < path::DRIFT_LONG + 0.1 && far(waiting, next) > 0.3, "450 ms before the note the cursor is {to_spot} from its waiting spot and {} from the note", far(waiting, next));
+        // the way in: on the note on time, already moving on
+        let landed = r.frames.iter().find(|f| f.hit && (f.ms - 6000.0).abs() < 1e-6).unwrap();
+        assert!(far(landed, next) < 0.02, "the note behind the pause is hit {} from its centre", far(landed, next));
+        // the rest: in the centre, drifting
+        for f in plain(&r, 8000.0, 12000.0) {
+            assert!(f.x.abs() <= path::DRIFT_LONG + 0.05 && f.y.abs() <= path::DRIFT_LONG + 0.05, "the rest is not kept in the centre: {f:?}");
+        }
+        let rest = speed_at(&r, 10000.0);
+        assert!(rest > 0.4 && rest < 1.5, "in the rest the cursor drifts at {rest} units per second");
+        assert_every_note_covered(&map, &r, "pauses");
+        // the centre aim keeps the old way: it stands in the centre
+        let s = AutoplaySettings { movement: Movement::Normal, aim: Aim::Centre, ..Default::default() };
+        let r = generate(&map, &s, 240, &dice()).unwrap();
+        assert!(plain(&r, 9000.0, 11000.0).iter().all(|f| f.x.abs() < 1e-3 && f.y.abs() < 1e-3), "the centre aim rests in the centre, still");
+    }
+
+    /// After the last note the flow aim's cursor carries on and comes to
+    /// rest in the centre; nothing jumps.
+    #[test]
+    fn the_flow_aim_comes_to_rest_in_the_centre_after_the_last_note() {
+        let map = map_with(&[(1000, 0.0, 0.0), (1180, 2.0, 0.0), (1360, 2.0, 2.0)]);
+        let s = AutoplaySettings { movement: Movement::Normal, aim: Aim::Flow, ..Default::default() };
+        let r = generate(&map, &s, 240, &dice()).unwrap();
+        let end = plain(&r, 2500.0, 4000.0);
+        assert!(end.iter().all(|f| f.x.abs() < 1e-3 && f.y.abs() < 1e-3), "not at rest in the centre a second after the last note");
+        let steps: Vec<f32> = plain(&r, 1300.0, 2500.0).windows(2).map(|w| ((w[1].x - w[0].x).powi(2) + (w[1].y - w[0].y).powi(2)).sqrt()).collect();
+        let worst = steps.iter().fold(0.0f32, |a, b| a.max(*b));
+        assert!(worst < 0.12, "a step of {worst} between two frames after the last note");
+    }
+
+    /// Notes on one spot: the centre aim stops on it (it is within a ramp's
+    /// width of the centre at both hits), the flow aim keeps drifting
+    /// through the hit area, so the second note is hit further along than
+    /// the first, both well inside.
+    #[test]
+    fn the_flow_aim_drifts_through_notes_on_one_spot() {
+        let map = map_with(&[(1000, 0.0, 1.0), (1060, 1.0, 1.0), (1120, 1.0, 1.0), (1180, 2.0, 1.0), (1240, 2.0, 0.0)]);
+        let moved = |aim: Aim| {
+            let s = AutoplaySettings { movement: Movement::Normal, aim, ..Default::default() };
+            let r = generate(&map, &s, 240, &dice()).unwrap();
+            assert_every_note_covered(&map, &r, &format!("double {aim:?}"));
+            let flag = |t: f64| r.frames.iter().find(|f| f.hit && (f.ms - t).abs() < 30.0 && f.ms >= t).copied().unwrap();
+            let (a, b) = (flag(1060.0), flag(1120.0));
+            (b.x - a.x, (b.y - a.y).abs())
+        };
+        let (along, across) = moved(Aim::Flow);
+        assert!(along > 0.25 && along <= 2.0 * path::SPOT_DRIFT + 2.0 * path::TUBE && across < 0.05, "the flow aim moves ({along}, {across}) between the two hits");
+        let (along, across) = moved(Aim::Centre);
+        assert!(along.abs() <= 2.0 * path::RAMP_DEV + 0.01 && across < 0.01, "the centre aim moves ({along}, {across}) between the two hits");
+    }
+
+    /// A chord of three in a corner or four in a block has one spot inside
+    /// all its hit areas: the flow aim takes it from there, the centre aim
+    /// visits the notes one by one as before. Three in a row have no such
+    /// spot and are swept with either aim.
+    #[test]
+    fn the_flow_aim_takes_a_chord_from_one_spot_where_there_is_one() {
+        let corner = map_with(&[(1000, 0.0, 0.0), (1400, 1.0, 1.0), (1400, 2.0, 1.0), (1400, 1.0, 2.0), (1800, 0.0, 2.0)]);
+        let block = map_with(&[(1000, 0.0, 0.0), (1400, 1.0, 1.0), (1400, 2.0, 1.0), (1400, 1.0, 2.0), (1400, 2.0, 2.0), (1800, 0.0, 2.0)]);
+        let row = map_with(&[(1000, 0.0, 0.0), (1400, 0.0, 1.0), (1400, 1.0, 1.0), (1400, 2.0, 1.0), (1800, 0.0, 2.0)]);
+        let spread = |map: &Map, aim: Aim| {
+            let s = AutoplaySettings { movement: Movement::Normal, aim, ..Default::default() };
+            let r = generate(map, &s, 240, &dice()).unwrap();
+            assert_every_note_covered(map, &r, &format!("chord {aim:?}"));
+            let flags: Vec<&Frame> = r.frames.iter().filter(|f| f.hit && f.ms >= 1400.0 && f.ms < 1500.0).collect();
+            assert_eq!(flags.len(), map.notes.len() - 2);
+            flags.iter().map(|f| ((f.x - flags[0].x).powi(2) + (f.y - flags[0].y).powi(2)).sqrt()).fold(0.0f32, f32::max)
+        };
+        for map in [&corner, &block] {
+            assert!(spread(map, Aim::Flow) < 1e-3, "the flow aim hits the chord from {} apart", spread(map, Aim::Flow));
+            assert!(spread(map, Aim::Centre) > 0.5, "the centre aim visits every note of the chord");
+        }
+        assert!(spread(&row, Aim::Flow) > 0.5, "three in a row have no common spot");
+    }
+
+    /// Phrases of every shape register every note with every setting:
+    /// pseudo-random maps of streams, jumps, slow hops, pauses, doubles on
+    /// one spot and chords of two to four, at every speed mod; and no
+    /// frame leaves the field.
+    #[test]
+    fn random_phrases_register_every_note_and_stay_in_the_field() {
+        let mut seed: u64 = 0x0f10_a1b2_c3d4_0007;
+        let mut next = || {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (seed >> 33) as u32
+        };
+        let gaps = [16i64, 35, 48, 95, 125, 150, 190, 260, 400, 650, 900, 2300];
+        for case in 0..64 {
+            let mut notes: Vec<(i64, f32, f32)> = Vec::new();
+            let mut t = 400i64 + (next() % 900) as i64;
+            let (mut gx, mut gy) = (1.0f32, 1.0f32);
+            // (a chord that is swept takes a few frames: nothing right behind it)
+            let mut at_least = 0i64;
+            for _ in 0..60 {
+                t += gaps[(next() % gaps.len() as u32) as usize].max(at_least);
+                at_least = 0;
+                // now and then the same spot again, else a step on the grid
+                if next() % 6 != 0 {
+                    gx = (gx + [-1.0, 1.0, -2.0, 2.0, 0.0][(next() % 5) as usize]).clamp(0.0, 2.0);
+                    gy = (gy + [-1.0, 1.0, -2.0, 2.0, 0.0][(next() % 5) as usize]).clamp(0.0, 2.0);
+                }
+                notes.push((t, gx, gy));
+                // now and then a chord: a neighbour, a corner of three, a
+                // block of four, or a twin two units over
+                let before = notes.len();
+                match next() % 14 {
+                    0 if gx < 2.0 => notes.push((t, gx + 1.0, gy)),
+                    1 if gx < 2.0 && gy < 2.0 => notes.extend([(t, gx + 1.0, gy), (t, gx, gy + 1.0)]),
+                    2 if gx < 2.0 && gy < 2.0 => notes.extend([(t, gx + 1.0, gy), (t, gx, gy + 1.0), (t, gx + 1.0, gy + 1.0)]),
+                    3 if gx < 1.0 => notes.push((t, gx + 2.0, gy)),
+                    _ => {}
+                }
+                if notes.len() > before {
+                    at_least = 95;
+                }
+            }
+            let map = map_with(&notes);
+            let speed = [0.8f32, 1.0, 1.45, 2.0][case % 4];
+            let movement = if (case / 4) % 2 == 0 { Movement::Normal } else { Movement::Dance };
+            let aim = if (case / 8) % 2 == 0 { Aim::Flow } else { Aim::Centre };
+            let dance = [DanceAmount::Subtle, DanceAmount::Medium, DanceAmount::Wild][case % 3];
+            let s = AutoplaySettings { movement, aim, dance, speed_mod: speed, ..Default::default() };
+            let r = generate(&map, &s, 120, &dice()).unwrap();
+            assert_every_note_covered(&map, &r, &format!("case {case} ({movement:?} {aim:?} {dance:?} at {speed}), notes {notes:?}"));
+            let bound = 1.0 + (0.5 - rhythia_sim::hitreg::CURSOR_EDGE_INSET);
+            for f in &r.frames {
+                assert!(f.x.abs() <= bound + 1e-4 && f.y.abs() <= bound + 1e-4, "case {case}: {f:?}");
+                assert!(f.x.is_finite() && f.y.is_finite(), "case {case}: {f:?}");
+            }
+        }
     }
 }
