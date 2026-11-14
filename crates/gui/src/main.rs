@@ -3464,7 +3464,7 @@ fn timeline(state: tauri::State<'_, App>, samples: usize) -> Result<TimelineDto,
             // panel, which already does both.
             let (mapped, _) = rhythia_render::mods::map_for_replay(m, replay);
             let window = rhythia_sim::hitreg::hit_window_ms(replay);
-            let outcome = rhythia_sim::hitreg::match_hits(&mapped.notes, frames, window);
+            let outcome = rhythia_sim::hitreg::judge(replay, &mapped.notes);
             let attempt_lo = replay.start_from_ms.max(0) as f64;
             outcome
                 .results

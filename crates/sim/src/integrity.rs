@@ -336,8 +336,7 @@ pub fn verify(replay: &Replay, map: &Map, outcome: &MatchOutcome) -> IntegrityRe
 
 /// Convenience: hitreg + verify in one call with the run's own hit window.
 pub fn verify_replay(replay: &Replay, map: &Map) -> IntegrityReport {
-    let window = hitreg::hit_window_ms(replay);
-    let outcome = hitreg::match_hits(&map.notes, &replay.frames, window);
+    let outcome = hitreg::judge(replay, &map.notes);
     verify(replay, map, &outcome)
 }
 
@@ -435,6 +434,7 @@ mod wrong_map_tests {
             origin: Origin::Sspre {
                 skips: vec![],
                 judged_end: None,
+                hits: vec![],
             },
         };
         let names = |r: &Replay| -> Vec<&'static str> {
@@ -472,7 +472,7 @@ mod converted_tests {
     use super::*;
     use crate::timebase::normalize;
     use rhythia_formats::map::{MapMeta, Note};
-    use rhythia_formats::rhr::{Frame, Judgments};
+    use rhythia_formats::rhr::{Frame, Judgments, LegacyHit};
 
     const MISS: u8 = Judgments::MISS;
 
@@ -684,28 +684,27 @@ mod converted_tests {
 
     #[test]
     fn a_legacy_run_that_stops_mid_map_is_judged_by_its_own_count() {
-        // Notes 0 and 1 judged (one hit, one miss), then the run ends.
+        // Notes 0 and 1 judged (one hit, one miss), then the run ends. The
+        // file names the note of its hit; the flagged frame comes from
+        // pairing it with the map.
+        let hit_on_the_first_note = vec![LegacyHit {
+            note: 0,
+            after_ms: 0.0,
+            by_ms: 1004.0,
+        }];
         let mut r = replay_of(
             Origin::Sspre {
                 skips: vec![],
                 judged_end: Some(2),
+                hits: hit_on_the_first_note.clone(),
             },
             2300.0,
             1,
             1,
         );
         r.legacy_map_id = "the_sspm_id".into();
-        r.frames.insert(
-            1,
-            Frame {
-                ms: 1004.0,
-                x: 0.0,
-                y: 0.0,
-                health: 1.0,
-                hit: true,
-            },
-        );
         normalize(&mut r, &map());
+        assert_eq!(r.flagged_frames(), 1);
         assert_eq!(r.fail_time_ms, 2300);
         let report = verify_replay(&r, &map());
         assert!(report.consistent(), "{:?}", report.checks);
@@ -716,6 +715,7 @@ mod converted_tests {
         r.origin = Origin::Sspre {
             skips: vec![],
             judged_end: Some(40),
+            hits: hit_on_the_first_note,
         };
         let report = verify_replay(&r, &map());
         assert!(looks_like_the_wrong_map(r.hits, &report, false));

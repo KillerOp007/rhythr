@@ -12,7 +12,7 @@
 
 use rhythia_formats::map::Map;
 use rhythia_formats::rhr::Replay;
-use rhythia_sim::hitreg::{hit_window_ms, match_hits, HITBOX_HALF};
+use rhythia_sim::hitreg::{hit_window_ms, judge, HITBOX_HALF};
 use rhythia_sim::integrity;
 use serde::Serialize;
 
@@ -429,7 +429,7 @@ pub fn analyze(map: &Map, replay: &Replay) -> Analysis {
     } else {
         f64::INFINITY
     };
-    let outcome = match_hits(&map.notes, f, window);
+    let outcome = judge(replay, &map.notes);
     let mut notes: Vec<NoteAnalysis> = Vec::with_capacity(map.notes.len());
     for (i, note) in map.notes.iter().enumerate() {
         if (note.time_ms as f64) < attempt_lo || (note.time_ms as f64) > attempt_hi {

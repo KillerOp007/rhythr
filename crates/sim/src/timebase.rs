@@ -68,6 +68,32 @@ fn resolve_skips(replay: &mut Replay, map: &Map) -> bool {
     let lead = SKIP_LEAD_MS + SKIP_LEAD_MS * f64::from(replay.speed);
     let before: Vec<f64> = skips.iter().map(|s| s.jump_ms).collect();
 
+    // The game offers a skip only with the next note seconds ahead, so a
+    // jump that would not go forward is not something it recorded.
+    let jump_from = |at: f64| {
+        map.notes
+            .iter()
+            .map(|n| n.time_ms as f64)
+            .find(|&t| t >= at)
+            .map(|t| t - lead - at)
+            .filter(|&j| j > 0.0)
+    };
+    // What this map makes of the skips. When that is what the frames carry
+    // already there is nothing to do, and not touching them keeps a second
+    // pass from nudging frame times by a rounding step.
+    let mut ahead = 0.0;
+    let wanted: Vec<f64> = skips
+        .iter()
+        .map(|s| {
+            let jump = jump_from(s.at_ms + ahead).unwrap_or(0.0);
+            ahead += jump;
+            jump
+        })
+        .collect();
+    if wanted == before {
+        return false;
+    }
+
     // Where a skip sits among the frames right now: its own clock time
     // plus every jump before it.
     let position = |skips: &[rhythia_formats::rhr::Skip], i: usize| {
@@ -84,14 +110,7 @@ fn resolve_skips(replay: &mut Replay, map: &Map) -> bool {
     }
     for i in 0..skips.len() {
         let at = position(skips, i);
-        let next_note = map
-            .notes
-            .iter()
-            .map(|n| n.time_ms as f64)
-            .find(|&t| t >= at);
-        // The game offers a skip only with the next note seconds ahead, so
-        // a jump that would not go forward is not something it recorded.
-        let Some(jump) = next_note.map(|t| t - lead - at).filter(|&j| j > 0.0) else {
+        let Some(jump) = jump_from(at) else {
             continue;
         };
         for f in replay.frames.iter_mut().filter(|f| f.ms > at) {
@@ -106,8 +125,9 @@ fn resolve_skips(replay: &mut Replay, map: &Map) -> bool {
 ///
 /// * a wall-clock `.rhr` is rescaled into song time (frames, fail time,
 ///   start offset);
-/// * a converted legacy replay has its skips sized and, when it stopped
-///   short of the last note, its end marked;
+/// * a converted legacy replay has its skips sized, its hits placed
+///   against the notes they name and, when it stopped short of the last
+///   note, its end marked;
 /// * a converted `.phxr` gets its note results placed as flagged frames
 ///   (see [`crate::pairing`]).
 ///
@@ -119,7 +139,8 @@ pub fn normalize(replay: &mut Replay, map: &Map) -> bool {
         Origin::Rhr => {}
         Origin::Sspre { .. } => {
             let moved = resolve_skips(replay, map);
-            return crate::pairing::mark_early_end(replay, map) || moved;
+            let placed = crate::pairing::place_legacy_hits(replay, map);
+            return crate::pairing::mark_early_end(replay, map) || moved || placed;
         }
         Origin::Phxr(_) => return crate::pairing::place_judgments(replay, map),
     }
@@ -206,6 +227,7 @@ mod tests {
                 })
                 .collect(),
             judged_end: None,
+            hits: vec![],
         };
         r
     }

@@ -6,6 +6,10 @@
 //! the flagged frames the rest of the pipeline reads, so hit matching,
 //! the HUD and the analyzer need no second code path.
 //!
+//! A legacy `.sspre` names the note of every hit but not its moment, only
+//! the cursor samples around it. [`place_legacy_hits`] settles the moment
+//! against the note's own time.
+//!
 //! Both converted formats also end a failed or abandoned run by simply
 //! stopping, with no fail time in the file. Where that was, in terms of
 //! notes, follows from how far the judged notes reach into the map
@@ -17,7 +21,7 @@
 use rhythia_formats::map::{Map, Note};
 use rhythia_formats::rhr::{Frame, Judgments, Origin, Replay};
 
-use crate::hitreg::{BASE_HIT_WINDOW_MS, HITBOX_HALF};
+use crate::hitreg::{hit_window_ms, BASE_HIT_WINDOW_MS, HITBOX_HALF};
 
 /// How far outside a note's hit area the recorded cursor path may pass at
 /// the moment of a hit before the hit counts as off target, in cells.
@@ -34,6 +38,11 @@ const OFF_TARGET_SLACK: f32 = 0.25;
 /// milliseconds before it takes the lateness, and stores the lateness in
 /// quarter milliseconds, both rounding down.
 const HIT_TIME_SLACK_MS: f64 = 2.0;
+
+/// How far a legacy time stamp can be off, in real-time ms: the game cuts
+/// its clock to whole milliseconds, and the conversion reads every stamp
+/// one millisecond late.
+const LEGACY_STAMP_SLACK_MS: f64 = 1.0;
 
 /// The free client's health rule. Health runs from 0 to 100. A miss costs
 /// the current step and makes the next one a fifth more expensive; a hit
@@ -170,6 +179,129 @@ pub(crate) fn mark_early_end(replay: &mut Replay, map: &Map) -> bool {
     changed
 }
 
+/// The recorded samples in their own order with the hits among them: each
+/// hit goes in right after the last sample that is not later than it.
+/// `hits` must be sorted by time.
+fn weave(samples: Vec<Frame>, hits: Vec<Frame>) -> Vec<Frame> {
+    let mut frames = Vec::with_capacity(samples.len() + hits.len());
+    let mut pending = hits.into_iter().peekable();
+    for sample in samples {
+        while let Some(hit) = pending.next_if(|h| h.ms < sample.ms) {
+            frames.push(hit);
+        }
+        frames.push(sample);
+    }
+    frames.extend(pending);
+    frames
+}
+
+/// Where a hit of a converted legacy replay belongs once the notes are
+/// known.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct LegacyPlacement {
+    /// The note the file names for the hit.
+    pub note: usize,
+    /// Song time of the hit among the frames as they are now.
+    pub ms: f64,
+    /// True when the note exists and the samples around the hit leave
+    /// room for it inside the note's window.
+    pub fits: bool,
+}
+
+/// Settles when each hit of a converted legacy replay happened, in file
+/// order. None for any other replay.
+///
+/// The file names each hit's note but not its moment: only that it came
+/// after one cursor sample and no later than the next. The game's own rule
+/// says more: a note can be hit from its time on, and it is missed in the
+/// first game frame after its window closed in which the cursor is not on
+/// it. The hit test comes first (`NoteManager.gd`, `reposition_notes`), so
+/// a hit can land one game frame behind the window, and the sample behind
+/// it later still. Real recordings have a few such hits per run, up to
+/// 11 ms behind a 55 ms window.
+///
+/// So a hit whose samples leave room for it is put inside its note's
+/// window: at the window's end when its sample lies behind that, at the
+/// note's time when the cut-off stamp lies before it, on its sample
+/// otherwise. A hit whose samples leave no room (the note had not come yet
+/// at the sample behind the hit, or its window was shut already at the
+/// sample before) stays on its sample and does not fit: a hit these notes
+/// have no place for.
+pub(crate) fn legacy_placements(replay: &Replay, notes: &[Note]) -> Option<Vec<LegacyPlacement>> {
+    let Origin::Sspre { skips, hits, .. } = &replay.origin else {
+        return None;
+    };
+    let window = hit_window_ms(replay);
+    let slack = LEGACY_STAMP_SLACK_MS * f64::from(replay.speed).max(1.0);
+    // From the run's own clock to where the frames are now: every skip
+    // before a moment has moved it forward by its jump.
+    let now = |own_ms: f64| {
+        own_ms
+            + skips
+                .iter()
+                .filter(|s| s.at_ms < own_ms)
+                .map(|s| s.jump_ms)
+                .sum::<f64>()
+    };
+    Some(
+        hits.iter()
+            .map(|hit| {
+                let (after, by) = (now(hit.after_ms), now(hit.by_ms));
+                let note = hit.note as usize;
+                // An index past the last note belongs to another map.
+                let room = notes.get(note).and_then(|n| {
+                    let open = n.time_ms as f64;
+                    let close = open + window;
+                    (by + slack >= open && after <= close + slack).then_some((open, close))
+                });
+                LegacyPlacement {
+                    note,
+                    ms: room.map_or(by, |(open, close)| by.clamp(open, close)),
+                    fits: room.is_some(),
+                }
+            })
+            .collect(),
+    )
+}
+
+/// Puts the flagged frames of a converted legacy replay where
+/// [`legacy_placements`] settles its hits against this map, with the
+/// cursor taken from the recorded path at that moment.
+///
+/// Derived from the hits kept in the replay's origin, so pairing with
+/// another map starts over. Returns true when a frame changed.
+pub(crate) fn place_legacy_hits(replay: &mut Replay, map: &Map) -> bool {
+    let Some(placements) = legacy_placements(replay, &map.notes) else {
+        return false;
+    };
+    if placements.is_empty() {
+        return false;
+    }
+    // Only the recorded samples; every flagged frame is one of ours.
+    let samples: Vec<Frame> = replay.frames.iter().filter(|f| !f.hit).copied().collect();
+    let mut placed: Vec<Frame> = placements
+        .iter()
+        .map(|p| {
+            let (x, y) = cursor_at(&samples, p.ms);
+            Frame {
+                ms: p.ms,
+                x,
+                y,
+                health: 1.0,
+                hit: true,
+            }
+        })
+        .collect();
+    // Notes are hit in map order almost always, but a late hit on one note
+    // can come after an early hit on the next.
+    placed.sort_by(|a, b| a.ms.total_cmp(&b.ms));
+
+    let frames = weave(samples, placed);
+    let changed = frames != replay.frames;
+    replay.frames = frames;
+    changed
+}
+
 /// Turns a `.phxr` replay's note results into flagged frames against this
 /// map: one frame per hit, at the note's time plus the recorded lateness,
 /// with the cursor where the samples around it put it. Also fills in what
@@ -234,21 +366,11 @@ pub(crate) fn place_judgments(replay: &mut Replay, map: &Map) -> bool {
     hits.sort_by(|a, b| a.ms.total_cmp(&b.ms));
     judged.sort_by(|a, b| a.0.total_cmp(&b.0));
 
-    // The samples keep their recorded order; each hit goes in right after
-    // the last sample that is not later than it.
     let last_sample_ms = samples
         .iter()
         .map(|f| f.ms)
         .fold(f64::NEG_INFINITY, f64::max);
-    let mut frames = Vec::with_capacity(samples.len() + hits.len());
-    let mut pending = hits.into_iter().peekable();
-    for sample in samples {
-        while let Some(hit) = pending.next_if(|h| h.ms < sample.ms) {
-            frames.push(hit);
-        }
-        frames.push(sample);
-    }
-    frames.extend(pending);
+    let mut frames = weave(samples, hits);
 
     let mut health = Health::new();
     let mut next = 0;
@@ -277,8 +399,9 @@ pub(crate) fn place_judgments(replay: &mut Replay, map: &Map) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hitreg::{hit_window_ms, match_hits};
+    use crate::hitreg::{hit_window_ms, judge, match_hits};
     use crate::timebase::normalize;
+    use rhythia_formats::rhr::{LegacyHit, Skip};
 
     /// Notes as (time, column, row) on the 3x3 grid, row 0 on top.
     fn map_with(notes: &[(i64, f32, f32)]) -> Map {
@@ -644,6 +767,7 @@ mod tests {
                 Origin::Sspre {
                     skips: vec![],
                     judged_end,
+                    hits: vec![],
                 },
                 &[(0.0, 0.0, 0.0), (2100.0, 0.0, 0.0)],
                 2,
@@ -663,5 +787,197 @@ mod tests {
         let mut silent = legacy(None);
         assert!(!normalize(&mut silent, &map));
         assert_eq!(silent.fail_time_ms, -1);
+    }
+
+    /// A legacy replay as the parser hands it over: the samples, and every
+    /// hit as (note, sample before it, sample behind it) on the run's own
+    /// clock. The flagged frames come from pairing it with a map.
+    fn legacy(samples: &[(f64, f32, f32)], hits: &[(u32, f64, f64)], skips: &[f64]) -> Replay {
+        replay_of(
+            Origin::Sspre {
+                skips: skips
+                    .iter()
+                    .map(|&at_ms| Skip {
+                        at_ms,
+                        jump_ms: 0.0,
+                    })
+                    .collect(),
+                judged_end: None,
+                hits: hits
+                    .iter()
+                    .map(|&(note, after_ms, by_ms)| LegacyHit {
+                        note,
+                        after_ms,
+                        by_ms,
+                    })
+                    .collect(),
+            },
+            samples,
+            hits.len() as i32,
+            0,
+        )
+    }
+
+    fn judged(r: &Replay, map: &Map) -> (Vec<Option<f64>>, u32) {
+        let outcome = judge(r, &map.notes);
+        (
+            outcome.results.iter().map(|n| n.hit_ms).collect(),
+            outcome.orphan_flags,
+        )
+    }
+
+    #[test]
+    fn a_legacy_hit_taken_a_frame_behind_the_window_lands_at_its_end() {
+        // The window of the note at 1000 shuts at 1055. The game still took
+        // the hit in the frame after that, and the next cursor sample came
+        // at 1066: one sample at 1054, inside the window, then that one.
+        let map = map_with(&[(1000, 1.0, 1.0)]);
+        let mut r = legacy(
+            &[(990.0, 0.0, 0.0), (1054.0, 0.0, 0.0), (1066.0, 0.6, 0.0)],
+            &[(0, 1054.0, 1066.0)],
+            &[],
+        );
+        assert!(normalize(&mut r, &map));
+        // At the window's end, on the recorded path between the samples.
+        let at = flagged(&r);
+        assert_eq!(at.len(), 1);
+        assert_eq!(at[0].0, 1055.0);
+        assert!((at[0].1 - 0.05).abs() < 1e-5, "{:?}", at[0]);
+        // The samples are untouched and the frames still run forward.
+        let samples: Vec<f64> = r.frames.iter().filter(|f| !f.hit).map(|f| f.ms).collect();
+        assert_eq!(samples, vec![990.0, 1054.0, 1066.0]);
+        assert!(r.frames.windows(2).all(|w| w[0].ms <= w[1].ms));
+        assert_eq!(judged(&r, &map), (vec![Some(1055.0)], 0));
+        // Found by the time alone as well, which the flip detection uses.
+        let by_time = match_hits(&map.notes, &r.frames, hit_window_ms(&r));
+        assert_eq!((by_time.derived_hits(), by_time.orphan_flags), (1, 0));
+        assert!(!normalize(&mut r, &map), "a second pass changes nothing");
+    }
+
+    #[test]
+    fn a_legacy_hit_stamped_just_before_its_note_lands_on_the_note() {
+        // The game cuts its clock to whole milliseconds, which at a speed
+        // mod can leave the sample behind a hit a moment before the note.
+        let map = map_with(&[(1000, 1.0, 1.0)]);
+        let mut r = legacy(
+            &[(988.0, 0.0, 0.0), (999.4, 0.0, 0.0), (1011.0, 0.0, 0.0)],
+            &[(0, 988.0, 999.4)],
+            &[],
+        );
+        normalize(&mut r, &map);
+        assert_eq!(flagged(&r)[0].0, 1000.0);
+        assert_eq!(judged(&r, &map), (vec![Some(1000.0)], 0));
+    }
+
+    #[test]
+    fn a_legacy_hit_inside_its_window_stays_on_its_sample() {
+        let map = map_with(&[(1000, 1.0, 1.0)]);
+        let mut r = legacy(
+            &[(990.0, 0.0, 0.0), (1012.0, 0.25, 0.5)],
+            &[(0, 990.0, 1012.0)],
+            &[],
+        );
+        normalize(&mut r, &map);
+        assert_eq!(flagged(&r), vec![(1012.0, 0.25, 0.5)]);
+        // The sample itself stays a plain frame, with the hit behind it.
+        let frames: Vec<(f64, bool)> = r.frames.iter().map(|f| (f.ms, f.hit)).collect();
+        assert_eq!(
+            frames,
+            vec![(990.0, false), (1012.0, false), (1012.0, true)]
+        );
+    }
+
+    #[test]
+    fn a_legacy_run_is_judged_by_the_notes_its_file_names() {
+        // Two notes 10 ms apart. The file says the first was missed and the
+        // second hit. Going by the time alone the one flag goes to the
+        // first note, which gets the totals right and the notes wrong.
+        let map = map_with(&[(1000, 1.0, 1.0), (1010, 1.0, 1.0)]);
+        let mut r = legacy(
+            &[(990.0, 0.0, 0.0), (1012.0, 0.0, 0.0)],
+            &[(1, 990.0, 1012.0)],
+            &[],
+        );
+        r.misses = 1;
+        normalize(&mut r, &map);
+        let by_time = match_hits(&map.notes, &r.frames, hit_window_ms(&r));
+        assert!(by_time.results[0].hit && !by_time.results[1].hit);
+        assert_eq!(judged(&r, &map), (vec![None, Some(1012.0)], 0));
+        // The same result against the notes as played.
+        let mut mirrored = map.clone();
+        for n in &mut mirrored.notes {
+            n.x = 2.0 - n.x;
+        }
+        assert_eq!(judged(&r, &mirrored), (vec![None, Some(1012.0)], 0));
+    }
+
+    #[test]
+    fn a_legacy_hit_the_notes_have_no_place_for_is_an_orphan() {
+        let map = map_with(&[(1000, 1.0, 1.0), (5000, 1.0, 1.0)]);
+        let mut r = legacy(
+            &[
+                (990.0, 0.0, 0.0),
+                (1012.0, 0.0, 0.0),
+                (1100.0, 0.0, 0.0),
+                (1112.0, 0.0, 0.0),
+                (4000.0, 0.0, 0.0),
+                (4012.0, 0.0, 0.0),
+            ],
+            &[
+                (0, 990.0, 1012.0),  // fine
+                (0, 1012.0, 1100.0), // the same note again
+                (0, 1100.0, 1112.0), // its window was shut at the sample before
+                (1, 4000.0, 4012.0), // the note had not come yet
+                (7, 4000.0, 4012.0), // no such note
+            ],
+            &[],
+        );
+        normalize(&mut r, &map);
+        // Every hit keeps a flagged frame; the ones without room stay on
+        // their samples.
+        let times: Vec<f64> = flagged(&r).iter().map(|f| f.0).collect();
+        assert_eq!(times, vec![1012.0, 1055.0, 1112.0, 4012.0, 4012.0]);
+        assert_eq!(judged(&r, &map), (vec![Some(1012.0), None], 4));
+        let report = crate::integrity::verify_replay(&r, &map);
+        assert!(!report.consistent());
+    }
+
+    #[test]
+    fn legacy_hits_behind_a_skip_follow_the_jump_and_another_map_starts_over() {
+        // At 1.00x a skip lands 2000 ms before the next note: from 500 to
+        // 58000 against the note at 60000, a jump of 57500.
+        let map = map_with(&[(60000, 1.0, 1.0)]);
+        let mut r = legacy(
+            &[
+                (400.0, 0.0, 0.0),
+                (600.0, 0.0, 0.0),
+                (2500.0, 0.0, 0.0),
+                (2560.0, 0.0, 0.0),
+            ],
+            &[(0, 2500.0, 2560.0)],
+            &[500.0],
+        );
+        assert!(normalize(&mut r, &map));
+        // 2560 on the run's clock is 60060 now, 5 ms behind the window.
+        assert_eq!(
+            flagged(&r).iter().map(|f| f.0).collect::<Vec<_>>(),
+            vec![60055.0]
+        );
+        assert_eq!(judged(&r, &map), (vec![Some(60055.0)], 0));
+        assert!(!normalize(&mut r, &map));
+
+        let other = map_with(&[(30010, 1.0, 1.0)]);
+        assert!(normalize(&mut r, &other));
+        // Jump 27510: the samples sit at 30010 and 30070 now.
+        assert_eq!(
+            flagged(&r).iter().map(|f| f.0).collect::<Vec<_>>(),
+            vec![30065.0]
+        );
+        assert_eq!(judged(&r, &other), (vec![Some(30065.0)], 0));
+        assert!(normalize(&mut r, &map));
+        assert_eq!(
+            flagged(&r).iter().map(|f| f.0).collect::<Vec<_>>(),
+            vec![60055.0]
+        );
     }
 }

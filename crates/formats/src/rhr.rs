@@ -100,6 +100,11 @@ pub enum Origin {
         /// ended early (failed or given up); where exactly is only known
         /// with the map.
         judged_end: Option<u32>,
+        /// Every hit the run recorded, in file order. The file names the
+        /// note of each one but not its moment, so the flagged frames are
+        /// provisional until `rhythia_sim::timebase::normalize` has the
+        /// note times to place them by (see [`LegacyHit`]).
+        hits: Vec<LegacyHit>,
     },
     /// Converted from a `.phxr` file of the free community client
     /// ([`crate::phxr`]). Its frame times are song time as stored.
@@ -146,6 +151,25 @@ impl Judgments {
     pub fn lateness_ms(result: u8) -> Option<f64> {
         (result != Self::MISS).then(|| f64::from(result) / 4.0)
     }
+}
+
+/// A hit in a converted legacy replay.
+///
+/// The game writes a hit as a note index with no time of its own. Cursor
+/// samples are written on their own schedule (32 to 144 a second,
+/// following the cursor's speed), so all the file says about the moment is
+/// that it lies behind one sample and no later than the next. Both times
+/// are song time on the run's own clock, as if no skip had ever jumped it
+/// forward.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LegacyHit {
+    /// Index into the map's note list.
+    pub note: u32,
+    /// The last cursor sample before the hit; negative infinity when the
+    /// hit comes before the first sample.
+    pub after_ms: f64,
+    /// The first cursor sample from the hit on.
+    pub by_ms: f64,
 }
 
 /// A skip in a converted legacy replay.

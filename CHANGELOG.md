@@ -10,7 +10,10 @@ endorsed by Rhythia or Capo Games.
   - `.sspre`, legacy Sound Space Plus: drop the file, then pick its map
     (`.sspm`). The recording is stamped in real time, so song time is rebuilt
     from its own pause, unpause and skip signals, the way the game plays it
-    back.
+    back. The file says for every note whether it was hit, and that is what
+    the video shows. It does not say when: a hit lies between two cursor
+    samples (7 to 31 ms apart) and is shown on the later one, inside the
+    note's hit window.
   - `.phxr`, the current free client (the Godot 4 rewrite): the file stores a
     result per note instead of a hit flag per frame, and rhythr places the
     hits once the map is loaded. A replay that still sits in the client's
@@ -22,8 +25,10 @@ endorsed by Rhythia or Capo Games.
   client's rule for `.phxr` and stays full for `.sspre`. A run that was failed
   or abandoned ends where its recording ends. The check for `.phxr` covers
   the file's checksum, the map's note count and whether the recorded cursor
-  was on the note at each hit. Checked against the clients' source and
-  synthetic recordings so far, not yet against real ones.
+  was on the note at each hit. `.sspre` is checked against real recordings:
+  two full runs come out note for note as their files have them. `.phxr` is
+  checked against the client's source and synthetic recordings so far, not
+  yet against real ones.
 
 ## v0.8.0 (2026-11-09)
 

@@ -121,6 +121,45 @@ impl MatchOutcome {
     }
 }
 
+/// The result of every note for this replay.
+///
+/// A `.rhr` flags the frames on which a note was hit and leaves the notes
+/// to be worked out, which is [`match_hits`]. A converted legacy replay
+/// names the note of every hit itself, and here it is taken at its word:
+/// working the notes out again from the times gets the totals right but
+/// hands about a third of the misses of a real run to a neighbouring note.
+/// A hit the notes have no place for (the wrong map, a note named twice)
+/// counts as an orphan, exactly like a flag that matches nothing.
+///
+/// `notes` may be the map as played (mirrored, spread); only the times
+/// and the order matter.
+pub fn judge(replay: &Replay, notes: &[Note]) -> MatchOutcome {
+    let Some(placements) = crate::pairing::legacy_placements(replay, notes) else {
+        return match_hits(notes, &replay.frames, hit_window_ms(replay));
+    };
+    let mut results: Vec<NoteResult> = (0..notes.len())
+        .map(|i| NoteResult {
+            note_index: i,
+            hit: false,
+            hit_ms: None,
+        })
+        .collect();
+    let mut orphan_flags = 0u32;
+    for p in placements {
+        match results.get_mut(p.note) {
+            Some(r) if p.fits && !r.hit => {
+                r.hit = true;
+                r.hit_ms = Some(p.ms);
+            }
+            _ => orphan_flags += 1,
+        }
+    }
+    MatchOutcome {
+        results,
+        orphan_flags,
+    }
+}
+
 /// Aligns flagged frames to notes with a monotonic two-pointer walk,
 /// then refines the attribution with the recorded cursor (see Phase 2
 /// below). Notes must be sorted by time (Map guarantees this).

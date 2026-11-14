@@ -13,8 +13,11 @@
 //!   separate signals, and song time has to be rebuilt from them the way
 //!   the game's own playback does (`NoteManager.gd`, the `rms`/`ms` pair).
 //! * Hits and misses are recorded per note index instead of as a flag on a
-//!   frame, with no timestamp of their own: the game writes the result and
-//!   then forces a cursor sample in the same game frame.
+//!   frame, with no timestamp of their own. The cursor is sampled on a
+//!   schedule of its own (32 to 144 times a second, following the cursor's
+//!   speed; `NoteManager.gd`, `rec_interval`), so a result lies somewhere
+//!   between the sample before it and the next one, which may be written
+//!   in the same game frame or up to a thirtieth of a second later.
 //! * There is no player name, no score and no health. Since format version
 //!   3 the file carries the player's view settings instead.
 //!
@@ -22,7 +25,7 @@
 //! serializer and none may be added.
 
 use crate::reader::Reader;
-use crate::rhr::{civil_ticks, Frame, Origin, Replay, Skip, V_PITCH_LOCK};
+use crate::rhr::{civil_ticks, Frame, LegacyHit, Origin, Replay, Skip, V_PITCH_LOCK};
 use crate::{Error, Result};
 
 /// `Ss*R`, the first four bytes of every `.sspre` file.
@@ -310,6 +313,12 @@ impl Sspre {
     /// A skip jumps the song clock to a fixed lead before the NEXT NOTE, a
     /// distance only the map knows. Those jumps are left unsized in
     /// [`Origin::Sspre`] until the map is at hand.
+    ///
+    /// A hit has no time of its own in the file. Until the map is at hand
+    /// its flagged frame sits on the first cursor sample behind it, which
+    /// is the latest the hit can have been; the hits are kept in
+    /// [`Origin::Sspre`] with the note each one names, to be placed against
+    /// the note times.
     pub fn to_replay(&self) -> Result<Replay> {
         if self.version < 2 {
             return Err(bad(
@@ -330,7 +339,10 @@ impl Sspre {
         let real = |rms: u32| f64::from(rms) + 1.0;
 
         let (mut hits, mut misses) = (0i32, 0i32);
-        let (mut unflagged_hits, mut gave_up) = (0u32, false);
+        let mut gave_up = false;
+        // Notes hit since the last cursor sample.
+        let mut unflagged_hits: Vec<u32> = Vec::new();
+        let mut placed_hits: Vec<LegacyHit> = Vec::new();
         let mut judged_end: Option<u32> = None;
         let mut pause_ms = anchor_ms;
         // The furthest song time the run has reached; a pause counts, so
@@ -343,7 +355,7 @@ impl Sspre {
             match *event {
                 Event::Hit { note } => {
                     hits += 1;
-                    unflagged_hits += 1;
+                    unflagged_hits.push(note);
                     judged_end = judged_end.max(Some(note.saturating_add(1)));
                 }
                 Event::Miss { note } => {
@@ -383,16 +395,8 @@ impl Sspre {
                         health: 1.0,
                         hit,
                     };
-                    if unflagged_hits > 0 {
-                        // One frame per hit keeps the flag count equal to
-                        // the hit count when two notes land in one game
-                        // frame.
-                        reached = reached.max(ms);
-                        for _ in 0..unflagged_hits {
-                            frames.push(frame(reached, true));
-                        }
-                        unflagged_hits = 0;
-                    } else if rate > 0.0 && ms > reached {
+                    let before = reached;
+                    if rate > 0.0 && ms > reached {
                         reached = ms;
                         frames.push(frame(ms, false));
                     }
@@ -402,14 +406,36 @@ impl Sspre {
                     // frame times that only move forward, and where the
                     // cursor wandered during a pause is not part of the
                     // run.
+
+                    // One frame per hit keeps the flag count equal to the
+                    // hit count when several notes are hit between two
+                    // samples.
+                    if !unflagged_hits.is_empty() {
+                        // Only ever moves `reached` for a hit before the
+                        // run's first forward sample.
+                        reached = reached.max(ms);
+                    }
+                    for note in unflagged_hits.drain(..) {
+                        frames.push(frame(reached, true));
+                        placed_hits.push(LegacyHit {
+                            note,
+                            after_ms: before,
+                            by_ms: reached,
+                        });
+                    }
                 }
             }
         }
         // A hit with no cursor sample after it (the file ends right there)
         // still has to be flagged somewhere.
         if let Some(&last) = frames.last() {
-            for _ in 0..unflagged_hits {
+            for note in unflagged_hits.drain(..) {
                 frames.push(Frame { hit: true, ..last });
+                placed_hits.push(LegacyHit {
+                    note,
+                    after_ms: last.ms,
+                    by_ms: last.ms,
+                });
             }
         }
 
@@ -440,7 +466,11 @@ impl Sspre {
             pitch_lock: false,
             frames,
             trailing_bytes: self.trailing_bytes,
-            origin: Origin::Sspre { skips, judged_end },
+            origin: Origin::Sspre {
+                skips,
+                judged_end,
+                hits: placed_hits,
+            },
         })
     }
 
@@ -714,7 +744,8 @@ mod tests {
             r.origin,
             Origin::Sspre {
                 skips: vec![],
-                judged_end: None
+                judged_end: None,
+                hits: vec![]
             }
         );
     }
@@ -755,7 +786,7 @@ mod tests {
     }
 
     #[test]
-    fn a_hit_flags_the_cursor_sample_written_in_the_same_game_frame() {
+    fn a_hit_is_flagged_on_the_first_cursor_sample_behind_it() {
         let data = Fixture::new(4, ID, PLAIN)
             .cursor(3000, 1.0, 1.0)
             .signal(RS_HIT, 0)
@@ -763,27 +794,66 @@ mod tests {
             .signal(RS_MISS, 1)
             .cursor(3200, 1.0, 1.0)
             .signal(RS_HIT, 2)
-            .signal(RS_HIT, 3) // two notes in one game frame
+            .signal(RS_HIT, 3) // two notes between two samples
             .cursor(3300, 2.0, 2.0)
             .signal(RS_HIT, 4) // the file ends right after a hit
             .finish(3300);
         let r = replay(&data);
+        // The samples stay what they are; every hit is a frame of its own
+        // on the sample behind it.
         let flags: Vec<(f64, bool)> = r.frames.iter().map(|f| (f.ms, f.hit)).collect();
         assert_eq!(
             flags,
             vec![
                 (1.0, false),
+                (101.0, false),
                 (101.0, true),
                 (201.0, false),
+                (301.0, false),
                 (301.0, true),
                 (301.0, true),
                 (301.0, true)
             ]
         );
+        let on_the_sample =
+            |i: usize| (r.frames[i].x, r.frames[i].y) == (r.frames[i - 1].x, r.frames[i - 1].y);
+        assert!(on_the_sample(2) && on_the_sample(5) && on_the_sample(6) && on_the_sample(7));
         assert_eq!((r.hits, r.misses), (4, 1));
         assert_eq!(r.flagged_frames(), 4);
         assert_eq!(r.accuracy_pct, 80.0);
         assert!(r.passed);
+    }
+
+    #[test]
+    fn every_hit_keeps_its_note_and_the_samples_around_it() {
+        let data = Fixture::new(4, ID, PLAIN)
+            .signal(RS_HIT, 7) // before the first sample
+            .cursor(3000, 1.0, 1.0)
+            .signal(RS_HIT, 8)
+            .signal(RS_MISS, 9)
+            .signal(RS_HIT, 10)
+            .cursor(3012, 1.0, 1.0)
+            .signal(RS_PAUSE, 3020) // song 21
+            .signal(RS_HIT, 11)
+            .cursor(3500, 1.0, 1.0) // paused: no frame, but the hit is kept
+            .finish(3500);
+        let Origin::Sspre { hits, .. } = replay(&data).origin else {
+            panic!("not a legacy origin");
+        };
+        let hit = |note, after_ms, by_ms| LegacyHit {
+            note,
+            after_ms,
+            by_ms,
+        };
+        assert_eq!(
+            hits,
+            vec![
+                hit(7, f64::NEG_INFINITY, 1.0),
+                hit(8, 1.0, 13.0),
+                hit(10, 1.0, 13.0),
+                hit(11, 21.0, 21.0),
+            ]
+        );
     }
 
     #[test]
@@ -820,7 +890,8 @@ mod tests {
                     at_ms: 1000.0,
                     jump_ms: 0.0
                 }],
-                judged_end: None
+                judged_end: None,
+                hits: vec![]
             }
         );
         assert_eq!(
