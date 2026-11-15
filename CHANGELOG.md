@@ -8,7 +8,9 @@ endorsed by Rhythia or Capo Games.
 - **Replays from the free community clients (test builds only).** rhythr
   opens two more replay formats next to `.rhr`.
   - `.sspre`, legacy Sound Space Plus: drop the file, then pick its map
-    (`.sspm`). The recording is stamped in real time, so song time is rebuilt
+    (`.sspm`). A map file in the replay's folder, or in the legacy client's
+    `maps` folder next to its `replays` folder, is found by itself, whatever
+    it is named. The recording is stamped in real time, so song time is rebuilt
     from its own pause, unpause and skip signals, the way the game plays it
     back. The file says for every note whether it was hit, and that is what
     the video shows. It does not say when: a hit lies between two cursor
@@ -20,6 +22,9 @@ endorsed by Rhythia or Capo Games.
     `replays` folder finds its map in the `maps` folder next to it by itself.
     Otherwise pick the map: the client's `.phxm` export, `objects.phxmo`
     inside the client's folder for that map, or its `.sspm`.
+
+  While a replay waits for its map, the preview now says which map it needs
+  and offers the file dialog, instead of still asking for a replay.
 
   Neither format stores a player name or a score. The health bar follows the
   client's rule for `.phxr` and stays full for `.sspre`. A run that was failed

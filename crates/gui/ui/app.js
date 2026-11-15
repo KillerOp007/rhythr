@@ -420,6 +420,32 @@ function renderMapCard() {
     <span class="chip info">${esc(src)}</span> ${warn}`;
 }
 
+/// The preview area while a replay waits for its map. It used to keep
+/// saying "Drop a replay to get started" with the replay already loaded,
+/// which reads as if the drop had done nothing: a replay of a free client
+/// carries no online id, so nothing is fetched for it and the only hint
+/// sat in the Map card at the side.
+function renderDropzone() {
+  const r = status?.replay;
+  const needsMap = !!(r && !status?.map && !status?.autoplay);
+  $("drop-start").hidden = needsMap;
+  $("drop-needmap").hidden = !needsMap;
+  if (!needsMap) return;
+  const name = r.legacy_map_id ? `<b>${esc(r.legacy_map_id)}</b>` : "this replay's map";
+  const file = (r.file_name || "").toLowerCase();
+  let text;
+  if (r.map_id > 0) {
+    text = `Its map has the online id <b>${r.map_id}</b> and is fetched from rhythia.com by itself. If that does not work, press Download in the Map card or choose a local .sspm/.rhm file.`;
+  } else if (file.endsWith(".phxr")) {
+    text = `A .phxr finds its map by itself only while it sits in the client's replays folder. Choose ${name}: <code>objects.phxmo</code> in the client's folder for that map, its .phxm export or its .sspm.`;
+  } else if (file.endsWith(".sspre")) {
+    text = `A .sspre carries no online map id, so its map cannot be downloaded. Choose the .sspm of ${name}. A copy in the replay's folder, or in the legacy client's maps folder next to its replays folder, is found by itself when the replay is loaded.`;
+  } else {
+    text = `It carries no online map id, so its map cannot be downloaded. Choose ${name} as a local .sspm/.rhm file.`;
+  }
+  $("drop-needmap-text").innerHTML = text;
+}
+
 // ---------------------------------------------------- collapsible sources
 
 const CARD_STORE = "rhythr.cards.collapsed";
@@ -2082,7 +2108,9 @@ function updateRenderButton() {
       : ready
         ? readyText
         : status?.replay
-          ? "No map yet. Download it, or browse for the file."
+          ? status.replay.map_id > 0
+            ? "No map yet. Download it, or browse for the file."
+            : "No map yet. Choose this replay's map file."
           : "Load a replay to render";
     // Which file this will produce was invisible until the render finished.
     // Resolved by the backend so it matches exactly what gets written.
@@ -2138,6 +2166,7 @@ async function applyStatus(st) {
   renderBackgroundCard();
   renderPresetsCard();
   renderMapCard();
+  renderDropzone();
   renderConfigCard();
   renderGameCard();
   renderRecent();
@@ -2392,6 +2421,8 @@ function initControls() {
   // The empty-state panel invited a drop but did nothing on a click, which
   // is the first thing anyone tries.
   $("btn-drop-open").addEventListener("click", pickReplay);
+  // The same dialog as Browse in the Map card, where the eye already is.
+  $("btn-drop-map").addEventListener("click", () => $("btn-map").click());
   $("btn-map").addEventListener("click", async () => {
     // During Autoplay the map comes from the export picker; a map file
     // dropped on the window still works and becomes the session's map.
