@@ -178,14 +178,14 @@ Shown to the user: Re-export the replay from the game and copy the whole file.
 - **all systems**: There is no signature check on .rhr, so a file that is not a replay at all (a map, a skin export, the game's config.json, a renamed PNG) produces the same byte-level complaint as a truncated one. A healthy .rhr is a header plus a multiple of 17 bytes.
 - **Windows**: Explorer hides known extensions, so run.rhr.txt looks like run.rhr, and drag-and-drop accepts anything the Browse dialog would filter out. A copy interrupted mid-write, an unhydrated cloud placeholder, or the game still holding the file open all give a short file.
 - **Linux**: Usually a copy made out of the Proton prefix while the game was still writing it: there is no mandatory locking, so a mid-write read always succeeds partially and always lands here.
-- Recognised by: `unexpected end of data`, `malformed varint`, `is not valid utf-8`, `is not a valid length`
+- Recognised by: `unexpected end of data`, `malformed varint`, `is not valid utf-8`, `is not a valid length`, `.sspre replay`, `.phxr replay`
 
 ### RH-MAP-402 the map file could not be read
 
 Shown to the user: Load the .sspm or .rhm itself, or let rhythr download the map.
 
 - **all systems**: Only .sspm, .rhm and the game's cache .json are accepted, so a downloaded .zip fails on its extension. "Could not find EOCD" means the archive is incomplete (interrupted download); "unsupported version 3" means the map is newer than this build; "missing or invalid field Notes" is what the game's own config.json produces, because a dropped .json is tried as a map before it is tried as a skin.
-- Recognised by: `sspm:`, `.rhm archive`, `map json:`, `unsupported map file extension`, `-byte limit`, `eocd`
+- Recognised by: `sspm:`, `.phxm map`, `.rhm archive`, `map json:`, `unsupported map file extension`, `-byte limit`, `eocd`
 
 ### RH-MAP-403 the loaded map is not the one the replay was played on
 

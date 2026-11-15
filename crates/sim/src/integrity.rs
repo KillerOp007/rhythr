@@ -12,12 +12,20 @@
 //!    time ≤ failTime when failed (lastFrame+window overshoots by one).
 
 use rhythia_formats::map::Map;
-use rhythia_formats::rhr::Replay;
+use rhythia_formats::rhr::{Origin, Replay};
 
 use crate::hitreg::{self, MatchOutcome};
 
 /// Header accuracy is an f32 computed by the game; allow for its rounding.
 const ACCURACY_TOLERANCE_PCT: f64 = 0.01;
+
+/// Name of the check that compares the note count a converted replay
+/// carries with the loaded map's.
+const NOTE_COUNT_CHECK: &str = "map has the notes the replay judged";
+
+/// Name of the check that holds a `.phxr` replay's hits against its
+/// recorded cursor.
+const CURSOR_CHECK: &str = "cursor on the note at every hit";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Severity {
@@ -69,7 +77,11 @@ pub fn looks_like_the_wrong_map(
     let id_mismatch = report.checks.iter().any(|c| {
         !c.ok
             && (c.name == "map online id matches replay"
-                || c.name == "map legacy id matches replay")
+                || c.name == "map legacy id matches replay"
+                || c.name == NOTE_COUNT_CHECK
+                // A cursor that was nowhere near a large share of the
+                // notes it hit was playing other notes.
+                || (c.name == CURSOR_CHECK && c.severity == Severity::Error))
     });
     if id_mismatch {
         return true;
@@ -113,7 +125,15 @@ pub fn verify(replay: &Replay, map: &Map, outcome: &MatchOutcome) -> IntegrityRe
     let flagged_frames = replay.flagged_frames();
     let derived_hits = outcome.derived_hits();
 
-    let attempted_notes = if replay.failed() {
+    let converted = replay.origin.converted();
+    let attempted_notes = if converted {
+        // The other clients' formats name every note they judged, so the
+        // count is the file's own. Deriving it from the map would be less
+        // exact: a run that stops mid-map leaves the notes of its last
+        // few milliseconds unjudged, and one started mid-map never saw
+        // the notes before its start.
+        (replay.hits.max(0) as u32).saturating_add(replay.misses.max(0) as u32)
+    } else if replay.failed() {
         map.notes
             .iter()
             .filter(|n| n.time_ms <= i64::from(replay.fail_time_ms))
@@ -175,7 +195,9 @@ pub fn verify(replay: &Replay, map: &Map, outcome: &MatchOutcome) -> IntegrityRe
         "0".into(),
         outcome.orphan_flags.to_string(),
     );
-    if replay.failed() {
+    // Only a `.rhr` records health. A converted run that ends early may
+    // just as well have been abandoned at full health.
+    if replay.failed() && !converted {
         let min_health = replay
             .frames
             .iter()
@@ -212,7 +234,9 @@ pub fn verify(replay: &Replay, map: &Map, outcome: &MatchOutcome) -> IntegrityRe
             |i| format!("frame {} steps back", i + 1),
         ),
     );
-    if let Some(online_id) = map.meta.online_id {
+    // A converted replay names its map by legacy id only; it has no
+    // online id to compare.
+    if let Some(online_id) = map.meta.online_id.filter(|_| !converted) {
         push(
             "map online id matches replay",
             Severity::Warning,
@@ -221,7 +245,10 @@ pub fn verify(replay: &Replay, map: &Map, outcome: &MatchOutcome) -> IntegrityRe
             online_id.to_string(),
         );
     }
-    if !map.meta.legacy_id.is_empty() && !replay.legacy_map_id.is_empty() {
+    // A `.phxr` names its map by the folder it sat in on the player's
+    // disk, which is a file name, not an id: it proves nothing either way.
+    let names_its_map = !matches!(replay.origin, Origin::Phxr(_));
+    if names_its_map && !map.meta.legacy_id.is_empty() && !replay.legacy_map_id.is_empty() {
         push(
             "map legacy id matches replay",
             Severity::Warning,
@@ -229,6 +256,71 @@ pub fn verify(replay: &Replay, map: &Map, outcome: &MatchOutcome) -> IntegrityRe
             replay.legacy_map_id.clone(),
             map.meta.legacy_id.clone(),
         );
+    }
+    match &replay.origin {
+        Origin::Rhr => {}
+        Origin::Sspre { judged_end, .. } => {
+            // The file names its notes by index; an index past the map's
+            // last note belongs to another map.
+            if let Some(end) = *judged_end {
+                push(
+                    NOTE_COUNT_CHECK,
+                    Severity::Error,
+                    end as usize <= map.notes.len(),
+                    format!("at least {end}"),
+                    map.notes.len().to_string(),
+                );
+            }
+        }
+        Origin::Phxr(judgments) => {
+            // The file states the note count of its map. Any other count
+            // is another chart, and every result would land on the wrong
+            // note.
+            push(
+                NOTE_COUNT_CHECK,
+                Severity::Error,
+                judgments.map_notes == map.notes.len() as u64,
+                judgments.map_notes.to_string(),
+                map.notes.len().to_string(),
+            );
+            // The client itself refuses a file whose checksum is off, so
+            // one that fails here was changed after it was written (or
+            // cut short). Anyone can recompute the checksum; passing it
+            // proves nothing, failing it does.
+            push(
+                "replay checksum intact",
+                Severity::Error,
+                judgments.checksum_ok,
+                "matches".into(),
+                if judgments.checksum_ok {
+                    "matches".into()
+                } else {
+                    "does not match".into()
+                },
+            );
+            // The flagged frames of a `.phxr` are built from its own note
+            // results, so the count checks above cannot tell whether the
+            // results fit the recording. Whether the recorded cursor was
+            // on the note at each hit can. A few stray hits stay a
+            // warning: the path between two samples is an estimate (see
+            // `pairing`). A large share of them is not an estimate any
+            // more: the cursor was playing other notes.
+            if let Some(off_target) = judgments.off_target_hits {
+                let hits = replay.hits.max(0) as u32;
+                let widespread = off_target > 20 && off_target.saturating_mul(10) > hits;
+                push(
+                    CURSOR_CHECK,
+                    if widespread {
+                        Severity::Error
+                    } else {
+                        Severity::Warning
+                    },
+                    off_target == 0,
+                    "0 hits off target".into(),
+                    format!("{off_target} hits off target"),
+                );
+            }
+        }
     }
 
     IntegrityReport {
@@ -244,8 +336,7 @@ pub fn verify(replay: &Replay, map: &Map, outcome: &MatchOutcome) -> IntegrityRe
 
 /// Convenience: hitreg + verify in one call with the run's own hit window.
 pub fn verify_replay(replay: &Replay, map: &Map) -> IntegrityReport {
-    let window = hitreg::hit_window_ms(replay);
-    let outcome = hitreg::match_hits(&map.notes, &replay.frames, window);
+    let outcome = hitreg::judge(replay, &map.notes);
     verify(replay, map, &outcome)
 }
 
@@ -291,6 +382,74 @@ mod wrong_map_tests {
         assert!(looks_like_the_wrong_map(471, &report, false));
     }
 
+    /// A legacy Sound Space Plus replay knows its map by name only. Holding
+    /// its missing online id against a map that has one would call every
+    /// such run "the wrong map".
+    #[test]
+    fn a_converted_replay_is_not_checked_against_an_online_id() {
+        use rhythia_formats::map::{Map, MapMeta, Note};
+        use rhythia_formats::rhr::{Frame, Origin, Replay};
+        let map = Map {
+            meta: MapMeta {
+                online_id: Some(13076),
+                legacy_id: "some_map".into(),
+                ..Default::default()
+            },
+            notes: vec![Note {
+                time_ms: 1000,
+                x: 1.0,
+                y: 1.0,
+            }],
+            ..Default::default()
+        };
+        let frame = Frame {
+            ms: 1010.0,
+            x: 0.0,
+            y: 0.0,
+            health: 1.0,
+            hit: true,
+        };
+        let mut replay = Replay {
+            version: 5,
+            timestamp_ticks: 0,
+            player_name: String::new(),
+            legacy_map_id: "some_map".into(),
+            map_id: 0,
+            start_from_ms: 0,
+            mode: String::new(),
+            passed: true,
+            mods: "[]".into(),
+            spin: false,
+            speed: 1.0,
+            total_score: 0,
+            accuracy_pct: 100.0,
+            hits: 1,
+            misses: 0,
+            points: 0.0,
+            fail_time_ms: -1,
+            beatmap_hash: String::new(),
+            pitch_lock: false,
+            frames: vec![frame],
+            trailing_bytes: 0,
+            origin: Origin::Sspre {
+                skips: vec![],
+                judged_end: None,
+                hits: vec![],
+            },
+        };
+        let names = |r: &Replay| -> Vec<&'static str> {
+            verify_replay(r, &map)
+                .checks
+                .iter()
+                .map(|c| c.name)
+                .collect()
+        };
+        assert!(!names(&replay).contains(&"map online id matches replay"));
+        assert!(names(&replay).contains(&"map legacy id matches replay"));
+        replay.origin = Origin::Rhr;
+        assert!(names(&replay).contains(&"map online id matches replay"));
+    }
+
     /// A passing id check with quiet heuristics is NOT the wrong map: this
     /// must not fire on an honest run just because an id check exists.
     #[test]
@@ -305,5 +464,260 @@ mod wrong_map_tests {
     fn heuristic_still_catches_a_wrong_map_without_an_id_check() {
         let report = report_with(vec![], 100, 30, 5); // derived_hits*2 < header
         assert!(looks_like_the_wrong_map(100, &report, false));
+    }
+}
+
+#[cfg(test)]
+mod converted_tests {
+    use super::*;
+    use crate::timebase::normalize;
+    use rhythia_formats::map::{MapMeta, Note};
+    use rhythia_formats::rhr::{Frame, Judgments, LegacyHit};
+
+    const MISS: u8 = Judgments::MISS;
+
+    /// Four centre notes, a second apart.
+    fn map() -> Map {
+        Map {
+            meta: MapMeta {
+                legacy_id: "the_sspm_id".into(),
+                ..Default::default()
+            },
+            notes: (1..=4)
+                .map(|i| Note {
+                    time_ms: i * 1000,
+                    x: 1.0,
+                    y: 1.0,
+                })
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    fn replay_of(origin: Origin, last_sample_ms: f64, hits: i32, misses: i32) -> Replay {
+        let sample = |ms| Frame {
+            ms,
+            x: 0.0,
+            y: 0.0,
+            health: 1.0,
+            hit: false,
+        };
+        let judged = hits + misses;
+        Replay {
+            version: 5,
+            timestamp_ticks: 0,
+            player_name: String::new(),
+            legacy_map_id: "folder name on disk".into(),
+            map_id: 0,
+            start_from_ms: 0,
+            mode: String::new(),
+            passed: true,
+            mods: "[]".into(),
+            spin: false,
+            speed: 1.0,
+            total_score: 0,
+            accuracy_pct: if judged > 0 {
+                hits as f32 / judged as f32 * 100.0
+            } else {
+                100.0
+            },
+            hits,
+            misses,
+            points: 0.0,
+            fail_time_ms: -1,
+            beatmap_hash: String::new(),
+            pitch_lock: false,
+            frames: vec![sample(0.0), sample(last_sample_ms)],
+            trailing_bytes: 0,
+            origin,
+        }
+    }
+
+    /// A `.phxr` run over [`map`], paired with it.
+    fn phxr(results: &[u8], last_sample_ms: f64) -> Replay {
+        let hits = results.iter().filter(|&&r| r != MISS).count() as i32;
+        let mut r = replay_of(
+            Origin::Phxr(Judgments {
+                first_note: 0,
+                results: results.to_vec(),
+                map_notes: 4,
+                flip: (false, false),
+                checksum_ok: true,
+                off_target_hits: None,
+            }),
+            last_sample_ms,
+            hits,
+            results.len() as i32 - hits,
+        );
+        normalize(&mut r, &map());
+        r
+    }
+
+    fn check<'a>(report: &'a IntegrityReport, name: &str) -> Option<&'a Check> {
+        report.checks.iter().find(|c| c.name == name)
+    }
+
+    #[test]
+    fn a_paired_phxr_run_is_consistent() {
+        let r = phxr(&[0, 12, MISS, 200], 5000.0);
+        let report = verify_replay(&r, &map());
+        assert!(report.consistent(), "{:?}", report.checks);
+        assert_eq!(
+            (
+                report.derived_hits,
+                report.derived_misses,
+                report.attempted_notes
+            ),
+            (3, 1, 4)
+        );
+        assert!(check(&report, "replay checksum intact").unwrap().ok);
+        assert!(check(&report, NOTE_COUNT_CHECK).unwrap().ok);
+        assert!(check(&report, CURSOR_CHECK).unwrap().ok);
+        assert!(
+            check(&report, "map legacy id matches replay").is_none(),
+            "a folder name is not an id"
+        );
+        assert!(!looks_like_the_wrong_map(r.hits, &report, false));
+    }
+
+    #[test]
+    fn a_phxr_run_abandoned_at_full_health_is_still_consistent() {
+        // Two of four notes judged, both hit; the recording stops there.
+        let r = phxr(&[0, 0], 2300.0);
+        assert!(r.failed());
+        let report = verify_replay(&r, &map());
+        assert!(report.consistent(), "{:?}", report.checks);
+        assert_eq!((report.attempted_notes, report.derived_misses), (2, 0));
+        assert!(check(&report, "health reaches 0 on fail").is_none());
+    }
+
+    #[test]
+    fn a_broken_checksum_makes_a_phxr_run_inconsistent() {
+        let mut r = phxr(&[0, 0, 0, 0], 5000.0);
+        if let Origin::Phxr(j) = &mut r.origin {
+            j.checksum_ok = false;
+        }
+        let report = verify_replay(&r, &map());
+        assert!(!report.consistent());
+        let failed: Vec<&str> = report.failed_checks().map(|c| c.name).collect();
+        assert_eq!(failed, ["replay checksum intact"]);
+    }
+
+    #[test]
+    fn a_lateness_beyond_the_hit_window_does_not_pass_as_a_hit() {
+        // 254 quarter ms is 63.5 ms, later than the game ever allows.
+        let r = phxr(&[0, 254, 0, 0], 5000.0);
+        let report = verify_replay(&r, &map());
+        assert!(!report.consistent());
+        assert_eq!(report.orphan_flags, 1);
+    }
+
+    #[test]
+    fn another_note_count_points_at_the_wrong_map() {
+        let mut r = phxr(&[0, 0, 0, 0], 5000.0);
+        if let Origin::Phxr(j) = &mut r.origin {
+            j.map_notes = 900;
+        }
+        let report = verify_replay(&r, &map());
+        assert!(!check(&report, NOTE_COUNT_CHECK).unwrap().ok);
+        assert!(
+            !report.consistent(),
+            "every result would sit on the wrong note"
+        );
+        assert!(looks_like_the_wrong_map(r.hits, &report, false));
+    }
+
+    #[test]
+    fn a_cursor_that_missed_most_of_its_hits_points_at_the_wrong_map() {
+        // Forty centre notes, all hit according to the file, with the
+        // cursor parked in a corner throughout: same note count, other
+        // chart.
+        let map = Map {
+            notes: (1..=40)
+                .map(|i| Note {
+                    time_ms: i * 500,
+                    x: 1.0,
+                    y: 1.0,
+                })
+                .collect(),
+            ..Default::default()
+        };
+        let mut r = replay_of(
+            Origin::Phxr(Judgments {
+                first_note: 0,
+                results: vec![0; 40],
+                map_notes: 40,
+                flip: (false, false),
+                checksum_ok: true,
+                off_target_hits: None,
+            }),
+            25_000.0,
+            40,
+            0,
+        );
+        for f in &mut r.frames {
+            (f.x, f.y) = (1.3, 1.3);
+        }
+        normalize(&mut r, &map);
+        let report = verify_replay(&r, &map);
+        let off = check(&report, CURSOR_CHECK).unwrap();
+        assert_eq!((off.ok, off.severity), (false, Severity::Error));
+        assert!(!report.consistent());
+        assert!(looks_like_the_wrong_map(r.hits, &report, false));
+    }
+
+    #[test]
+    fn hits_with_the_cursor_elsewhere_raise_a_warning_only() {
+        let mut r = phxr(&[0, 0, 0, 0], 5000.0);
+        // The same run with the cursor parked in a corner.
+        for f in &mut r.frames {
+            (f.x, f.y) = (1.3, 1.3);
+        }
+        normalize(&mut r, &map());
+        let report = verify_replay(&r, &map());
+        let off = check(&report, CURSOR_CHECK).unwrap();
+        assert!(!off.ok);
+        assert_eq!(off.actual, "4 hits off target");
+        assert_eq!(off.severity, Severity::Warning);
+        assert!(report.consistent());
+    }
+
+    #[test]
+    fn a_legacy_run_that_stops_mid_map_is_judged_by_its_own_count() {
+        // Notes 0 and 1 judged (one hit, one miss), then the run ends. The
+        // file names the note of its hit; the flagged frame comes from
+        // pairing it with the map.
+        let hit_on_the_first_note = vec![LegacyHit {
+            note: 0,
+            after_ms: 0.0,
+            by_ms: 1004.0,
+        }];
+        let mut r = replay_of(
+            Origin::Sspre {
+                skips: vec![],
+                judged_end: Some(2),
+                hits: hit_on_the_first_note.clone(),
+            },
+            2300.0,
+            1,
+            1,
+        );
+        r.legacy_map_id = "the_sspm_id".into();
+        normalize(&mut r, &map());
+        assert_eq!(r.flagged_frames(), 1);
+        assert_eq!(r.fail_time_ms, 2300);
+        let report = verify_replay(&r, &map());
+        assert!(report.consistent(), "{:?}", report.checks);
+        assert_eq!((report.attempted_notes, report.derived_misses), (2, 1));
+        assert!(check(&report, NOTE_COUNT_CHECK).unwrap().ok);
+
+        // An index past the map's last note belongs to another map.
+        r.origin = Origin::Sspre {
+            skips: vec![],
+            judged_end: Some(40),
+            hits: hit_on_the_first_note,
+        };
+        let report = verify_replay(&r, &map());
+        assert!(looks_like_the_wrong_map(r.hits, &report, false));
     }
 }

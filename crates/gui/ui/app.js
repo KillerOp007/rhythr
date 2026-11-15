@@ -92,7 +92,7 @@ function renderReplayCard() {
   $("card-replay").querySelector("h2").textContent = "Replay";
   $("btn-replay").textContent = "Browse";
   if (!r) {
-    body.innerHTML = `<p class="hint">Drop a <code>.rhr</code> file anywhere</p>`;
+    body.innerHTML = `<p class="hint">Drop a <code>.rhr</code>, <code>.sspre</code> or <code>.phxr</code> file anywhere</p>`;
     return;
   }
   const date = r.unix_ms ? new Date(r.unix_ms).toLocaleString() : "";
@@ -392,11 +392,11 @@ function renderMapCard() {
         ? `<b>${esc(r.legacy_map_id)}</b>`
         : "this replay's map";
       body.innerHTML =
-        `<p class="hint">This replay carries no online map id, so it cannot be downloaded. Browse for ${named} as a local .sspm/.rhm file.</p>`;
+        `<p class="hint">This replay carries no online map id, so it cannot be downloaded. Browse for ${named} as a local .sspm/.rhm file. For a .phxr, pick <code>objects.phxmo</code> in the client's own folder for that map.</p>`;
     }
     return;
   }
-  const src = { local: "local file", cache: "cached download", downloaded: "downloaded" }[m.source] || m.source;
+  const src = { local: "local file", cache: "cached download", downloaded: "downloaded", client: "found next to the replay" }[m.source] || m.source;
   const warn = m.hash_mismatch
     ? `<span class="chip warn" title="The online map changed since this replay was recorded.">map updated since replay</span>`
     : "";
@@ -2237,14 +2237,21 @@ async function dropGhost(path) {
   }
 }
 
+// A replay rhythr can open: Rhythia (.rhr), legacy Sound Space Plus (.sspre)
+// or the free community client (.phxr).
+const isReplayPath = (p) => /\.(rhr|sspre|phxr)$/i.test(p);
+// A map file: .sspm, .rhm, or the free client's export (.phxm) or the notes
+// file inside one of its map folders (objects.phxmo).
+const isMapPath = (p) => /\.(sspm|rhm|phxm|phxmo)$/i.test(p);
+
 async function loadPath(path) {
   const name = path.split(/[\\/]/).pop();
   const lower = path.toLowerCase();
   try {
-    if (lower.endsWith(".rhr")) {
+    if (isReplayPath(lower)) {
       await call(() => invoke("load_replay", { path }));
       loadNote(`Loaded replay: ${name}`);
-    } else if (lower.endsWith(".sspm") || lower.endsWith(".rhm")) {
+    } else if (isMapPath(lower)) {
       await call(() => invoke("load_map", { path }));
       loadNote(`Loaded map: ${name}`);
     } else if (lower.endsWith(".json")) {
@@ -2333,13 +2340,13 @@ function initDragDrop() {
     clearHover();
     // Replays first: loading a replay may swap the auto-resolved map, so a
     // map dropped in the same gesture must land after it.
-    const rank = (p) => (p.toLowerCase().endsWith(".rhr") ? 0 : 1);
+    const rank = (p) => (isReplayPath(p) ? 0 : 1);
     let paths = [...(e.payload.paths || [])].sort((a, b) => rank(a) - rank(b));
     if (target?.kind === "ghost") {
       // ALL replays in the gesture go through the ghost route: two runs
       // dropped together become main + ghost instead of the second one
       // silently replacing the first.
-      const rhrs = paths.filter((p) => p.toLowerCase().endsWith(".rhr"));
+      const rhrs = paths.filter(isReplayPath);
       for (const p of rhrs) await dropGhost(p);
       paths = paths.filter((p) => !rhrs.includes(p));
     } else if (target?.kind === "background" && paths.length) {
@@ -2374,7 +2381,7 @@ function initDragDrop() {
 
 function initControls() {
   const pickReplay = async () => {
-    const p = await dialog.open({ filters: [{ name: "Rhythia replay", extensions: ["rhr"] }] });
+    const p = await dialog.open({ filters: [{ name: "Replay", extensions: ["rhr", "sspre", "phxr"] }] });
     if (p) await loadPath(p);
   };
   $("btn-replay").addEventListener("click", () => {
@@ -2392,7 +2399,7 @@ function initControls() {
       openPicker();
       return;
     }
-    const p = await dialog.open({ filters: [{ name: "Map", extensions: ["sspm", "rhm", "json"] }] });
+    const p = await dialog.open({ filters: [{ name: "Map", extensions: ["sspm", "rhm", "phxm", "phxmo", "json"] }] });
     if (p) await loadPath(p);
   });
   $("btn-map-dl").addEventListener("click", async () => {
@@ -2414,7 +2421,7 @@ function initControls() {
   });
   $("btn-config-clear").addEventListener("click", () => call(() => invoke("clear_config")).then(schedulePreview));
   $("btn-ghost").addEventListener("click", async () => {
-    const p = await dialog.open({ filters: [{ name: "Rhythia replay", extensions: ["rhr"] }] });
+    const p = await dialog.open({ filters: [{ name: "Replay", extensions: ["rhr", "sspre", "phxr"] }] });
     if (!p) return;
     try {
       await call(() => invoke("load_ghost", { path: p }));

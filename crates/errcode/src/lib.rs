@@ -666,6 +666,8 @@ pub static CODES: &[Entry] = &[
             "malformed varint",
             "is not valid utf-8",
             "is not a valid length",
+            ".sspre replay",
+            ".phxr replay",
         ],
         causes: &[
             (
@@ -697,6 +699,7 @@ pub static CODES: &[Entry] = &[
         fix: "Load the .sspm or .rhm itself, or let rhythr download the map.",
         patterns: &[
             "sspm:",
+            ".phxm map",
             ".rhm archive",
             "map json:",
             "unsupported map file extension",
@@ -1618,6 +1621,18 @@ mod tests {
                 "RH-MAP-401",
             ),
             (".sspm map: sspm: bad signature", "RH-MAP-402"),
+            (
+                ".phxm map: the folder holds no objects.phxmo",
+                "RH-MAP-402",
+            ),
+            (
+                ".phxr replay: the recording was never finished (it holds no frames)",
+                "RH-MAP-401",
+            ),
+            (
+                ".sspre replay: signal type 10 is not valid in format version 4",
+                "RH-MAP-401",
+            ),
             (
                 "rhythia.com is rate-limiting requests, please wait a moment and press \
                  Download again",

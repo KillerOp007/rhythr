@@ -14,7 +14,7 @@ use fontdue::{Font, FontSettings};
 use crate::config::srgb8_to_linear;
 use rhythia_formats::map::Map;
 use rhythia_formats::rhr::Replay;
-use rhythia_sim::hitreg::{hit_window_ms, match_hits, MatchOutcome};
+use rhythia_sim::hitreg::{hit_window_ms, judge, MatchOutcome};
 
 const FONT_BYTES: &[u8] = include_bytes!("../assets/hud-font.ttf");
 /// Glyphs are rasterised once at this pixel height; text quads scale from it.
@@ -525,7 +525,7 @@ pub struct HitDetail {
 impl HudState {
     pub fn new(map: &Map, replay: &Replay) -> HudState {
         let window_ms = hit_window_ms(replay);
-        let outcome = match_hits(&map.notes, &replay.frames, window_ms);
+        let outcome = judge(replay, &map.notes);
         // Cursor position at each hit: frames are time-sorted, so a single
         // merged walk resolves every hit's surrounding frame pair.
         let mut hit_details: Vec<HitDetail> = Vec::new();
@@ -1281,6 +1281,7 @@ mod tests {
                 hit: false,
             }],
             trailing_bytes: 0,
+            origin: rhythia_formats::rhr::Origin::Rhr,
         };
         (map, replay)
     }

@@ -33,7 +33,33 @@ pub const V_PITCH_LOCK: i32 = 20260803;
 
 /// Offset between .NET DateTime ticks (100 ns since 0001-01-01) and the
 /// Unix epoch, in ticks.
-const UNIX_EPOCH_TICKS: i64 = 621_355_968_000_000_000;
+pub(crate) const UNIX_EPOCH_TICKS: i64 = 621_355_968_000_000_000;
+
+/// A calendar date and time of day (read as UTC) as .NET ticks, or None
+/// when a part is out of range. The other clients name their recordings
+/// by date; this is what turns such a name into [`Replay::timestamp_ticks`].
+pub(crate) fn civil_ticks(
+    (year, month, day): (i64, i64, i64),
+    (hour, minute, second): (i64, i64, i64),
+) -> Option<i64> {
+    let in_range = (1..=9999).contains(&year)
+        && (1..=12).contains(&month)
+        && (1..=31).contains(&day)
+        && (0..24).contains(&hour)
+        && (0..60).contains(&minute)
+        && (0..60).contains(&second);
+    if !in_range {
+        return None;
+    }
+    // Days since 1970-01-01 (the civil-from-days algorithm, inverted).
+    let y = if month <= 2 { year - 1 } else { year };
+    let (era, year_of_era) = (y / 400, y % 400);
+    let day_of_year = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    let days = era * 146_097 + day_of_era - 719_468;
+    let seconds = days * 86_400 + hour * 3600 + minute * 60 + second;
+    Some(seconds * 10_000_000 + UNIX_EPOCH_TICKS)
+}
 
 /// Bytes one frame occupies on the wire: 4 (time, i32 or f32) + 4 (x) +
 /// 4 (y) + 4 (health) + 1 (hit flag).
@@ -55,7 +81,110 @@ pub struct Frame {
     pub hit: bool,
 }
 
-/// A fully parsed `.rhr` replay.
+/// Where a [`Replay`] came from.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum Origin {
+    /// A `.rhr` file, read as stored.
+    #[default]
+    Rhr,
+    /// Converted from a legacy Sound Space Plus `.sspre` file
+    /// ([`crate::sspre`]). Its frame times are already song time.
+    Sspre {
+        /// Where the player skipped ahead. A skip lands a fixed lead before
+        /// the next note, a distance only the map knows, so
+        /// `rhythia_sim::timebase::normalize` sizes each one once the map
+        /// is at hand (and again when the map changes).
+        skips: Vec<Skip>,
+        /// One past the highest note index the run judged, None when it
+        /// judged nothing. A run that stops short of the map's last note
+        /// ended early (failed or given up); where exactly is only known
+        /// with the map.
+        judged_end: Option<u32>,
+        /// Every hit the run recorded, in file order. The file names the
+        /// note of each one but not its moment, so the flagged frames are
+        /// provisional until `rhythia_sim::timebase::normalize` has the
+        /// note times to place them by (see [`LegacyHit`]).
+        hits: Vec<LegacyHit>,
+    },
+    /// Converted from a `.phxr` file of the free community client
+    /// ([`crate::phxr`]). Its frame times are song time as stored.
+    Phxr(Judgments),
+}
+
+impl Origin {
+    /// True for a replay converted from another client's format. Such a
+    /// replay names the notes it judged itself, and parts of it only take
+    /// their final shape once the map is at hand.
+    pub fn converted(&self) -> bool {
+        !matches!(self, Origin::Rhr)
+    }
+}
+
+/// What a `.phxr` file records about the notes: a result per note instead
+/// of a flag on a frame. `rhythia_sim::timebase::normalize` turns these
+/// into flagged frames once the map supplies the note times.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Judgments {
+    /// Index of the first note the run judged (above 0 for a run started
+    /// mid-map).
+    pub first_note: usize,
+    /// One entry per judged note, in map order: [`Judgments::MISS`], or
+    /// how late the hit came in quarter milliseconds of real time.
+    pub results: Vec<u8>,
+    /// Note count of the map the run was played on.
+    pub map_notes: u64,
+    /// The run was played with the notes mirrored (x, y).
+    pub flip: (bool, bool),
+    /// The file's SHA-256 trailer matches its content.
+    pub checksum_ok: bool,
+    /// Hits where the recorded cursor was not on the note. Counted when
+    /// the replay is paired with a map; None before that.
+    pub off_target_hits: Option<u32>,
+}
+
+impl Judgments {
+    /// The result byte of a missed note.
+    pub const MISS: u8 = 255;
+
+    /// How late a result byte says the note was hit, in real-time
+    /// milliseconds; None for a miss.
+    pub fn lateness_ms(result: u8) -> Option<f64> {
+        (result != Self::MISS).then(|| f64::from(result) / 4.0)
+    }
+}
+
+/// A hit in a converted legacy replay.
+///
+/// The game writes a hit as a note index with no time of its own. Cursor
+/// samples are written on their own schedule (32 to 144 a second,
+/// following the cursor's speed), so all the file says about the moment is
+/// that it lies behind one sample and no later than the next. Both times
+/// are song time on the run's own clock, as if no skip had ever jumped it
+/// forward.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LegacyHit {
+    /// Index into the map's note list.
+    pub note: u32,
+    /// The last cursor sample before the hit; negative infinity when the
+    /// hit comes before the first sample.
+    pub after_ms: f64,
+    /// The first cursor sample from the hit on.
+    pub by_ms: f64,
+}
+
+/// A skip in a converted legacy replay.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Skip {
+    /// Song time of the skip on the run's own clock, as if no skip had
+    /// ever jumped it forward.
+    pub at_ms: f64,
+    /// The forward jump currently applied to every later frame; 0 until a
+    /// map has sized it.
+    pub jump_ms: f64,
+}
+
+/// A fully parsed replay: a `.rhr` file, or another client's format
+/// converted into the same shape (see [`Origin`]).
 #[derive(Debug, Clone)]
 pub struct Replay {
     pub version: i32,
@@ -103,15 +232,35 @@ pub struct Replay {
     /// Bytes left after the last frame. Always 0 for well-formed files;
     /// nonzero is surfaced by the integrity check.
     pub trailing_bytes: usize,
+    pub origin: Origin,
 }
 
 impl Replay {
     pub fn from_path(path: impl AsRef<Path>) -> Result<Replay> {
+        let path = path.as_ref();
         let data = std::fs::read(path)?;
-        Replay::parse(&data)
+        let mut replay = Replay::parse(&data)?;
+        // A `.phxr` stores no date; the name the client gives the file
+        // does.
+        if matches!(replay.origin, Origin::Phxr(_)) {
+            let stem = path.file_stem().and_then(|s| s.to_str());
+            if let Some(ticks) = stem.and_then(crate::phxr::recorded_ticks) {
+                replay.timestamp_ticks = ticks;
+            }
+        }
+        Ok(replay)
     }
 
+    /// Parses a replay file. The format is recognised by content: a
+    /// legacy `.sspre` file or a `.phxr` file is converted, anything else
+    /// is read as `.rhr`.
     pub fn parse(data: &[u8]) -> Result<Replay> {
+        if crate::sspre::has_signature(data) {
+            return crate::sspre::Sspre::parse(data)?.to_replay();
+        }
+        if crate::phxr::has_signature(data) {
+            return Ok(crate::phxr::Phxr::parse(data)?.to_replay());
+        }
         let mut r = Reader::new(data);
 
         let version = r.i32()?;
@@ -216,7 +365,20 @@ impl Replay {
             pitch_lock,
             frames,
             trailing_bytes: r.remaining(),
+            origin: Origin::Rhr,
         })
+    }
+
+    /// True when both runs were played on the same map: by online id when
+    /// both carry one, by legacy id otherwise (a converted legacy replay
+    /// has no online id, and two of those must not pass for the same map
+    /// just because both say 0).
+    pub fn same_map(&self, other: &Replay) -> bool {
+        if self.map_id > 0 && other.map_id > 0 {
+            self.map_id == other.map_id
+        } else {
+            self.legacy_map_id == other.legacy_map_id
+        }
     }
 
     pub fn failed(&self) -> bool {

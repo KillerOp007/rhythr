@@ -30,7 +30,8 @@ struct Cli {
 /// the output file and the encoding.
 #[derive(clap::Args)]
 struct VideoCommon {
-    /// Map file: .rhm or the game's cache .json.
+    /// Map file: .rhm, .sspm or the game's cache .json; for a replay of
+    /// the free client its .phxm export, its map folder or objects.phxmo.
     #[arg(long)]
     map: PathBuf,
     /// Output MP4 path.
@@ -203,7 +204,8 @@ enum Command {
     /// Run the integrity check for one replay against its map.
     Verify {
         replay: PathBuf,
-        /// Map file: .rhm or the game's cache .json.
+        /// Map file: .rhm, .sspm or the game's cache .json; for a replay of
+        /// the free client its .phxm export, its map folder or objects.phxmo.
         #[arg(long)]
         map: PathBuf,
     },
@@ -216,7 +218,8 @@ enum Command {
     /// Render a single still frame of a replay to a PNG.
     Frame {
         replay: PathBuf,
-        /// Map file: .rhm or the game's cache .json.
+        /// Map file: .rhm, .sspm or the game's cache .json; for a replay of
+        /// the free client its .phxm export, its map folder or objects.phxmo.
         #[arg(long)]
         map: PathBuf,
         /// Song time to render, as milliseconds or mm:ss(.ms).

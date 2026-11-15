@@ -258,6 +258,7 @@ mod tests {
                 })
                 .collect(),
             trailing_bytes: 0,
+            origin: rhythia_formats::rhr::Origin::Rhr,
         }
     }
 

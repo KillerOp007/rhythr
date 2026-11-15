@@ -252,6 +252,7 @@ pub fn generate(map: &Map, settings: &AutoplaySettings, fps: u32, dice: &[f32]) 
         pitch_lock: false,
         frames,
         trailing_bytes: 0,
+        origin: rhythia_formats::rhr::Origin::Rhr,
     })
 }
 

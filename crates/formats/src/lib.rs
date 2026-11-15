@@ -1,12 +1,17 @@
-//! Read-only parsers for Rhythia file formats.
+//! Read-only parsers for Rhythia file formats, and for the formats of the
+//! free community clients: legacy Sound Space Plus replays (`.sspre`), and
+//! the replays (`.phxr`) and maps (`.phxm`) of its Godot 4 rewrite.
 //!
 //! Hard project rule: replay data is never written, re-encoded or modified.
 //! This crate deliberately has no `.rhr` serializer and must never grow one;
 //! the tool is a renderer, not an editor.
 
 pub mod map;
+pub mod phxm;
+pub mod phxr;
 pub mod rhr;
 pub mod sspm;
+pub mod sspre;
 
 mod reader;
 
@@ -40,6 +45,12 @@ pub enum Error {
     UnsupportedExtension(String),
     #[error(".sspm map: {0}")]
     Malformed(String),
+    #[error(".sspre replay: {0}")]
+    BadSspre(String),
+    #[error(".phxr replay: {0}")]
+    BadPhxr(String),
+    #[error(".phxm map: {0}")]
+    BadPhxm(String),
     #[error(transparent)]
     Io(#[from] io::Error),
 }

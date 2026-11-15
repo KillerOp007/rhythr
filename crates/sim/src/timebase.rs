@@ -10,7 +10,7 @@
 //! coincidental ones in the wrong base on a dense map).
 
 use rhythia_formats::map::Map;
-use rhythia_formats::rhr::Replay;
+use rhythia_formats::rhr::{Origin, Replay};
 
 use crate::hitreg::{hit_window_ms, match_hits};
 
@@ -18,6 +18,12 @@ use crate::hitreg::{hit_window_ms, match_hits};
 /// 1.0 when they already are (or the replay has no speed mod), or the
 /// replay's speed when they are wall-clock.
 pub fn time_scale(map: &Map, replay: &Replay) -> f64 {
+    // A converted replay is song time by construction: a legacy one had
+    // it rebuilt from the game's own clock signals, the free client's
+    // format stores it. There is nothing to detect.
+    if replay.origin.converted() {
+        return 1.0;
+    }
     let speed = replay.speed as f64;
     if (speed - 1.0).abs() < 0.005 || replay.frames.is_empty() || map.notes.is_empty() {
         return 1.0;
@@ -45,10 +51,99 @@ pub fn time_scale(map: &Map, replay: &Replay) -> f64 {
     }
 }
 
-/// Rescales a wall-clock replay into song time in place (frames, fail
-/// time, start offset). Idempotent: once in song time, [`time_scale`]
-/// returns 1.0 and this is a no-op. Returns true when a rescale happened.
+/// Lead before the next note a skip lands on, at 1.00x: the game sets the
+/// song clock to `next note - 1000 - 1000 * speed` (`NoteManager.gd`).
+const SKIP_LEAD_MS: f64 = 1000.0;
+
+/// Sizes the skips of a converted legacy replay against this map: each
+/// one shifts every later frame forward so that the skip moment lands the
+/// game's fixed lead before the next note. Jumps sized against an earlier
+/// map are taken back first, so pairing the replay with the wrong map and
+/// then the right one ends in the right place. Returns true when a frame
+/// moved.
+fn resolve_skips(replay: &mut Replay, map: &Map) -> bool {
+    let Origin::Sspre { skips, .. } = &mut replay.origin else {
+        return false;
+    };
+    let lead = SKIP_LEAD_MS + SKIP_LEAD_MS * f64::from(replay.speed);
+    let before: Vec<f64> = skips.iter().map(|s| s.jump_ms).collect();
+
+    // The game offers a skip only with the next note seconds ahead, so a
+    // jump that would not go forward is not something it recorded.
+    let jump_from = |at: f64| {
+        map.notes
+            .iter()
+            .map(|n| n.time_ms as f64)
+            .find(|&t| t >= at)
+            .map(|t| t - lead - at)
+            .filter(|&j| j > 0.0)
+    };
+    // What this map makes of the skips. When that is what the frames carry
+    // already there is nothing to do, and not touching them keeps a second
+    // pass from nudging frame times by a rounding step.
+    let mut ahead = 0.0;
+    let wanted: Vec<f64> = skips
+        .iter()
+        .map(|s| {
+            let jump = jump_from(s.at_ms + ahead).unwrap_or(0.0);
+            ahead += jump;
+            jump
+        })
+        .collect();
+    if wanted == before {
+        return false;
+    }
+
+    // Where a skip sits among the frames right now: its own clock time
+    // plus every jump before it.
+    let position = |skips: &[rhythia_formats::rhr::Skip], i: usize| {
+        skips[i].at_ms + skips[..i].iter().map(|s| s.jump_ms).sum::<f64>()
+    };
+    for i in (0..skips.len()).rev() {
+        let (at, jump) = (position(skips, i), skips[i].jump_ms);
+        if jump != 0.0 {
+            for f in replay.frames.iter_mut().filter(|f| f.ms > at) {
+                f.ms -= jump;
+            }
+            skips[i].jump_ms = 0.0;
+        }
+    }
+    for i in 0..skips.len() {
+        let at = position(skips, i);
+        let Some(jump) = jump_from(at) else {
+            continue;
+        };
+        for f in replay.frames.iter_mut().filter(|f| f.ms > at) {
+            f.ms += jump;
+        }
+        skips[i].jump_ms = jump;
+    }
+    skips.iter().map(|s| s.jump_ms).ne(before)
+}
+
+/// Settles what a replay can only settle with its map, in place:
+///
+/// * a wall-clock `.rhr` is rescaled into song time (frames, fail time,
+///   start offset);
+/// * a converted legacy replay has its skips sized, its hits placed
+///   against the notes they name and, when it stopped short of the last
+///   note, its end marked;
+/// * a converted `.phxr` gets its note results placed as flagged frames
+///   (see [`crate::pairing`]).
+///
+/// Idempotent: a second pass over the same pair is a no-op, and pairing
+/// with another map replaces what the first one produced. Returns true
+/// when the replay changed.
 pub fn normalize(replay: &mut Replay, map: &Map) -> bool {
+    match replay.origin {
+        Origin::Rhr => {}
+        Origin::Sspre { .. } => {
+            let moved = resolve_skips(replay, map);
+            let placed = crate::pairing::place_legacy_hits(replay, map);
+            return crate::pairing::mark_early_end(replay, map) || moved || placed;
+        }
+        Origin::Phxr(_) => return crate::pairing::place_judgments(replay, map),
+    }
     let scale = time_scale(map, replay);
     if scale == 1.0 {
         return false;
@@ -69,7 +164,7 @@ pub fn normalize(replay: &mut Replay, map: &Map) -> bool {
 mod tests {
     use super::*;
     use rhythia_formats::map::Note;
-    use rhythia_formats::rhr::Frame;
+    use rhythia_formats::rhr::{Frame, Origin, Skip};
 
     fn map_with(times: &[i64]) -> Map {
         Map {
@@ -117,7 +212,96 @@ mod tests {
                 })
                 .collect(),
             trailing_bytes: 0,
+            origin: Origin::Rhr,
         }
+    }
+
+    fn converted(speed: f32, frame_times: &[f64], skips_at: &[f64]) -> Replay {
+        let mut r = replay_with(speed, frame_times);
+        r.origin = Origin::Sspre {
+            skips: skips_at
+                .iter()
+                .map(|&at_ms| Skip {
+                    at_ms,
+                    jump_ms: 0.0,
+                })
+                .collect(),
+            judged_end: None,
+            hits: vec![],
+        };
+        r
+    }
+
+    fn jumps(r: &Replay) -> Vec<f64> {
+        match &r.origin {
+            Origin::Sspre { skips, .. } => skips.iter().map(|s| s.jump_ms).collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    fn times(r: &Replay) -> Vec<f64> {
+        r.frames.iter().map(|f| f.ms).collect()
+    }
+
+    #[test]
+    fn a_pending_skip_lands_a_fixed_lead_before_the_next_note() {
+        // The game jumps to `next note - 1000 - 1000 * speed`.
+        let map = map_with(&[1000, 60000]);
+        let mut r = converted(1.0, &[1500.0, 2000.0, 2500.0, 3000.0], &[2000.0]);
+        assert!(normalize(&mut r, &map));
+        assert_eq!(times(&r), vec![1500.0, 2000.0, 58500.0, 59000.0]);
+        assert_eq!(jumps(&r), vec![56000.0]);
+        assert!(!normalize(&mut r, &map), "a second pass changes nothing");
+        assert_eq!(times(&r), vec![1500.0, 2000.0, 58500.0, 59000.0]);
+    }
+
+    #[test]
+    fn pairing_with_another_map_sizes_the_skips_again() {
+        // The wrong map first, then the right one: the result must be what
+        // the right map alone would have given.
+        let wrong = map_with(&[1000, 30000]);
+        let right = map_with(&[1000, 60000, 61000, 200000]);
+        let fresh = || converted(1.0, &[2000.0, 3000.0, 6000.0, 7000.0], &[2000.0, 6000.0]);
+        let mut direct = fresh();
+        normalize(&mut direct, &right);
+        let mut detour = fresh();
+        normalize(&mut detour, &wrong);
+        assert_ne!(times(&detour), times(&direct));
+        assert!(normalize(&mut detour, &right));
+        assert_eq!(times(&detour), times(&direct));
+        assert_eq!(jumps(&detour), jumps(&direct));
+    }
+
+    #[test]
+    fn later_skips_build_on_earlier_ones_and_the_lead_scales_with_speed() {
+        let map = map_with(&[1000, 60000, 61000, 200000]);
+        // At 1.25x the lead is 1000 + 1250. The first skip moves everything
+        // after 2000 by 60000 - 2250 - 2000 = 55750, the second skip
+        // included: it now sits at 61750 and jumps on to 200000 - 2250.
+        let mut r = converted(1.25, &[2000.0, 3000.0, 6000.0, 7000.0], &[2000.0, 6000.0]);
+        assert!(normalize(&mut r, &map));
+        assert_eq!(times(&r), vec![2000.0, 58750.0, 61750.0, 198750.0]);
+
+        // ...unless the jump would go backwards: the game only offers a
+        // skip with the next note far ahead, so such a file is not from
+        // the game and its frames stay where they are.
+        let mut odd = converted(1.0, &[2000.0, 3000.0], &[2000.0]);
+        assert!(!normalize(&mut odd, &map_with(&[1000, 2500])));
+        assert_eq!(times(&odd), vec![2000.0, 3000.0]);
+        assert_eq!(jumps(&odd), vec![0.0]);
+    }
+
+    #[test]
+    fn a_converted_replay_is_already_song_time_and_is_never_rescaled() {
+        // Hits line up only when multiplied by the speed: a .rhr like this
+        // is wall-clock and gets rescaled, a converted replay must not be.
+        let map = map_with(&[1450, 2900, 4350, 5800]);
+        let wall = [1000.0, 2000.0, 3000.0, 4000.0];
+        assert_eq!(time_scale(&map, &replay_with(1.45, &wall)), 1.45f32 as f64);
+        let mut r = converted(1.45, &wall, &[]);
+        assert_eq!(time_scale(&map, &r), 1.0);
+        assert!(!normalize(&mut r, &map));
+        assert_eq!(times(&r), wall.to_vec());
     }
 
     #[test]
