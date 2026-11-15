@@ -44,9 +44,9 @@ endorsed by Rhythia or Capo Games.
   or abandoned ends where its recording ends. The check for `.phxr` covers
   the file's checksum, the map's note count and whether the recorded cursor
   was on the note at each hit. `.sspre` is checked against real recordings:
-  two full runs come out note for note as their files have them. `.phxr` is
-  checked against the client's source and synthetic recordings so far, not
-  yet against real ones.
+  three full runs, one of them with a skip in the middle of the map, come
+  out note for note as their files have them. `.phxr` is checked against the
+  client's source and synthetic recordings so far, not yet against real ones.
 
 ## v0.8.0 (2026-11-09)
 
