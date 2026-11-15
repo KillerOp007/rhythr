@@ -2178,15 +2178,169 @@ fn client_map_beside(replay_path: &Path, replay: &Replay) -> Option<(PathBuf, Ma
     Some((folder, map))
 }
 
+/// How many `.sspm` files of one folder are asked for their id. A maps
+/// folder of the legacy client can hold thousands, and each one costs a
+/// small read.
+const LEGACY_MAP_SCAN_LIMIT: usize = 5000;
+
+/// The `.sspm` in `folder` whose own id is `id`. The legacy client knows
+/// its maps by that id and not by their file names, so every `.sspm` in
+/// the folder is asked, a file named after the id first. Only the head of
+/// each file is read until one answers.
+fn sspm_with_id(folder: &Path, id: &str) -> Option<(PathBuf, Map)> {
+    let mut files: Vec<PathBuf> = std::fs::read_dir(folder)
+        .ok()?
+        .filter_map(|entry| entry.ok().map(|e| e.path()))
+        .filter(|p| p.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("sspm")))
+        .take(LEGACY_MAP_SCAN_LIMIT)
+        .collect();
+    // The likely file first, and the same order on every run.
+    files.sort_by_key(|p| (p.file_stem().and_then(|s| s.to_str()) != Some(id), p.clone()));
+    files.into_iter().find_map(|path| {
+        let mut head = Vec::with_capacity(rhythia_formats::sspm::PEEK_LEN);
+        std::fs::File::open(&path)
+            .ok()?
+            .take(rhythia_formats::sspm::PEEK_LEN as u64)
+            .read_to_end(&mut head)
+            .ok()?;
+        if rhythia_formats::sspm::peek_id(&head).as_deref() != Some(id) {
+            return None;
+        }
+        let map = Map::from_path(&path).ok()?;
+        Some((path, map))
+    })
+}
+
+/// The map file of the legacy map `id`, when it lies where one would look
+/// first: in the folder of the replay itself, or in the legacy client's
+/// `maps` folder next to the `replays` folder the replay sits in.
+fn sspm_for_legacy_id(replay_path: &Path, id: &str) -> Option<(PathBuf, Map)> {
+    if id.is_empty() {
+        return None;
+    }
+    let folder = replay_path.parent()?;
+    sspm_with_id(folder, id).or_else(|| sspm_with_id(&folder.parent()?.join("maps"), id))
+}
+
+/// The map a `.sspre` was played on. Such a file carries no online id, so
+/// nothing can be downloaded for it; it names its map, and that map is
+/// taken when its file lies near the replay (see [`sspm_for_legacy_id`]).
+fn legacy_map_beside(replay_path: &Path, replay: &Replay) -> Option<(PathBuf, Map)> {
+    if !matches!(replay.origin, rhythia_formats::rhr::Origin::Sspre { .. }) {
+        return None;
+    }
+    sspm_for_legacy_id(replay_path, &replay.legacy_map_id)
+}
+
 /// A map for this replay that needs no download and no browsing: the
-/// cached download of its online id, or the free client's own copy next
-/// to the replay. Returns the map, where it came from, and whether a
-/// cached copy no longer hashes to what the replay was recorded against.
+/// cached download of its online id, the free client's own copy next to
+/// the replay, or the map file a legacy replay names lying near it.
+/// Returns the map, where it came from, and whether a cached copy no
+/// longer hashes to what the replay was recorded against.
 fn resolve_map_offline(replay_path: &Path, replay: &Replay) -> Option<(PathBuf, Map, &'static str, bool)> {
     if let Some((path, map, mismatch)) = try_cached_map(replay) {
         return Some((path, map, "cache", mismatch));
     }
-    client_map_beside(replay_path, replay).map(|(path, map)| (path, map, "client", false))
+    client_map_beside(replay_path, replay)
+        .or_else(|| legacy_map_beside(replay_path, replay))
+        .map(|(path, map)| (path, map, "client", false))
+}
+
+#[cfg(test)]
+mod legacy_map_tests {
+    use super::*;
+
+    const ID: &str = "mapper_-_song";
+
+    /// A v1 `.sspm` with one note and nothing else: the smallest map file
+    /// there is.
+    fn tiny_sspm(id: &str) -> Vec<u8> {
+        let mut f = b"SS+m".to_vec();
+        f.extend_from_slice(&1u16.to_le_bytes());
+        f.extend_from_slice(&[0, 0]);
+        f.extend_from_slice(format!("{id}\nSong\nMapper\n").as_bytes());
+        f.extend_from_slice(&1000u32.to_le_bytes()); // last ms
+        f.extend_from_slice(&1u32.to_le_bytes()); // note count
+        f.extend_from_slice(&[0, 0, 0]); // difficulty, no cover, no audio
+        f.extend_from_slice(&1000u32.to_le_bytes());
+        f.extend_from_slice(&[0, 1, 1]); // whole-cell position (1, 1)
+        f
+    }
+
+    /// A v2 `.sspre` of `id` with one cursor sample, the way the legacy
+    /// client's recorder lays a file out.
+    fn tiny_sspre(id: &str) -> Vec<u8> {
+        let mut f = b"Ss*R".to_vec();
+        f.extend_from_slice(&2u16.to_le_bytes());
+        f.extend_from_slice(&0u64.to_le_bytes());
+        f.extend_from_slice(format!("{id}.2026-11-2_20-3-13\nar:1;hbox:1.14;hitw:55;s:=\n").as_bytes());
+        f.push(0);
+        f.extend_from_slice(&3100u32.to_le_bytes()); // end ms
+        f.extend_from_slice(&2u32.to_le_bytes()); // signals, the end signal included
+        f.push(0); // cursor sample
+        f.extend_from_slice(&3100u32.to_le_bytes());
+        f.extend_from_slice(&1.0f32.to_le_bytes());
+        f.extend_from_slice(&1.0f32.to_le_bytes());
+        f.push(5); // end
+        f
+    }
+
+    #[test]
+    fn the_map_in_the_replays_own_folder_is_found_by_its_id_not_its_name() {
+        let t = tempfile::tempdir().unwrap();
+        std::fs::write(t.path().join("other.sspm"), tiny_sspm("someone_-_another_song")).unwrap();
+        std::fs::write(t.path().join("rhythia-download.sspm"), tiny_sspm(ID)).unwrap();
+        let replay = t.path().join("mapper_-_song.2026-11-2_20-3-13.sspre");
+        let (path, map) = sspm_for_legacy_id(&replay, ID).unwrap();
+        assert_eq!(path, t.path().join("rhythia-download.sspm"));
+        assert_eq!(map.meta.legacy_id, ID);
+    }
+
+    #[test]
+    fn the_legacy_clients_maps_folder_next_to_its_replays_is_searched_too() {
+        let t = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(t.path().join("replays")).unwrap();
+        std::fs::create_dir_all(t.path().join("maps")).unwrap();
+        std::fs::write(t.path().join("maps").join("mapper_-_song.sspm"), tiny_sspm(ID)).unwrap();
+        let replay = t.path().join("replays").join("mapper_-_song.2026-11-2_20-3-13.sspre");
+        let (path, _) = sspm_for_legacy_id(&replay, ID).unwrap();
+        assert_eq!(path, t.path().join("maps").join("mapper_-_song.sspm"));
+    }
+
+    #[test]
+    fn a_file_named_like_the_map_that_holds_another_one_is_not_taken() {
+        let t = tempfile::tempdir().unwrap();
+        std::fs::write(t.path().join("mapper_-_song.sspm"), tiny_sspm("someone_-_another_song")).unwrap();
+        std::fs::write(t.path().join("broken.sspm"), b"not a map").unwrap();
+        let replay = t.path().join("mapper_-_song.2026-11-2_20-3-13.sspre");
+        assert!(sspm_for_legacy_id(&replay, ID).is_none());
+        // A replay that names no map has nothing to be found by.
+        std::fs::write(t.path().join("nameless.sspm"), tiny_sspm("")).unwrap();
+        assert!(sspm_for_legacy_id(&replay, "").is_none());
+    }
+
+    #[test]
+    fn a_legacy_replay_comes_with_the_map_lying_next_to_it() {
+        let t = tempfile::tempdir().unwrap();
+        let path = t.path().join("mapper_-_song.2026-11-2_20-3-13.sspre");
+        std::fs::write(&path, tiny_sspre(ID)).unwrap();
+        let replay = Replay::from_path(&path).unwrap();
+        assert_eq!(replay.legacy_map_id, ID);
+        // No map anywhere near it yet.
+        assert!(resolve_map_offline(&path, &replay).is_none());
+
+        std::fs::write(t.path().join("some name.SSPM"), tiny_sspm(ID)).unwrap();
+        let (found, map, source, mismatch) = resolve_map_offline(&path, &replay).unwrap();
+        assert_eq!(found, t.path().join("some name.SSPM"));
+        assert_eq!(map.notes.len(), 1);
+        assert_eq!((source, mismatch), ("client", false));
+
+        // Only a legacy replay looks there: a Rhythia replay that names the
+        // same map is not handed a file by its id.
+        let mut rhythia = replay.clone();
+        rhythia.origin = rhythia_formats::rhr::Origin::Rhr;
+        assert!(resolve_map_offline(&path, &rhythia).is_none());
+    }
 }
 
 #[tauri::command]

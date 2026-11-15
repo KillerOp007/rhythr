@@ -352,6 +352,37 @@ fn parse_v2(data: &[u8], r: &mut Reader) -> Result<Map> {
     }))
 }
 
+/// How much of an `.sspm` [`peek_id`] is worth handing: the fixed v2 header
+/// (128 bytes) and far more room than any real id takes.
+pub const PEEK_LEN: usize = 4096;
+
+/// The map's id out of the head of an `.sspm`, without the audio, the cover
+/// and the notes that follow it. `head` is the start of the file,
+/// [`PEEK_LEN`] bytes of it are plenty. None when this is no `.sspm`, its
+/// version is unknown or the id runs past `head`.
+///
+/// Finding one map among the files of a folder would otherwise read every
+/// one of them whole, and each carries its song.
+pub fn peek_id(head: &[u8]) -> Option<String> {
+    let mut r = Reader::new(head);
+    if r.take(4).ok()? != SIGNATURE {
+        return None;
+    }
+    match r.u16().ok()? {
+        1 => {
+            r.take(2).ok()?; // reserved
+            r.line().ok()
+        }
+        2 => {
+            // reserved, marker hash, three counts, difficulty, star rating,
+            // three flags, five pointer pairs: see parse_v2
+            r.take(4 + 20 + 12 + 1 + 2 + 3 + 80).ok()?;
+            r.string16().ok()
+        }
+        _ => None,
+    }
+}
+
 /// Parses `.sspm` bytes (v1 or v2) into the shared [`Map`] model.
 pub fn parse(data: &[u8]) -> Result<Map> {
     let mut r = Reader::new(data);
@@ -587,6 +618,42 @@ mod tests {
         assert_eq!(map.notes[0].time_ms, 1000);
         assert_eq!((map.notes[0].x, map.notes[0].y), (1.0, 2.0));
         assert_eq!((map.notes[1].x, map.notes[1].y), (0.5, 1.5));
+    }
+
+    #[test]
+    fn the_id_is_read_from_the_head_of_a_v2_file() {
+        let file = synthetic_v2();
+        assert_eq!(peek_id(&file).as_deref(), Some("test_map_id"));
+        // The fixed header is 128 bytes, then a length and the id: nothing
+        // behind that is needed.
+        assert_eq!(
+            peek_id(&file[..128 + 2 + 11]).as_deref(),
+            Some("test_map_id")
+        );
+        // An id that runs past what was read is no id.
+        assert_eq!(peek_id(&file[..128 + 2 + 10]), None);
+    }
+
+    #[test]
+    fn the_id_is_read_from_the_head_of_a_v1_file() {
+        let mut file = b"SS+m".to_vec();
+        file.extend_from_slice(&1u16.to_le_bytes());
+        file.extend_from_slice(&[0, 0]);
+        file.extend_from_slice(b"old_map_id\nOld Song\nMapper\n");
+        assert_eq!(peek_id(&file).as_deref(), Some("old_map_id"));
+        // Cut inside the id: its line never ends.
+        assert_eq!(peek_id(&file[..12]), None);
+    }
+
+    #[test]
+    fn a_file_that_is_no_sspm_has_no_id() {
+        assert_eq!(peek_id(b""), None);
+        assert_eq!(peek_id(b"Ss*R\x04\x00not a map at all\n"), None);
+        // A version this reader does not know.
+        let mut file = b"SS+m".to_vec();
+        file.extend_from_slice(&9u16.to_le_bytes());
+        file.extend_from_slice(&[0; 200]);
+        assert_eq!(peek_id(&file), None);
     }
 
     #[test]

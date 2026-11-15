@@ -182,6 +182,11 @@ code { font-family: ui-monospace, Consolas, monospace; color: var(--accent); fon
 #dropzone p { margin: 4px 0; }
 #dropzone button { margin-top: 12px; }
 #dropzone strong { color: var(--text); font-weight: 600; }
+#drop-needmap-text { max-width: 36rem; margin: 4px auto; padding: 0 12px; }
+#drop-needmap-text b {
+  color: var(--text); font-weight: 600; overflow-wrap: anywhere;
+  user-select: text; -webkit-user-select: text;
+}
 
 #preview-msg {
   position: absolute; inset: auto 0 0 0; padding: 6px 10px;
