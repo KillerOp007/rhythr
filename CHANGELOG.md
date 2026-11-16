@@ -25,8 +25,12 @@ endorsed by Rhythia or Capo Games.
   default look: the dance is the default movement.
 - **Replays from the free community clients (test builds only).** rhythr
   opens two more replay formats next to `.rhr`.
-  - `.sspre`, legacy Sound Space Plus: drop the file, then pick its map
-    (`.sspm`). A map file in the replay's folder, or in the legacy client's
+  - `.sspre`, legacy Sound Space Plus: drop the file and its map is fetched
+    from rhythia.com, as for a `.rhr`. The file carries no online map id; it
+    names its map by the id inside the map file, and the site keeps its maps
+    under that id, so one request finds it and the download is cached. A map
+    the site does not have is picked by hand (`.sspm`, code `RH-NET-508`
+    says so). A map file in the replay's folder, or in the legacy client's
     `maps` folder next to its `replays` folder, is found by itself, whatever
     it is named. The recording is stamped in real time, so song time is rebuilt
     from its own pause, unpause and skip signals, the way the game plays it
@@ -52,6 +56,12 @@ endorsed by Rhythia or Capo Games.
   three full runs, one of them with a skip in the middle of the map, come
   out note for note as their files have them. `.phxr` is checked against the
   client's source and synthetic recordings so far, not yet against real ones.
+- **Autoplay takes any map file, not only an export from the game.** The
+  picker has **Choose a map file** (`.sspm`, `.rhm`, `.phxm`,
+  `objects.phxmo`), a map file dropped on the open picker starts Autoplay
+  with it, and the map that is loaded for a replay is offered above the
+  list, so a downloaded map needs no export. The marks of an Autoplay video
+  are the same whichever file the map came from.
 
 ## v0.8.0 (2026-11-09)
 

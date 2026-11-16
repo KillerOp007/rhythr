@@ -2,7 +2,7 @@
 //!
 //! Read-only like the CLI: replays are parsed, verified and rendered, never
 //! written. Maps auto-download from production.rhythia.com (cached locally,
-//! hash-verified against the replay header).
+//! hash-verified against the replay header where the replay carries one).
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -42,6 +42,12 @@ const USER_AGENT: &str = concat!(
 // and backing off on 429/5xx. The endpoint is best-effort and may change.
 // If the network scope of this tool ever changes, ask the team again first.
 const API_BEATMAP_PAGE: &str = "https://production.rhythia.com/api/getBeatmapPage";
+// The same page asked for by the id inside the map file, which is all a
+// replay of the legacy client knows its map by. The request and its rules
+// are the ones above: one per uncached map, limit:1, an empty session.
+// It is a second endpoint all the same, and the team is to hear of it
+// before a release carries it.
+const API_BEATMAP_PAGE_BY_ID: &str = "https://production.rhythia.com/api/getBeatmapPageById";
 /// Refuse to download maps larger than this (malformed/hostile responses).
 const MAX_MAP_BYTES: u64 = 512 * 1024 * 1024;
 /// Ghost overlay colour (sRGB 0..1): a warm orange, clearly distinct.
@@ -668,6 +674,11 @@ struct ReplayDto {
     player: String,
     map_id: i32,
     legacy_map_id: String,
+    /// What rhythia.com is asked for this replay's map by, named so that
+    /// the window fetches once per map: "id:13504" for an online number,
+    /// "name:..." for the id of a legacy map. None when the replay cannot
+    /// name its map online, and then there is nothing to download.
+    map_online: Option<String>,
     speed: f32,
     /// Release-41 replays record the speed selector's Pitch Lock toggle;
     /// older ones were always pitched and carry false.
@@ -1882,6 +1893,7 @@ fn assemble_status(inner: &Inner, rendering: bool) -> StatusDto {
             player: r.player_name.clone(),
             map_id: r.map_id,
             legacy_map_id: r.legacy_map_id.clone(),
+            map_online: OnlineMapKey::of(r).map(|key| key.label()),
             speed: r.speed,
             pitch_lock: r.pitch_lock,
             mods,
@@ -2048,6 +2060,94 @@ fn cached_meta_field(map_id: i32, field: &str) -> Option<String> {
     let text = std::fs::read_to_string(meta).ok()?;
     let v: serde_json::Value = serde_json::from_str(&text).ok()?;
     v[field].as_str().map(str::to_owned)
+}
+
+/// What rhythia.com is asked for a replay's map by.
+#[derive(Clone, Debug, PartialEq)]
+enum OnlineMapKey {
+    /// The online number a Rhythia replay carries.
+    Number(i32),
+    /// The id inside the map file. A replay of the legacy client carries
+    /// no number, and the site keeps every uploaded map under that id.
+    LegacyId(String),
+}
+
+impl OnlineMapKey {
+    /// None for a replay that cannot name its map online: a Rhythia replay
+    /// of a map that was never uploaded (the name it carries is a local
+    /// one and is not sent anywhere), and a replay of the free client,
+    /// which names a map folder of its own.
+    fn of(replay: &Replay) -> Option<Self> {
+        if replay.map_id > 0 {
+            return Some(Self::Number(replay.map_id));
+        }
+        let legacy = matches!(replay.origin, rhythia_formats::rhr::Origin::Sspre { .. });
+        (legacy && !replay.legacy_map_id.is_empty()).then(|| Self::LegacyId(replay.legacy_map_id.clone()))
+    }
+
+    /// The endpoint and the body of the one request a map costs.
+    fn request(&self) -> (&'static str, serde_json::Value) {
+        match self {
+            Self::Number(id) => (API_BEATMAP_PAGE, serde_json::json!({"session": "", "id": id, "limit": 1})),
+            Self::LegacyId(id) => (API_BEATMAP_PAGE_BY_ID, serde_json::json!({"session": "", "mapId": id, "limit": 1})),
+        }
+    }
+
+    /// The key as the window is given it (see `ReplayDto::map_online`).
+    fn label(&self) -> String {
+        match self {
+            Self::Number(id) => format!("id:{id}"),
+            Self::LegacyId(id) => format!("name:{id}"),
+        }
+    }
+}
+
+/// What a map lookup answered: where the file is and which online map it
+/// belongs to.
+#[derive(Debug)]
+struct MapAnswer {
+    file_url: String,
+    map_id: i32,
+    map_hash: String,
+    title: String,
+}
+
+/// Reads the answer of the request [`OnlineMapKey::request`] describes.
+/// Asked by number, the map's number is the one asked with; asked by the
+/// map's own id, the answer has to say which online map that is, because
+/// the download is cached under that number.
+fn map_answer(key: &OnlineMapKey, resp: &serde_json::Value) -> Result<MapAnswer, String> {
+    let beatmap = &resp["beatmap"];
+    let map_id = match key {
+        OnlineMapKey::Number(id) => Some(*id),
+        OnlineMapKey::LegacyId(_) => beatmap["id"].as_i64().and_then(|n| i32::try_from(n).ok()).filter(|n| *n > 0),
+    };
+    match (beatmap["beatmapFile"].as_str(), map_id) {
+        (Some(url), Some(map_id)) => Ok(MapAnswer {
+            file_url: url.to_string(),
+            map_id,
+            map_hash: beatmap["mapHash"].as_str().unwrap_or("").to_string(),
+            title: beatmap["title"].as_str().unwrap_or("").to_string(),
+        }),
+        // The name is left out on purpose: it is free text out of a file,
+        // and the code of a message is found by the words in it.
+        _ if matches!(key, OnlineMapKey::LegacyId(_)) => Err(net_err(
+            "rhythia.com has no map under this replay's map name, choose the map file yourself",
+        )),
+        _ => Err("map lookup: no beatmapFile in response".to_string()),
+    }
+}
+
+/// A map asked for by its own id has to be that map. The site keeps a map
+/// under the id inside its file, so anything else is not an answer to what
+/// was asked. A file that carries no id of its own is taken as it is.
+fn downloaded_is_the_map(key: &OnlineMapKey, map: &Map) -> Result<(), String> {
+    match key {
+        OnlineMapKey::LegacyId(id) if !map.meta.legacy_id.is_empty() && map.meta.legacy_id != *id => Err(net_err(
+            "map lookup: bad response: the file is another map than the one the replay names",
+        )),
+        _ => Ok(()),
+    }
 }
 
 /// Looks for a cached download of the replay's map, and says whether that
@@ -2222,9 +2322,9 @@ fn sspm_for_legacy_id(replay_path: &Path, id: &str) -> Option<(PathBuf, Map)> {
     sspm_with_id(folder, id).or_else(|| sspm_with_id(&folder.parent()?.join("maps"), id))
 }
 
-/// The map a `.sspre` was played on. Such a file carries no online id, so
-/// nothing can be downloaded for it; it names its map, and that map is
-/// taken when its file lies near the replay (see [`sspm_for_legacy_id`]).
+/// The map a `.sspre` was played on, when its file lies near the replay
+/// (see [`sspm_for_legacy_id`]). Such a file carries no online number; it
+/// names its map by the id inside the map file.
 fn legacy_map_beside(replay_path: &Path, replay: &Replay) -> Option<(PathBuf, Map)> {
     if !matches!(replay.origin, rhythia_formats::rhr::Origin::Sspre { .. }) {
         return None;
@@ -2232,18 +2332,37 @@ fn legacy_map_beside(replay_path: &Path, replay: &Replay) -> Option<(PathBuf, Ma
     sspm_for_legacy_id(replay_path, &replay.legacy_map_id)
 }
 
+/// The map a `.sspre` names, among the maps already downloaded. Downloads
+/// are stored under their online number, which such a replay does not
+/// know, so they are asked for their ids like any other folder of maps.
+/// A map fetched for a Rhythia replay answers just as well, and then
+/// nothing is requested for the legacy one.
+fn legacy_map_in_cache(cache: &Path, replay: &Replay) -> Option<(PathBuf, Map)> {
+    match OnlineMapKey::of(replay)? {
+        OnlineMapKey::LegacyId(id) => sspm_with_id(cache, &id),
+        OnlineMapKey::Number(_) => None,
+    }
+}
+
 /// A map for this replay that needs no download and no browsing: the
 /// cached download of its online id, the free client's own copy next to
-/// the replay, or the map file a legacy replay names lying near it.
+/// the replay, the map file a legacy replay names lying near it, or an
+/// earlier download of that map.
 /// Returns the map, where it came from, and whether a cached copy no
 /// longer hashes to what the replay was recorded against.
 fn resolve_map_offline(replay_path: &Path, replay: &Replay) -> Option<(PathBuf, Map, &'static str, bool)> {
+    resolve_map_offline_in(&maps_cache_dir(), replay_path, replay)
+}
+
+/// [`resolve_map_offline`] with the folder of downloaded maps named.
+fn resolve_map_offline_in(cache: &Path, replay_path: &Path, replay: &Replay) -> Option<(PathBuf, Map, &'static str, bool)> {
     if let Some((path, map, mismatch)) = try_cached_map(replay) {
         return Some((path, map, "cache", mismatch));
     }
     client_map_beside(replay_path, replay)
         .or_else(|| legacy_map_beside(replay_path, replay))
         .map(|(path, map)| (path, map, "client", false))
+        .or_else(|| legacy_map_in_cache(cache, replay).map(|(path, map)| (path, map, "cache", false)))
 }
 
 #[cfg(test)]
@@ -2326,11 +2445,12 @@ mod legacy_map_tests {
         std::fs::write(&path, tiny_sspre(ID)).unwrap();
         let replay = Replay::from_path(&path).unwrap();
         assert_eq!(replay.legacy_map_id, ID);
+        let cache = tempfile::tempdir().unwrap();
         // No map anywhere near it yet.
-        assert!(resolve_map_offline(&path, &replay).is_none());
+        assert!(resolve_map_offline_in(cache.path(), &path, &replay).is_none());
 
         std::fs::write(t.path().join("some name.SSPM"), tiny_sspm(ID)).unwrap();
-        let (found, map, source, mismatch) = resolve_map_offline(&path, &replay).unwrap();
+        let (found, map, source, mismatch) = resolve_map_offline_in(cache.path(), &path, &replay).unwrap();
         assert_eq!(found, t.path().join("some name.SSPM"));
         assert_eq!(map.notes.len(), 1);
         assert_eq!((source, mismatch), ("client", false));
@@ -2339,7 +2459,164 @@ mod legacy_map_tests {
         // same map is not handed a file by its id.
         let mut rhythia = replay.clone();
         rhythia.origin = rhythia_formats::rhr::Origin::Rhr;
-        assert!(resolve_map_offline(&path, &rhythia).is_none());
+        assert!(resolve_map_offline_in(cache.path(), &path, &rhythia).is_none());
+    }
+
+    /// A legacy replay of the map `ID`, written into `dir` and read back.
+    fn legacy_replay(dir: &Path) -> (PathBuf, Replay) {
+        let path = dir.join("mapper_-_song.2026-11-2_20-3-13.sspre");
+        std::fs::write(&path, tiny_sspre(ID)).unwrap();
+        let replay = Replay::from_path(&path).unwrap();
+        (path, replay)
+    }
+
+    #[test]
+    fn a_legacy_replay_asks_rhythia_com_for_its_map_by_the_maps_own_id() {
+        let t = tempfile::tempdir().unwrap();
+        let (_, replay) = legacy_replay(t.path());
+        let key = OnlineMapKey::of(&replay).unwrap();
+        assert_eq!(key, OnlineMapKey::LegacyId(ID.into()));
+        let (url, body) = key.request();
+        assert_eq!(url, "https://production.rhythia.com/api/getBeatmapPageById");
+        // One request, no session, and no more of the score list than the
+        // endpoint insists on.
+        assert_eq!(body, serde_json::json!({"session": "", "mapId": ID, "limit": 1}));
+    }
+
+    #[test]
+    fn a_rhythia_replay_still_asks_by_its_online_number() {
+        let t = tempfile::tempdir().unwrap();
+        let (_, mut replay) = legacy_replay(t.path());
+        replay.origin = rhythia_formats::rhr::Origin::Rhr;
+        replay.map_id = 13504;
+        let key = OnlineMapKey::of(&replay).unwrap();
+        assert_eq!(key, OnlineMapKey::Number(13504));
+        let (url, body) = key.request();
+        assert_eq!(url, "https://production.rhythia.com/api/getBeatmapPage");
+        assert_eq!(body, serde_json::json!({"session": "", "id": 13504, "limit": 1}));
+    }
+
+    #[test]
+    fn a_replay_that_cannot_name_its_map_online_is_not_asked_for() {
+        let t = tempfile::tempdir().unwrap();
+        let (_, replay) = legacy_replay(t.path());
+        // A Rhythia replay of a map that was never online: the name it
+        // carries is a local one and stays on this machine.
+        let mut local = replay.clone();
+        local.origin = rhythia_formats::rhr::Origin::Rhr;
+        assert_eq!(OnlineMapKey::of(&local), None);
+        // The free client names a map folder of its own.
+        let mut free = replay.clone();
+        free.origin = rhythia_formats::rhr::Origin::Phxr(rhythia_formats::rhr::Judgments {
+            first_note: 0,
+            results: Vec::new(),
+            map_notes: 1,
+            flip: (false, false),
+            checksum_ok: true,
+            off_target_hits: None,
+        });
+        assert_eq!(OnlineMapKey::of(&free), None);
+        // A legacy replay that names no map.
+        let mut nameless = replay;
+        nameless.legacy_map_id.clear();
+        assert_eq!(OnlineMapKey::of(&nameless), None);
+    }
+
+    #[test]
+    fn the_answer_names_the_file_and_the_online_map() {
+        let resp = serde_json::json!({"scores": [], "beatmap": {
+            "id": 20443, "title": "Song", "mapHash": "abc",
+            "beatmapFile": "https://static.rhythia.com/x.sspm"}});
+        let a = map_answer(&OnlineMapKey::LegacyId(ID.into()), &resp).unwrap();
+        assert_eq!(
+            (a.map_id, a.file_url.as_str(), a.map_hash.as_str(), a.title.as_str()),
+            (20443, "https://static.rhythia.com/x.sspm", "abc", "Song")
+        );
+        // Asked by number, the number asked with is the map's.
+        let resp = serde_json::json!({"beatmap": {"beatmapFile": "https://static.rhythia.com/y.sspm"}});
+        let a = map_answer(&OnlineMapKey::Number(13504), &resp).unwrap();
+        assert_eq!((a.map_id, a.map_hash.as_str()), (13504, ""));
+    }
+
+    #[test]
+    fn a_map_rhythia_com_does_not_have_is_said_so() {
+        // The endpoint answers a name it does not know with an empty object.
+        let err = map_answer(&OnlineMapKey::LegacyId(ID.into()), &serde_json::json!({})).unwrap_err();
+        assert!(err.contains("RH-NET-508"), "{err}");
+        // The name stays out of the message: it is free text from a file,
+        // and the code is found by what the message says.
+        assert!(!err.contains(ID), "{err}");
+        let err = map_answer(&OnlineMapKey::Number(5), &serde_json::json!({})).unwrap_err();
+        assert!(err.contains("no beatmapFile"), "{err}");
+    }
+
+    #[test]
+    fn a_download_that_is_another_map_is_refused() {
+        let key = OnlineMapKey::LegacyId(ID.into());
+        let asked = rhythia_formats::sspm::parse(&tiny_sspm(ID)).unwrap();
+        assert!(downloaded_is_the_map(&key, &asked).is_ok());
+        let other = rhythia_formats::sspm::parse(&tiny_sspm("someone_-_another_song")).unwrap();
+        let err = downloaded_is_the_map(&key, &other).unwrap_err();
+        assert!(err.contains("RH-NET-506"), "{err}");
+        // A number has nothing in the file to be held against.
+        assert!(downloaded_is_the_map(&OnlineMapKey::Number(5), &other).is_ok());
+    }
+
+    #[test]
+    fn a_downloaded_legacy_map_is_found_again_in_the_cache_without_asking() {
+        let t = tempfile::tempdir().unwrap();
+        let cache = tempfile::tempdir().unwrap();
+        let (path, replay) = legacy_replay(t.path());
+        assert!(resolve_map_offline_in(cache.path(), &path, &replay).is_none());
+        // A download is stored under the map's online number, whichever
+        // kind of replay it was fetched for.
+        std::fs::write(cache.path().join("9732.sspm"), tiny_sspm("someone_-_another_song")).unwrap();
+        std::fs::write(cache.path().join("20443.sspm"), tiny_sspm(ID)).unwrap();
+        let (found, _, source, mismatch) = resolve_map_offline_in(cache.path(), &path, &replay).unwrap();
+        assert_eq!(found, cache.path().join("20443.sspm"));
+        assert_eq!((source, mismatch), ("cache", false));
+        // The player's own copy next to the replay comes first.
+        std::fs::write(t.path().join("mine.sspm"), tiny_sspm(ID)).unwrap();
+        let (found, _, source, _) = resolve_map_offline_in(cache.path(), &path, &replay).unwrap();
+        assert_eq!((found, source), (t.path().join("mine.sspm"), "client"));
+    }
+
+    #[test]
+    fn a_legacy_map_file_plays_in_autoplay_like_an_export() {
+        let t = tempfile::tempdir().unwrap();
+        let (replay_path, replay) = legacy_replay(t.path());
+        // The way a downloaded map lies in the cache: named by a number.
+        let map_path = t.path().join("20443.sspm");
+        std::fs::write(&map_path, tiny_sspm(ID)).unwrap();
+        let mut inner = Inner { replay: Some((replay_path, replay)), ..Default::default() };
+        load_map_into(&mut inner, map_path.clone()).unwrap();
+        assert_eq!(inner.map_source, "local");
+
+        // The loaded map, picked for Autoplay: the session takes the file
+        // and the real run makes way for the synthetic one.
+        autoplay_commands::start_session(&mut inner, map_path.clone()).unwrap();
+        assert_eq!(inner.autoplay.as_ref().unwrap().rhm, map_path);
+        assert_eq!(inner.map_source, "autoplay");
+        assert_eq!(inner.replay.as_ref().unwrap().1.frames.iter().filter(|f| f.hit).count(), 1);
+        let st = assemble_status(&inner, false);
+        assert_eq!(st.autoplay.as_ref().unwrap().file_name, "20443.sspm");
+        assert_eq!(st.autoplay.as_ref().unwrap().note_count, 1);
+        // The synthetic run names no map to fetch.
+        assert_eq!(st.replay.unwrap().map_online, None);
+    }
+
+    #[test]
+    fn the_window_is_told_what_a_replays_map_is_asked_for_by() {
+        let t = tempfile::tempdir().unwrap();
+        let (path, replay) = legacy_replay(t.path());
+        let mut inner = Inner { replay: Some((path.clone(), replay.clone())), ..Default::default() };
+        let st = assemble_status(&inner, false);
+        assert_eq!(st.replay.unwrap().map_online.as_deref(), Some("name:mapper_-_song"));
+
+        let mut local = replay;
+        local.origin = rhythia_formats::rhr::Origin::Rhr;
+        inner.replay = Some((path, local));
+        assert_eq!(assemble_status(&inner, false).replay.unwrap().map_online, None);
     }
 }
 
@@ -2451,6 +2728,81 @@ fn load_map(
     ))
 }
 
+/// A map as it arrived from rhythia.com and was put into the cache.
+struct Fetched {
+    path: PathBuf,
+    map: Map,
+    /// The map's online number, which the cache files are named by.
+    map_id: i32,
+    /// The site's copy no longer hashes to what the replay was recorded on.
+    hash_mismatch: bool,
+}
+
+/// Asks rhythia.com for the map `key` names, downloads its file and stores
+/// it in `dir`: one lookup and one file, nothing else. The caller holds the
+/// guard that keeps this to one fetch at a time.
+fn fetch_map(dir: &Path, key: &OnlineMapKey, replay_hash: &str) -> Result<Fetched, String> {
+    // Timeouts so a stalled server cannot pin "Downloading map…" open
+    // forever with no way out. This bounds the wait, not the request
+    // scope: still one request per uncached map.
+    let http = ureq::AgentBuilder::new()
+        .timeout_connect(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(60))
+        .build();
+    // Resolve the map page -> .sspm URL + server-side hash.
+    let (endpoint, body) = key.request();
+    let resp: serde_json::Value = http
+        .post(endpoint)
+        .set("User-Agent", USER_AGENT)
+        .send_json(body)
+        .map_err(|e| match e {
+            ureq::Error::Status(429, _) => net_err(
+                "rhythia.com is rate-limiting requests, please wait a moment and press \
+                 Download again",
+            ),
+            ureq::Error::Status(code, _) if code >= 500 => net_err(&format!(
+                "rhythia.com is unavailable right now (HTTP {code}), try again later"
+            )),
+            e => net_err(&format!("map lookup failed: {e}")),
+        })?
+        .into_json()
+        .map_err(|e| net_err(&format!("map lookup: bad response: {e}")))?;
+    let MapAnswer { file_url, map_id, map_hash, title } = map_answer(key, &resp)?;
+    let hash_mismatch = !replay_hash.is_empty() && !map_hash.is_empty() && replay_hash != map_hash;
+
+    let mut bytes = Vec::new();
+    http.get(&file_url)
+        .set("User-Agent", USER_AGENT)
+        .call()
+        .map_err(|e| net_err(&format!("map download failed: {e}")))?
+        .into_reader()
+        .take(MAX_MAP_BYTES)
+        .read_to_end(&mut bytes)
+        .map_err(|e| net_err(&format!("map download failed: {e}")))?;
+    let map = rhythia_formats::sspm::parse(&bytes)
+        .or_else(|_| Map::from_rhm(&bytes))
+        .map_err(|e| net_err(&format!("downloaded map does not parse: {e}")))?;
+    downloaded_is_the_map(key, &map)?;
+
+    std::fs::create_dir_all(dir).map_err(err_str)?;
+    let path = dir.join(format!("{map_id}.sspm"));
+    std::fs::write(&path, &bytes).map_err(err_str)?;
+    // `fetchedFor` is what stops a re-uploaded map being downloaded again
+    // on every launch: it records the replay this fetch was made for, so
+    // a mismatch that survives the fetch is known to be permanent.
+    let meta = serde_json::json!({
+        "mapHash": map_hash,
+        "title": title,
+        "mapId": map_id,
+        "fetchedFor": replay_hash,
+    });
+    let _ = std::fs::write(
+        dir.join(format!("{map_id}.meta.json")),
+        serde_json::to_string_pretty(&meta).unwrap_or_default(),
+    );
+    Ok(Fetched { path, map, map_id, hash_mismatch })
+}
+
 #[tauri::command]
 async fn download_map(
     state: tauri::State<'_, App>,
@@ -2458,14 +2810,12 @@ async fn download_map(
 ) -> Result<StatusDto, String> {
     let app = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let (map_id, replay_hash) = {
+        let (key, replay_hash) = {
             let inner = app.lock();
             let (_, r) = inner.replay.as_ref().ok_or("no replay loaded")?;
-            (r.map_id, r.beatmap_hash.clone())
+            (OnlineMapKey::of(r), r.beatmap_hash.clone())
         };
-        if map_id <= 0 {
-            return Err("replay has no online map id".to_string());
-        }
+        let key = key.ok_or("replay has no online map id")?;
         // One fetch at a time, whatever the window does. The Download button
         // stays enabled while the automatic fetch runs, dropping five replays
         // in one gesture calls this five times, and each of those is a
@@ -2478,70 +2828,7 @@ async fn download_map(
             return Err("a map download is already running".to_string());
         }
         let _release = ReleaseOnDrop(&FETCHING);
-        // Timeouts so a stalled server cannot pin "Downloading map…" open
-        // forever with no way out. This bounds the wait, not the request
-        // scope: still one request per uncached map.
-        let http = ureq::AgentBuilder::new()
-            .timeout_connect(std::time::Duration::from_secs(10))
-            .timeout(std::time::Duration::from_secs(60))
-            .build();
-        // Resolve the map page -> .sspm URL + server-side hash.
-        let resp: serde_json::Value = http
-            .post(API_BEATMAP_PAGE)
-            .set("User-Agent", USER_AGENT)
-            .send_json(serde_json::json!({"session": "", "id": map_id, "limit": 1}))
-            .map_err(|e| match e {
-                ureq::Error::Status(429, _) => net_err(
-                    "rhythia.com is rate-limiting requests, please wait a moment and press \
-                     Download again",
-                ),
-                ureq::Error::Status(code, _) if code >= 500 => net_err(&format!(
-                    "rhythia.com is unavailable right now (HTTP {code}), try again later"
-                )),
-                e => net_err(&format!("map lookup failed: {e}")),
-            })?
-            .into_json()
-            .map_err(|e| net_err(&format!("map lookup: bad response: {e}")))?;
-        let beatmap = &resp["beatmap"];
-        let file_url = beatmap["beatmapFile"]
-            .as_str()
-            .ok_or("map lookup: no beatmapFile in response")?
-            .to_string();
-        let map_hash = beatmap["mapHash"].as_str().unwrap_or("").to_string();
-        let title = beatmap["title"].as_str().unwrap_or("").to_string();
-        let hash_mismatch =
-            !replay_hash.is_empty() && !map_hash.is_empty() && replay_hash != map_hash;
-
-        let mut bytes = Vec::new();
-        http.get(&file_url)
-            .set("User-Agent", USER_AGENT)
-            .call()
-            .map_err(|e| net_err(&format!("map download failed: {e}")))?
-            .into_reader()
-            .take(MAX_MAP_BYTES)
-            .read_to_end(&mut bytes)
-            .map_err(|e| net_err(&format!("map download failed: {e}")))?;
-        let map = rhythia_formats::sspm::parse(&bytes)
-            .or_else(|_| Map::from_rhm(&bytes))
-            .map_err(|e| net_err(&format!("downloaded map does not parse: {e}")))?;
-
-        let dir = maps_cache_dir();
-        std::fs::create_dir_all(&dir).map_err(err_str)?;
-        let sspm_path = dir.join(format!("{map_id}.sspm"));
-        std::fs::write(&sspm_path, &bytes).map_err(err_str)?;
-        // `fetchedFor` is what stops a re-uploaded map being downloaded again
-        // on every launch: it records the replay this fetch was made for, so
-        // a mismatch that survives the fetch is known to be permanent.
-        let meta = serde_json::json!({
-            "mapHash": map_hash,
-            "title": title,
-            "mapId": map_id,
-            "fetchedFor": replay_hash,
-        });
-        let _ = std::fs::write(
-            dir.join(format!("{map_id}.meta.json")),
-            serde_json::to_string_pretty(&meta).unwrap_or_default(),
-        );
+        let Fetched { path: sspm_path, map, map_id, hash_mismatch } = fetch_map(&maps_cache_dir(), &key, &replay_hash)?;
         evict_map_cache(map_id);
 
         let mut inner = app.lock();
@@ -2551,7 +2838,7 @@ async fn download_map(
         let still_wanted = inner
             .replay
             .as_ref()
-            .is_some_and(|(_, r)| r.map_id == map_id);
+            .is_some_and(|(_, r)| OnlineMapKey::of(r).as_ref() == Some(&key));
         if still_wanted {
             inner.map = Some((sspm_path, map));
             inner.map_source = "downloaded".into();

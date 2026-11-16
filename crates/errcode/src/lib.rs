@@ -913,6 +913,21 @@ pub static CODES: &[Entry] = &[
         )],
     },
     Entry {
+        id: "RH-NET-508",
+        area: Area::Network,
+        title: "rhythia.com does not have this replay's map",
+        fix: "Choose the map's .sspm file yourself; a copy next to the replay is found by itself.",
+        patterns: &["has no map under"],
+        causes: &[(
+            Plat::Any,
+            "Not a connection fault. A replay of the legacy client names its map by the id inside \
+             the map file, and rhythia.com was asked for exactly that id and has no map under it: \
+             the map was never uploaded, was deleted, or was uploaded again under another id. The \
+             request is made once per map and session, so pressing Download again only helps \
+             after the map has appeared on the site.",
+        )],
+    },
+    Entry {
         id: "RH-NET-500",
         area: Area::Network,
         title: "the map could not be downloaded",
@@ -1289,13 +1304,14 @@ pub static CODES: &[Entry] = &[
     Entry {
         id: "RH-AUT-902",
         area: Area::Autoplay,
-        title: "the exported map could not be read",
-        fix: "Export the map again from the game; a partly written or old archive reads as damaged.",
+        title: "the map for Autoplay could not be read",
+        fix: "Export the map again from the game, or choose another map file; a partly written or old archive reads as damaged.",
         patterns: &["map archive unreadable", "not a map archive"],
         causes: &[(
             Plat::Any,
             "The .rhm is not a zip with a map entry: the export was interrupted, the file is from \
-             an older game build, or something else was dropped into the exports folder.",
+             an older game build, or something else was dropped into the exports folder. A map \
+             file chosen by hand (.sspm, .phxm) that does not parse lands here as well.",
         )],
     },
     Entry {

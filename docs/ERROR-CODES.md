@@ -269,6 +269,13 @@ Shown to the user: Wait for the one in progress; it will load the map when it fi
 - **all systems**: Deliberate, not a fault. The Download button, the automatic fetch and a gesture that drops several replays at once could otherwise each start their own request, and several requests at once is bulk fetching, which the terms this feature exists under forbid.
 - Recognised by: `download is already running`
 
+### RH-NET-508 rhythia.com does not have this replay's map
+
+Shown to the user: Choose the map's .sspm file yourself; a copy next to the replay is found by itself.
+
+- **all systems**: Not a connection fault. A replay of the legacy client names its map by the id inside the map file, and rhythia.com was asked for exactly that id and has no map under it: the map was never uploaded, was deleted, or was uploaded again under another id. The request is made once per map and session, so pressing Download again only helps after the map has appeared on the site.
+- Recognised by: `has no map under`
+
 ### RH-NET-500 the map could not be downloaded
 
 Shown to the user: Try again, or load the map file by hand.
@@ -440,11 +447,11 @@ Shown to the user: Start the game once so its data folder exists, or pick the fo
 - **macOS**: The game does not run here; Choose folder or RHYTHR_GAME_DATA_DIR apply.
 - Recognised by: `export folder not found`
 
-### RH-AUT-902 the exported map could not be read
+### RH-AUT-902 the map for Autoplay could not be read
 
-Shown to the user: Export the map again from the game; a partly written or old archive reads as damaged.
+Shown to the user: Export the map again from the game, or choose another map file; a partly written or old archive reads as damaged.
 
-- **all systems**: The .rhm is not a zip with a map entry: the export was interrupted, the file is from an older game build, or something else was dropped into the exports folder.
+- **all systems**: The .rhm is not a zip with a map entry: the export was interrupted, the file is from an older game build, or something else was dropped into the exports folder. A map file chosen by hand (.sspm, .phxm) that does not parse lands here as well.
 - Recognised by: `map archive unreadable`, `not a map archive`
 
 ### RH-AUT-903 the map has no notes

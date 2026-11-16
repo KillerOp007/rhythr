@@ -382,12 +382,16 @@ map, not for anything that could pass as a real play.
   folder" reveals the folder, "Choose folder" sets one by hand for unusual
   installs (the `RHYTHR_GAME_DATA_DIR` override keeps working too). A map
   the game exported without audio renders silent and says so (`RH-AUT-904`).
+  Any other map file plays as well: **Choose a map file** takes a `.sspm`,
+  `.rhm`, `.phxm` or `objects.phxmo` from anywhere, a map file dropped on
+  the open picker starts Autoplay with it, and the map that is loaded for a
+  replay (a downloaded one included) is offered above the list.
 - **The session**: the Replay card becomes the Autoplay card and an
   **Autoplay** tab appears next to Output and HUD. While it is active the
   Map button opens the picker, a map file dropped on the window becomes
   the session's map, and an Analyze window left open from a replay closes.
   "Back to replay", or dropping a `.rhr`, ends the session. The app
-  restores the session on the next start as long as the export still
+  restores the session on the next start as long as the map file still
   exists.
 - **Settings** (Autoplay tab): Aim, **Centre** (through the centre of every
   note; a corner is turned on the note itself) or **Flow** (like a player's

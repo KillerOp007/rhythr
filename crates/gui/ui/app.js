@@ -160,7 +160,7 @@ function renderAutoplayCard() {
   $("replay-body").innerHTML = `
     <div class="src-title src-path" title="${esc(a.title)}">${esc(a.title)}</div>
     <div class="src-meta src-path" title="${esc(sub)}">${esc(sub || a.file_name)}</div>
-    <span class="chip info">from exports</span>
+    <span class="chip info">${/\.rhm$/i.test(a.file_name) ? "from exports" : "map file"}</span>
     <span class="chip">${fmtTime(a.duration_ms)}</span>
     <span class="chip">${a.note_count.toLocaleString()} notes</span>
     <div style="margin-top:7px"><button class="linkbtn" id="btn-autoplay-back" type="button">Back to replay</button></div>`;
@@ -221,19 +221,46 @@ ${(m.mappers || []).join(", ")}`;
   $("ap-count").textContent = pickerMaps.length ? `${rows.length} of ${pickerMaps.length} maps` : "";
 }
 
-async function pickExport(m) {
+function pickExport(m) {
+  return pickMapFile(m.path, m.title);
+}
+
+/// Starts Autoplay on any map file: an export from the list, a file from
+/// the dialog or a drop, or the map that is loaded for a replay.
+async function pickMapFile(path, title) {
   closePicker();
   try {
-    const st = await call(() => invoke("autoplay_pick", { path: m.path }));
-    loadNote(st?.autoplay?.note || `Autoplay: ${m.title}`);
+    const st = await call(() => invoke("autoplay_pick", { path }));
+    loadNote(st?.autoplay?.note || `Autoplay: ${st?.autoplay?.title || title || path.split(/[\\/]/).pop()}`);
   } catch (e) {
     // call() already showed the message
   }
 }
 
+/// The row above the list for the map a replay has loaded: a downloaded
+/// map has no file anyone would browse to, so it is offered where the
+/// maps are picked.
+function renderPickerLoaded() {
+  const box = $("ap-loaded");
+  const m = status?.map;
+  box.hidden = !m || !!status?.autoplay;
+  box.innerHTML = "";
+  if (box.hidden) return;
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "ap-row";
+  b.title = "Play the map that is loaded now with Autoplay. The replay is put away; Back to replay returns to the replay flow.";
+  b.innerHTML = `<span class="t"></span><span class="m"><b></b><span>loaded now</span></span><span class="s">Use the loaded map for Autoplay</span>`;
+  b.querySelector(".t").textContent = m.title || m.song_name;
+  b.querySelector(".m b").textContent = `${fmtTime(m.duration_ms)} · ${m.note_count.toLocaleString()} notes`;
+  b.addEventListener("click", () => pickMapFile(m.path, m.title || m.song_name));
+  box.appendChild(b);
+}
+
 function openPicker() {
   $("autoplay-picker").hidden = false;
   $("ap-search").focus();
+  renderPickerLoaded();
   refreshPicker(true);
   if (pickerTimer) clearInterval(pickerTimer);
   pickerTimer = setInterval(() => refreshPicker(false), 1000);
@@ -330,6 +357,10 @@ function initAutoplay() {
     $("ap-howto-text").hidden = !$("ap-howto-text").hidden;
   });
   $("ap-refresh").addEventListener("click", () => refreshPicker(true));
+  $("ap-file").addEventListener("click", async () => {
+    const p = await dialog.open({ filters: [{ name: "Map", extensions: ["sspm", "rhm", "phxm", "phxmo", "json"] }] });
+    if (p) await pickMapFile(String(p));
+  });
   $("ap-open").addEventListener("click", () => {
     invoke("autoplay_open_folder").catch((e) => showPreviewMsg(String(e)));
   });
@@ -375,18 +406,20 @@ function renderMapCard() {
   const body = $("map-body");
   const m = status?.map;
   const r = status?.replay;
-  // Downloading needs an online id. Without one the button could only ever
-  // fail with "replay has no online map id", so it is not offered. The
-  // replay's readable map name is shown instead, which is what someone needs
-  // to find the file themselves. It was parsed and carried all along and
-  // displayed nowhere.
-  const canDownload = !!(r && !m && r.map_id > 0);
+  // Downloading needs something rhythia.com knows the map by: the online
+  // id of a Rhythia replay, or the map's own id that a legacy replay
+  // names (map_online says which). Without either the button could only
+  // ever fail with "replay has no online map id", so it is not offered.
+  // The replay's readable map name is shown instead, which is what someone
+  // needs to find the file themselves.
+  const canDownload = !!(r && !m && r.map_online);
   $("btn-map-dl").hidden = !canDownload;
   if (!m) {
     if (!r) {
       body.innerHTML = `<p class="hint">Auto-resolved from the replay</p>`;
     } else if (canDownload) {
-      body.innerHTML = `<p class="hint">Map id <b>${r.map_id}</b>. Download it from rhythia.com, or browse for a local .sspm/.rhm</p>`;
+      const which = r.map_id > 0 ? `Map id <b>${r.map_id}</b>` : `Map <b>${esc(r.legacy_map_id)}</b>`;
+      body.innerHTML = `<p class="hint">${which}. Download it from rhythia.com, or browse for a local .sspm/.rhm</p>`;
     } else {
       const named = r.legacy_map_id
         ? `<b>${esc(r.legacy_map_id)}</b>`
@@ -436,10 +469,12 @@ function renderDropzone() {
   let text;
   if (r.map_id > 0) {
     text = `Its map has the online id <b>${r.map_id}</b> and is fetched from rhythia.com by itself. If that does not work, press Download in the Map card or choose a local .sspm/.rhm file.`;
+  } else if (r.map_online) {
+    // A legacy replay: no online id, but the site knows the map by the
+    // name the replay carries.
+    text = `Its map ${name} is fetched from rhythia.com by itself. If the site does not have it, choose its .sspm: a copy in the replay's folder, or in the legacy client's maps folder next to its replays folder, is found by itself when the replay is loaded.`;
   } else if (file.endsWith(".phxr")) {
     text = `A .phxr finds its map by itself only while it sits in the client's replays folder. Choose ${name}: <code>objects.phxmo</code> in the client's folder for that map, its .phxm export or its .sspm.`;
-  } else if (file.endsWith(".sspre")) {
-    text = `A .sspre carries no online map id, so its map cannot be downloaded. Choose the .sspm of ${name}. A copy in the replay's folder, or in the legacy client's maps folder next to its replays folder, is found by itself when the replay is loaded.`;
   } else {
     text = `It carries no online map id, so its map cannot be downloaded. Choose ${name} as a local .sspm/.rhm file.`;
   }
@@ -2108,7 +2143,7 @@ function updateRenderButton() {
       : ready
         ? readyText
         : status?.replay
-          ? status.replay.map_id > 0
+          ? status.replay.map_online
             ? "No map yet. Download it, or browse for the file."
             : "No map yet. Choose this replay's map file."
           : "Load a replay to render";
@@ -2175,6 +2210,7 @@ async function applyStatus(st) {
   renderOutputTab();
   renderAutoplayTab();
   syncAutoplayUi(st);
+  if (pickerOpen()) renderPickerLoaded();
   renderClipRow();
   updateRenderButton();
   syncHistoryButtons();
@@ -2183,16 +2219,18 @@ async function applyStatus(st) {
   if (st.rendering && !rendering) setRenderingUi(true);
 
   // A replay without its map: fetch it from rhythia.com right away, but
-  // only once per map id, so a failure (offline, unpublished map) falls back
-  // to the manual Download/Browse buttons instead of looping.
+  // only once per map, so a failure (offline, unpublished map) falls back
+  // to the manual Download/Browse buttons instead of looping. map_online
+  // names the map the way the site is asked for it, online id or the
+  // legacy map's own id, and is missing when there is nothing to ask by.
   if (
     st.replay &&
     !st.map &&
-    st.replay.map_id > 0 &&
+    st.replay.map_online &&
     !autoDownloadRunning &&
-    !autoDownloadTried.has(st.replay.map_id)
+    !autoDownloadTried.has(st.replay.map_online)
   ) {
-    autoDownloadTried.add(st.replay.map_id);
+    autoDownloadTried.add(st.replay.map_online);
     autoDownloadRunning = true;
     // The button invites a second request for the map already being fetched.
     $("btn-map-dl").disabled = true;
@@ -2280,6 +2318,12 @@ async function loadPath(path) {
     if (isReplayPath(lower)) {
       await call(() => invoke("load_replay", { path }));
       loadNote(`Loaded replay: ${name}`);
+    } else if (isMapPath(lower) && pickerOpen() && !status?.autoplay) {
+      // Dropped while the Autoplay picker is open: that is where maps are
+      // picked for Autoplay, so the file starts a session instead of
+      // becoming the loaded replay's map. (With a session running the
+      // backend already makes a loaded map the session's.)
+      await pickMapFile(path, name);
     } else if (isMapPath(lower)) {
       await call(() => invoke("load_map", { path }));
       loadNote(`Loaded map: ${name}`);
