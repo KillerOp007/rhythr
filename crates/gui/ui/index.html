@@ -149,6 +149,7 @@
           <div class="ap-head">
             <h3>Exported maps</h3>
             <span class="ap-actions">
+              <button class="btn small" id="ap-file" type="button" title="Use any map file for Autoplay: .sspm, .rhm, .phxm or objects.phxmo">Choose a map file…</button>
               <button class="btn small ghost" id="ap-howto" type="button">How do I export?</button>
               <button class="btn small ghost" id="ap-open" type="button">Open folder</button>
               <button class="btn small ghost" id="ap-refresh" type="button">Refresh</button>
@@ -161,8 +162,9 @@
             <ol><li>Right-click the map</li><li>Export</li><li>Come back here, it is in the list</li></ol>
           </div>
           <div class="ap-search"><input type="text" id="ap-search" placeholder="Search title, artist or mapper" aria-label="Search maps" spellcheck="false" /></div>
+          <div class="ap-loaded" id="ap-loaded" hidden></div>
           <div class="ap-list" id="ap-list"></div>
-          <div class="ap-empty" id="ap-empty" hidden>No exported maps yet. In the game, right-click a map and choose Export; it appears here on its own.</div>
+          <div class="ap-empty" id="ap-empty" hidden>No exported maps yet. In the game, right-click a map and choose Export; it appears here on its own. Any other map file works too: press Choose a map file, or drop it here.</div>
           <div class="ap-foot"><span id="ap-count"></span><span>Newest first · Enter picks the first · Esc closes</span></div>
         </div>
         <div id="dropzone">

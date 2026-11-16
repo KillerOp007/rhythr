@@ -183,6 +183,7 @@ code { font-family: ui-monospace, Consolas, monospace; color: var(--accent); fon
 #dropzone button { margin-top: 12px; }
 #dropzone strong { color: var(--text); font-weight: 600; }
 #drop-needmap-text { max-width: 36rem; margin: 4px auto; padding: 0 12px; }
+#map-body .hint b { overflow-wrap: anywhere; }
 #drop-needmap-text b {
   color: var(--text); font-weight: 600; overflow-wrap: anywhere;
   user-select: text; -webkit-user-select: text;
@@ -550,6 +551,9 @@ details#advanced > div, details#advanced > label { margin-bottom: 10px; }
 .ap-search { padding: 8px 12px; border-bottom: 1px solid var(--border); }
 .ap-search input { width: 100%; }
 .ap-list { overflow: auto; flex: 1; min-height: 0; }
+/* The map that is loaded for a replay right now, offered above the list. */
+.ap-loaded { border-bottom: 1px solid var(--border); }
+.ap-loaded[hidden] { display: none; }
 .ap-row {
   display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; width: 100%;
   text-align: left; padding: 8px 12px; background: transparent; border: 0;
