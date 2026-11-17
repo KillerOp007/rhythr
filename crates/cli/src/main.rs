@@ -275,8 +275,8 @@ enum Command {
         app_layout_file: Option<PathBuf>,
     },
     /// Render a map with a synthetic cursor (no replay). The video carries
-    /// the hidden mark and a metadata tag, and the AUTOPLAY ticker unless
-    /// --no-banner is given.
+    /// a metadata tag, and the AUTOPLAY ticker unless --no-banner is given;
+    /// `autoplay-check` recognises it by the cursor's path.
     Autoplay {
         #[command(flatten)]
         common: VideoCommon,
@@ -298,13 +298,51 @@ enum Command {
         /// The game's speed mod, 0.80 to 2.00 in steps of 0.05 (song, approach and cursor follow it).
         #[arg(long, default_value_t = 1.0)]
         speed_mod: f32,
-        /// Leave the AUTOPLAY ticker off the top of the video. The hidden
-        /// mark and the metadata tag stay.
+        /// Leave the AUTOPLAY ticker off the top of the video. The metadata
+        /// tag stays, and the path check works either way.
         #[arg(long)]
         no_banner: bool,
     },
-    /// Look for the hidden Autoplay mark in a video. Exit code 0 when the
-    /// mark is found, 2 when it is weak, 1 when there is none.
+    /// Check whether a video is an Autoplay render of a map: the Autoplay
+    /// paths of the map are computed again and the cursor in the video is
+    /// measured against them. Nothing in the picture is needed for it, so
+    /// it works after re-encoding, with any skin and without the ticker.
+    /// Exit code 0 when the path is found, 2 when it is unclear, 1 when it
+    /// is not there.
+    AutoplayCheck {
+        video: PathBuf,
+        /// The map the video shows (any map file the app reads).
+        #[arg(long)]
+        map: PathBuf,
+        /// The video's speed mod when known (0.80 to 2.00). Without it
+        /// every speed mod is tried, which takes longer.
+        #[arg(long)]
+        speed_mod: Option<f32>,
+        /// The rest threshold the video was rendered with, when known.
+        #[arg(long)]
+        rest: Option<f64>,
+        /// Map time at the video's first frame (ms, or m:ss), for a video
+        /// that does not start where the map starts.
+        #[arg(long)]
+        start: Option<String>,
+        /// A key file (64 hex characters on one line); repeat for several
+        /// keys. The key built into this binary and the public development
+        /// key are always tried.
+        #[arg(long = "key", value_name = "FILE")]
+        keys: Vec<PathBuf>,
+        /// Emit machine-readable JSON instead of text.
+        #[arg(long)]
+        json: bool,
+        /// ffmpeg executable; found as for `video` when not given.
+        #[arg(long)]
+        ffmpeg: Option<String>,
+        /// Look at this many frames from the start of the video.
+        #[arg(long, default_value_t = 7200)]
+        max_frames: usize,
+    },
+    /// Look for the hidden mark that rhythr 0.8.0 put into its Autoplay
+    /// videos (later versions have none: use `autoplay-check`). Exit code 0
+    /// when the mark is found, 2 when it is weak, 1 when there is none.
     MarkCheck {
         video: PathBuf,
         /// A key file (64 hex characters on one line); repeat for several
@@ -619,6 +657,11 @@ fn resolve_ffmpeg(explicit: Option<&str>) -> String {
 /// bundled ffmpeg comes without ffprobe). Black is 16 unless the stream
 /// says full range (`pc`).
 fn probe_video(ffmpeg: &str, path: &Path) -> Option<(usize, usize, f32)> {
+    banner_size(&video_banner(ffmpeg, path)?)
+}
+
+/// What ffmpeg prints about a file given as its only input.
+fn video_banner(ffmpeg: &str, path: &Path) -> Option<String> {
     let mut cmd = std::process::Command::new(ffmpeg);
     rhythia_render::video::hide_console_window(&mut cmd);
     let out = cmd
@@ -629,7 +672,37 @@ fn probe_video(ffmpeg: &str, path: &Path) -> Option<(usize, usize, f32)> {
         .stderr(std::process::Stdio::piped())
         .output()
         .ok()?;
-    let text = String::from_utf8_lossy(&out.stderr);
+    Some(String::from_utf8_lossy(&out.stderr).into_owned())
+}
+
+/// A video's frame rate as the banner prints it: the number for the
+/// arithmetic and the exact fraction for ffmpeg's fps filter (59.94 is
+/// 60000/1001).
+fn banner_fps(text: &str) -> Option<(f64, String)> {
+    let line = text.lines().find(|l| l.contains("Video:"))?;
+    let shown = [" fps", " tbr"].iter().find_map(|unit| {
+        line.split(',').find_map(|tok| tok.trim().strip_suffix(unit.trim_start()).map(str::trim).and_then(|v| v.parse::<f64>().ok()))
+    })?;
+    for base in [24.0, 30.0, 48.0, 60.0, 120.0, 240.0] {
+        let ntsc: f64 = base * 1000.0 / 1001.0;
+        if (shown - ntsc).abs() < 0.011 {
+            return Some((ntsc, format!("{}/1001", (base * 1000.0) as u32)));
+        }
+    }
+    (1.0..=1000.0).contains(&shown).then(|| (shown, format!("{shown}")))
+}
+
+/// A video's length in seconds from the banner's `Duration:`, when the
+/// container says.
+fn banner_seconds(text: &str) -> Option<f64> {
+    let rest = text.lines().find_map(|l| l.trim_start().strip_prefix("Duration:"))?;
+    let stamp = rest.split(',').next()?.trim();
+    let mut parts = stamp.split(':');
+    let (h, m, s) = (parts.next()?, parts.next()?, parts.next()?);
+    Some(h.parse::<f64>().ok()? * 3600.0 + m.parse::<f64>().ok()? * 60.0 + s.parse::<f64>().ok()?)
+}
+
+fn banner_size(text: &str) -> Option<(usize, usize, f32)> {
     let line = text.lines().find(|l| l.contains("Video:"))?;
     let dims = line
         .split([' ', ','])
@@ -648,6 +721,166 @@ fn probe_video(ffmpeg: &str, path: &Path) -> Option<(usize, usize, f32)> {
 /// of half size, rounded up for odd dimensions.
 fn yuv420p_frame_len(w: usize, h: usize) -> usize {
     w * h + 2 * w.div_ceil(2) * h.div_ceil(2)
+}
+
+/// A video as gray frames out of ffmpeg, at a constant frame rate.
+struct FfmpegGray<'a> {
+    ffmpeg: &'a str,
+    video: &'a Path,
+    fps: String,
+}
+
+impl rhythia_render::autoplay::check::FrameSource for FfmpegGray<'_> {
+    fn frames(&mut self, w: usize, h: usize, f: &mut dyn FnMut(usize, &[u8]) -> bool) -> Result<(), String> {
+        use std::io::Read;
+        let mut cmd = std::process::Command::new(self.ffmpeg);
+        rhythia_render::video::hide_console_window(&mut cmd);
+        let mut child = cmd
+            .args(["-v", "error", "-i"])
+            .arg(self.video)
+            .args(["-an", "-vf", &format!("fps={},scale={w}:{h}:flags=area", self.fps)])
+            .args(["-f", "rawvideo", "-pix_fmt", "gray", "pipe:1"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map_err(|e| format!("running {}: {e}", self.ffmpeg))?;
+        let mut stdout = child.stdout.take().expect("piped stdout");
+        let mut buf = vec![0u8; w * h];
+        let mut n = 0usize;
+        while stdout.read_exact(&mut buf).is_ok() {
+            if !f(n, &buf) {
+                break;
+            }
+            n += 1;
+        }
+        drop(stdout);
+        let _ = child.kill();
+        let _ = child.wait();
+        if n == 0 {
+            return Err(format!("no frames decoded from {}", self.video.display()));
+        }
+        Ok(())
+    }
+}
+
+struct AutoplayCheckArgs<'a> {
+    video: &'a Path,
+    map: &'a Path,
+    speed_mod: Option<f32>,
+    rest: Option<f64>,
+    start_ms: f64,
+    keys: &'a [PathBuf],
+    json: bool,
+    ffmpeg: &'a str,
+    max_frames: usize,
+}
+
+/// Computes the map's Autoplay paths and measures the cursor in the video
+/// against them; prints the verdict and returns the exit code (0 found, 2
+/// unclear, 1 not there).
+fn run_autoplay_check(a: &AutoplayCheckArgs) -> anyhow::Result<i32> {
+    use rhythia_render::autoplay::check::{check, describe, Key, Options, VerdictKind, VideoInfo};
+    use rhythia_render::mark::{self, KeyKind};
+
+    if !rhythia_render::video::ffmpeg_runs(a.ffmpeg) {
+        anyhow::bail!(
+            "ffmpeg could not be run ({}); pass --ffmpeg <path>, or put {} next to rhythr-cli",
+            a.ffmpeg,
+            FfmpegPlaces::here().name
+        );
+    }
+    let banner = video_banner(a.ffmpeg, a.video);
+    let (w, h, _) = banner
+        .as_deref()
+        .and_then(banner_size)
+        .with_context(|| format!("could not read the video's size with {} ({})", a.ffmpeg, a.video.display()))?;
+    let (fps, fps_arg) = banner
+        .as_deref()
+        .and_then(banner_fps)
+        .with_context(|| format!("could not read the video's frame rate ({})", a.video.display()))?;
+    let frames = banner.as_deref().and_then(banner_seconds).map(|s| (s * fps).round() as usize).filter(|&n| n > 0);
+    let map = Map::from_path(a.map).with_context(|| format!("reading {}", a.map.display()))?;
+
+    let mut keys: Vec<Key> = Vec::new();
+    for k in a.keys {
+        let seed = read_key_file(k).map_err(anyhow::Error::msg)?;
+        let label = k.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| k.display().to_string());
+        keys.push(Key { label, dice: mark::pattern(&seed) });
+    }
+    let (built, kind) = mark::built_in();
+    keys.push(Key { label: format!("built-in {}", kind.label()), dice: mark::pattern(&built) });
+    if kind != KeyKind::Dev {
+        let dev = mark::seed_from_hex(mark::DEV_KEY_HEX).expect("hex");
+        keys.push(Key { label: "dev".into(), dice: mark::pattern(&dev) });
+    }
+    let opts = Options {
+        speed_mods: a.speed_mod.map(|s| vec![s]).unwrap_or_default(),
+        rest_secs: a.rest,
+        start_ms: a.start_ms,
+        max_frames: a.max_frames.max(1),
+        ..Options::default()
+    };
+    let info = VideoInfo { width: w, height: h, fps, frames };
+    let mut src = FfmpegGray { ffmpeg: a.ffmpeg, video: a.video, fps: fps_arg };
+    let json = a.json;
+    let r = check(&mut src, &info, &map, &keys, &opts, &mut |msg| {
+        if !json {
+            eprintln!("{msg}");
+        }
+    })
+    .map_err(anyhow::Error::msg)?;
+
+    let kind_name = match r.kind {
+        VerdictKind::Found => "Found",
+        VerdictKind::Weak => "Weak",
+        VerdictKind::None => "None",
+    };
+    if a.json {
+        let obj = serde_json::json!({
+            "video": a.video.display().to_string(),
+            "map": a.map.display().to_string(),
+            "size": format!("{w}x{h}"),
+            "fps": fps,
+            "kind": kind_name,
+            "on_curve_pct": r.on_curve_pct,
+            "on_time_pct": r.on_time_pct,
+            "median_px": r.median_px,
+            "frames": r.frames,
+            "moving_frames": r.moving_frames,
+            "settings": describe(&r.settings),
+            "speed_mod": r.settings.speed_mod,
+            "rest_secs": r.settings.rest_secs,
+            "key": r.key,
+            "scale": r.scale,
+            "time_offset_ms": r.time_offset_ms,
+            "match_quality": r.match_quality,
+            "runner_up": r.runner_up.as_ref().map(|(name, pct)| serde_json::json!({ "settings": name, "on_curve_pct": pct })),
+            "note": r.note,
+        });
+        println!("{obj}");
+    } else if let Some(note) = &r.note {
+        println!("No Autoplay path: {note}");
+    } else {
+        let what = format!("{}, key {}", describe(&r.settings), r.key);
+        let detail = format!("{} moving frames, median distance {:.1} px", r.moving_frames, r.median_px);
+        match r.kind {
+            VerdictKind::Found => {
+                println!("Autoplay path found: {:.1} % of the frames on the curve ({what}; {detail})", r.on_curve_pct)
+            }
+            VerdictKind::Weak => {
+                println!("Autoplay path: unclear, {:.1} % of the frames on the curve ({what}; {detail})", r.on_curve_pct)
+            }
+            VerdictKind::None => {
+                println!("No Autoplay path: {:.1} % of the frames on the nearest curve ({what}; {detail})", r.on_curve_pct)
+            }
+        }
+    }
+    Ok(match r.kind {
+        VerdictKind::Found => 0,
+        VerdictKind::Weak => 2,
+        VerdictKind::None => 1,
+    })
 }
 
 /// Decodes the video, averages it and tries every key; prints the verdict
@@ -899,6 +1132,29 @@ fn run() -> anyhow::Result<bool> {
             );
             Ok(true)
         }
+        Command::AutoplayCheck { video, map, speed_mod, rest, start, keys, json, ffmpeg, max_frames } => {
+            let ffmpeg = resolve_ffmpeg(ffmpeg.as_deref());
+            let start_ms = match &start {
+                Some(s) => parse_time_ms(s).context("parsing --start")?,
+                None => 0.0,
+            };
+            let code = run_autoplay_check(&AutoplayCheckArgs {
+                video: &video,
+                map: &map,
+                speed_mod,
+                rest,
+                start_ms,
+                keys: &keys,
+                json,
+                ffmpeg: &ffmpeg,
+                max_frames,
+            })?;
+            if code == 0 {
+                Ok(true)
+            } else {
+                std::process::exit(code)
+            }
+        }
         Command::MarkCheck { video, keys, json, ffmpeg, max_frames } => {
             let ffmpeg = resolve_ffmpeg(ffmpeg.as_deref());
             let code = run_mark_check(&video, &keys, json, &ffmpeg, max_frames)?;
@@ -1005,18 +1261,17 @@ fn render_run(source: RunSource, common: VideoCommon, extra: VideoExtra) -> anyh
             };
             let mut m =
                 Map::from_path(&map).with_context(|| format!("reading {}", map.display()))?;
-            let (r, mark_pattern) = match &source {
-                RunSource::Replay(replay) => (
-                    Replay::from_path(replay).with_context(|| format!("reading {}", replay.display()))?,
-                    None,
-                ),
+            let r = match &source {
+                RunSource::Replay(replay) => {
+                    Replay::from_path(replay).with_context(|| format!("reading {}", replay.display()))?
+                }
                 RunSource::Autoplay(settings) => {
+                    // the key's pattern decides the sides of the path's arcs
                     let (seed, _) = rhythia_render::mark::built_in();
-                    let pattern = rhythia_render::mark::pattern(&seed);
-                    let run = rhythia_render::autoplay::generate(&m, settings, fps, &pattern).map_err(|e| {
+                    let dice = rhythia_render::mark::pattern(&seed);
+                    rhythia_render::autoplay::generate(&m, settings, fps, &dice).map_err(|e| {
                         anyhow::anyhow!(rhythia_errcode::stamp_in(rhythia_errcode::Area::Autoplay, &e.to_string()))
-                    })?;
-                    (run, Some(pattern))
+                    })?
                 }
             };
             // Cache-JSON maps don't embed their cover; look for a sibling
@@ -1144,8 +1399,7 @@ fn render_run(source: RunSource, common: VideoCommon, extra: VideoExtra) -> anyh
                     .context("initialising GPU renderer")?;
             // The glyph atlas holds ASCII until a title asks for more.
             renderer.ensure_hud_text(&rhythia_render::hud::atlas_text(&m, &r));
-            if let (RunSource::Autoplay(settings), Some(pattern)) = (&source, &mark_pattern) {
-                renderer.set_mark(Some(pattern));
+            if let RunSource::Autoplay(settings) = &source {
                 renderer.set_ticker(rhythia_render::autoplay::ticker_for(settings));
             }
 
@@ -1532,6 +1786,36 @@ mod mark_check_tests {
         assert_eq!(yuv420p_frame_len(1920, 1080), 1920 * 1080 * 3 / 2);
         assert_eq!(yuv420p_frame_len(1919, 1079), 1919 * 1079 + 2 * 960 * 540);
         assert_eq!(yuv420p_frame_len(641, 361), 641 * 361 + 2 * 321 * 181);
+    }
+
+    #[test]
+    fn autoplay_check_takes_a_video_and_its_map() {
+        let cli = Cli::try_parse_from(["rhythr-cli", "autoplay-check", "v.mp4", "--map", "m.sspm", "--speed-mod", "1.25", "--json"]).unwrap();
+        match cli.command {
+            Command::AutoplayCheck { video, map, speed_mod, rest, start, keys, json, ffmpeg, max_frames } => {
+                assert_eq!(video, PathBuf::from("v.mp4"));
+                assert_eq!(map, PathBuf::from("m.sspm"));
+                assert_eq!(speed_mod, Some(1.25));
+                assert_eq!((rest, start, ffmpeg), (None, None, None));
+                assert!(keys.is_empty() && json);
+                assert_eq!(max_frames, 7200);
+            }
+            _ => panic!("wrong command"),
+        }
+        assert!(Cli::try_parse_from(["rhythr-cli", "autoplay-check", "v.mp4"]).is_err(), "the map is required");
+    }
+
+    #[test]
+    fn the_banner_gives_frame_rate_and_length() {
+        let text = "Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'a.mp4':\n  Duration: 00:01:02.50, start: 0.000000, bitrate: 5000 kb/s\n  Stream #0:0[0x1](und): Video: h264 (High) (avc1 / 0x31637661), yuv420p(tv, bt709, progressive), 1920x1080 [SAR 1:1 DAR 16:9], 4871 kb/s, 59.94 fps, 59.94 tbr, 60k tbn (default)\n";
+        let (fps, arg) = banner_fps(text).unwrap();
+        assert!((fps - 60000.0 / 1001.0).abs() < 1e-9);
+        assert_eq!(arg, "60000/1001");
+        assert_eq!(banner_seconds(text), Some(62.5));
+        assert_eq!(banner_size(text), Some((1920, 1080, 16.0)));
+        let plain = "  Duration: N/A, bitrate: N/A\n  Stream #0:0: Video: vp9 (Profile 0), yuv420p(tv), 1280x720, SAR 1:1 DAR 16:9, 30 fps, 30 tbr, 1k tbn\n";
+        assert_eq!(banner_fps(plain), Some((30.0, "30".to_string())));
+        assert_eq!(banner_seconds(plain), None);
     }
 
     #[test]

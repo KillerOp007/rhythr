@@ -1,6 +1,7 @@
 //! `rhythr-cli autoplay` end to end: a tiny map without audio renders a
-//! tagged, marked video with a note about the missing audio; `mark-check`
-//! then finds the mark. Skipped when ffmpeg is not on PATH.
+//! tagged video with a note about the missing audio and nothing hidden in
+//! its picture; `autoplay-check` recognises a render by its cursor path,
+//! also after a platform's re-encode. Skipped when ffmpeg is not on PATH.
 use std::io::Write;
 use std::process::{Command, Stdio};
 
@@ -20,7 +21,7 @@ fn build_rhm(path: &std::path::Path) {
 }
 
 #[test]
-fn a_map_renders_tagged_and_marked_with_a_note_about_the_missing_audio() {
+fn a_map_renders_tagged_with_a_note_about_the_missing_audio_and_no_hidden_mark() {
     if !ffmpeg_available() {
         eprintln!("skipped: ffmpeg not found");
         return;
@@ -35,8 +36,8 @@ fn a_map_renders_tagged_and_marked_with_a_note_about_the_missing_audio() {
         .arg(&rhm)
         .arg("-o")
         .arg(&out)
-        // the pattern's own size: at 320 by 240 the mark was marginal (z near
-        // the threshold) and any change in the picture tipped it over
+        // the size of the pattern 0.8.0 hid in the picture, where its
+        // checker is at its best
         .args(["--width", "640", "--height", "360", "--fps", "30", "--encoder", "x264"])
         .output()
         .unwrap();
@@ -49,10 +50,12 @@ fn a_map_renders_tagged_and_marked_with_a_note_about_the_missing_audio() {
     let banner = String::from_utf8_lossy(&probe.stderr);
     assert!(banner.contains("rhythr autoplay render: not a real play"), "no metadata tag in: {banner}");
 
+    // the picture carries no hidden mark any more: the checker for 0.8.0
+    // videos finds nothing in a new render
     let check = Command::new(bin).args(["mark-check", "--json"]).arg(&out).output().unwrap();
     let text = String::from_utf8_lossy(&check.stdout);
     let v: serde_json::Value = serde_json::from_str(text.trim()).expect("json");
-    assert_eq!(v["kind"], "Found", "{text}");
+    assert_eq!(v["kind"], "None", "{text}");
 }
 
 /// A longer synthetic map: `n` notes a quarter second apart spread over the
@@ -74,11 +77,12 @@ fn build_long_rhm(path: &std::path::Path, n: usize) {
     std::fs::write(path, zw.finish().unwrap().into_inner()).unwrap();
 }
 
-/// The spec's bar for the hidden mark: a 1080p render re-encoded at 720p
-/// and 2.5 Mbit/s (a video platform's treatment) still checks with z above
-/// 50. Skipped when ffmpeg is not on PATH.
+/// The bar for the path check: a 1080p render re-encoded at 720p and 2.5
+/// Mbit/s (a video platform's treatment) is still recognised as an Autoplay
+/// render of its map, with nothing in the picture to go by. Skipped when
+/// ffmpeg is not on PATH.
 #[test]
-fn the_mark_survives_a_720p_re_encode_at_two_and_a_half_megabit() {
+fn the_path_is_found_after_a_720p_re_encode_at_two_and_a_half_megabit() {
     if !ffmpeg_available() {
         eprintln!("skipped: ffmpeg not found");
         return;
@@ -87,8 +91,7 @@ fn the_mark_survives_a_720p_re_encode_at_two_and_a_half_megabit() {
     let rhm = dir.path().join("long.rhm");
     let out = dir.path().join("out.mp4");
     let small = dir.path().join("small.mp4");
-    // 48 notes: 15 seconds, so the checker averages about 150 frames, which
-    // is a short clip, not a corner case; 24 notes landed at z 53
+    // 48 notes: 15 seconds, a short clip, not a corner case
     build_long_rhm(&rhm, 48);
     let bin = env!("CARGO_BIN_EXE_rhythr-cli");
     let run = Command::new(bin)
@@ -96,7 +99,7 @@ fn the_mark_survives_a_720p_re_encode_at_two_and_a_half_megabit() {
         .arg(&rhm)
         .arg("-o")
         .arg(&out)
-        .args(["--width", "1920", "--height", "1080", "--fps", "30", "--encoder", "x264"])
+        .args(["--width", "1920", "--height", "1080", "--fps", "30", "--encoder", "x264", "--no-banner"])
         .output()
         .unwrap();
     assert!(run.status.success(), "autoplay failed: {}", String::from_utf8_lossy(&run.stderr));
@@ -109,11 +112,16 @@ fn the_mark_survives_a_720p_re_encode_at_two_and_a_half_megabit() {
         .unwrap();
     assert!(enc.status.success(), "re-encode failed: {}", String::from_utf8_lossy(&enc.stderr));
 
-    let check = Command::new(bin).args(["mark-check", "--json"]).arg(&small).output().unwrap();
+    let check = Command::new(bin)
+        .args(["autoplay-check", "--json", "--speed-mod", "1", "--map"])
+        .arg(&rhm)
+        .arg(&small)
+        .output()
+        .unwrap();
     let text = String::from_utf8_lossy(&check.stdout);
-    let v: serde_json::Value = serde_json::from_str(text.trim()).expect("json");
     eprintln!("re-encoded 720p 2.5M: {text}");
+    let v: serde_json::Value = serde_json::from_str(text.trim()).unwrap_or_else(|e| panic!("json ({e}): {text} {}", String::from_utf8_lossy(&check.stderr)));
     assert_eq!(v["kind"], "Found", "{text}");
-    let z = v["z"].as_f64().unwrap_or(0.0);
-    assert!(z > 50.0, "z {z} after the re-encode, the spec wants more than 50: {text}");
+    assert!(v["on_curve_pct"].as_f64().unwrap_or(0.0) > 80.0, "{text}");
+    assert_eq!(check.status.code(), Some(0));
 }

@@ -1,22 +1,25 @@
-//! The hidden Autoplay mark: a key-derived noise pattern that the compositor
-//! adds to every frame of an Autoplay render and that `rhythr-cli mark-check`
-//! looks for. The key never enters the repository; release builds receive it
-//! through `RHYTHR_MARK_KEY` at compile time (see `build.rs`).
+//! The key-derived noise pattern of Autoplay. rhythr 0.8.0 added it to
+//! every frame of an Autoplay render as a hidden mark; it showed on some
+//! screens, so later versions leave the picture alone and an Autoplay video
+//! is recognised by its cursor path instead (see `autoplay::check`). What
+//! stays here: the pattern itself, which still decides the sides of the
+//! path's arcs (so the path did not change when the mark left the picture),
+//! and the checker for 0.8.0 videos behind `rhythr-cli mark-check`. The key
+//! never enters the repository; release builds receive it through
+//! `RHYTHR_MARK_KEY` at compile time (see `build.rs`).
 
 use sha2::{Digest, Sha256};
 
 pub mod check;
-mod fft;
-pub mod gpu;
+pub(crate) mod fft;
 
 /// Pattern grid, stretched to whatever frame it marks.
 pub const PAT_W: usize = 640;
 pub const PAT_H: usize = 360;
-/// Amplitude in levels of 255, the spike's value: invisible, found after
-/// every normal re-encode.
+/// Amplitude in levels of 255 that 0.8.0 marked its videos with.
 pub const AMPLITUDE: f32 = 0.8;
-/// The public development key: contributor builds mark with it and the
-/// checker reports such videos as "dev key".
+/// The public development key: contributor builds carry it and the
+/// checkers report such videos as "dev key".
 pub const DEV_KEY_HEX: &str = "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a";
 
 /// Same masks as in build.rs: the baked seed is XORed with them so no 32
@@ -196,19 +199,6 @@ pub fn pattern(seed: &Seed) -> Vec<f32> {
     p
 }
 
-/// Texels for an `Rg8Unorm` texture: R carries the positive half, G the
-/// negative half, both scaled so 4.0 maps to 255.
-pub fn pattern_halves(p: &[f32]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(p.len() * 2);
-    for &v in p {
-        let pos = (v.clamp(0.0, 4.0) * 255.0 / 4.0).round() as u8;
-        let neg = ((-v).clamp(0.0, 4.0) * 255.0 / 4.0).round() as u8;
-        out.push(pos);
-        out.push(neg);
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -261,12 +251,6 @@ mod tests {
             seed_from_hex(&format!(" {} \n", "A".repeat(64))).unwrap(),
             seed_from_hex(&"a".repeat(64)).unwrap()
         );
-    }
-
-    #[test]
-    fn halves_split_the_sign() {
-        let h = pattern_halves(&[0.0, 2.0, -2.0, 9.0]);
-        assert_eq!(h, vec![0, 0, 128, 0, 0, 128, 255, 0]);
     }
 
     #[test]
