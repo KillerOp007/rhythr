@@ -22,7 +22,7 @@ tauri build --runner cargo-xwin --target x86_64-pc-windows-msvc
 ```
 
 For a release use `scripts/build-windows.sh` instead: it runs the same
-command and refuses without `RHYTHR_MARK_KEY` (the Autoplay mark key, see
+command and refuses without `RHYTHR_MARK_KEY` (the Autoplay key, see
 docs/RELEASING.md). A build without the key is a dev build.
 
 The LNK4099 "cannot use debug info" linker warnings are expected (the
@@ -114,7 +114,7 @@ the matching public key is pinned in `tauri.conf.json`.
 
 ```sh
 export TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.tauri/rhythr-updater.key)"
-export RHYTHR_MARK_KEY="$(cat ~/.tauri/rhythr-autoplay-mark.key)"   # the Autoplay mark key
+export RHYTHR_MARK_KEY="$(cat ~/.tauri/rhythr-autoplay-mark.key)"   # the Autoplay key
 scripts/build-windows.sh            # the NSIS installer through cargo-xwin
 scripts/build-linux.sh              # Linux bundles (see docs/LINUX-BUILD.md)
 python3 scripts/make-latest-json.py <version>

@@ -55,7 +55,7 @@ pub struct AutoplayDto {
     pub note_count: usize,
     pub has_audio: bool,
     pub settings: AutoplaySettings,
-    /// "owner" or "dev": which mark key this build carries.
+    /// "owner" or "dev": which key this build carries.
     pub key_kind: String,
     /// A note from the pick (the map has no audio), already stamped.
     pub note: Option<String>,
@@ -66,7 +66,8 @@ pub fn autoplay_err(msg: impl AsRef<str>) -> String {
     rhythia_errcode::stamp_in(Area::Autoplay, msg.as_ref())
 }
 
-/// The mark pattern of this build, generated once.
+/// The key pattern of this build, generated once: it decides the sides of
+/// the path's arcs.
 pub fn mark_pattern() -> &'static [f32] {
     static PATTERN: OnceLock<Vec<f32>> = OnceLock::new();
     PATTERN.get_or_init(|| rhythia_render::mark::pattern(&rhythia_render::mark::built_in().0))
@@ -155,7 +156,7 @@ fn header_cache() -> &'static Mutex<HeaderCache> {
 
 /// Refuses what is for real plays while an Autoplay session is active: the
 /// Analyze window and the thumbnail would show the synthetic run without
-/// its marks.
+/// its ticker.
 pub fn real_play_only(inner: &Inner, what: &str) -> Result<(), String> {
     if inner.autoplay.is_some() {
         return Err(format!("{what} is for real plays; leave Autoplay first (Back to replay)"));
@@ -393,7 +394,7 @@ pub fn autoplay_pick(state: tauri::State<'_, App>, app_handle: tauri::AppHandle,
     let mut inner = app.lock();
     start_session(&mut inner, PathBuf::from(path))?;
     // The Analyze window is for real plays: one left open from the replay
-    // before this pick would show the synthetic run without its marks.
+    // before this pick would show the synthetic run without its ticker.
     if let Some(w) = app_handle.get_webview_window("analyze") {
         let _ = w.close();
     }

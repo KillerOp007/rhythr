@@ -3,6 +3,7 @@
 //! the output frame rate, one hit flag per note, a cursor that moves the way
 //! the reference videos do.
 
+pub mod check;
 pub mod path;
 pub mod ticker;
 
@@ -63,7 +64,7 @@ pub struct AutoplaySettings {
     /// The game's speed mod, 0.80 to 2.00 in steps of 0.05.
     pub speed_mod: f32,
     /// Whether the AUTOPLAY ticker runs across the top of the video. The
-    /// hidden mark and the metadata tag do not depend on it.
+    /// metadata tag and the path check do not depend on it.
     pub banner: bool,
 }
 
@@ -138,7 +139,7 @@ fn field_for(map: &Map) -> Field {
 }
 
 /// Builds the synthetic run: frames at `fps` (at least 60) with the cursor on the plan,
-/// one hit-flagged frame per note at its visit time. `dice` (the mark
+/// one hit-flagged frame per note at its visit time. `dice` (the key
 /// pattern) decides the sides of bellies and boomerangs.
 pub fn generate(map: &Map, settings: &AutoplaySettings, fps: u32, dice: &[f32]) -> Result<Replay, AutoplayError> {
     if map.notes.is_empty() {

@@ -404,7 +404,8 @@ map, not for anything that could pass as a real play.
   divided by it, so the feel stays the same); Speed mod, 0.80x to 2.00x in
   steps of 0.05, which drives the song, the approach and the cursor like the
   game's own; Banner, **On** or **Off**, whether the AUTOPLAY ticker runs
-  across the top (the hidden mark and the metadata tag stay either way). The
+  across the top (the metadata tag stays either way, and so does the path
+  check, see below). The
   player name is Autoplay and the accuracy 100 percent, always; neither is a
   setting.
 - **How the cursor moves**: with the Centre aim and Normal movement a jump
@@ -440,23 +441,28 @@ map, not for anything that could pass as a real play.
 - **What is not there**: no results screen, no score card, no Analyze
   window, no ghost race. Each of those would be a real-play artefact on a
   synthetic run.
-- **The marks**: every Autoplay video carries a hidden mark in the picture
-  that survives re-encoding, resizing, cropping and light filtering, and a
-  metadata comment; neither can be switched off. The ticker across the top
-  (AUTOPLAY, rendered with rhythr, not a real play, plus the movement and the
-  speed mod) is on by default and can be switched off under Banner in the
-  Autoplay tab, or with `--no-banner` on the CLI, for a cleaner picture. The
-  hidden mark has limits, stated plainly:
-  a deliberate black-crush filter removes it, a self-compiled rhythr without
-  the owner's key does not carry it, and the key can be dug out of a release
-  binary by someone who takes it apart. It stops the ordinary fake; the
-  Rhythia team's own records are the final word on any score.
-- **Checking a video**: `rhythr-cli mark-check video.mp4` (with `--key
-  file.txt` for a key file, `--json` for the numbers) answers "found",
-  "weak" or "no mark" with exit codes 0, 2 and 1. Only the owner's key finds
-  the owner's mark; a build without it is a "dev build" (the window title
-  says so) and marks with the public dev key, which the checker reports as
-  such. `docs/AUTOPLAY-VERIFICATION.md` is the one-page guide for the team.
+- **How an Autoplay video is recognised**: by the path its cursor takes.
+  Nothing is hidden in the picture (black is black; 0.8.0 added a faint
+  pattern that showed on some screens, and it is gone). The Autoplay path
+  of a map can be computed again at any time, and a cursor that runs on it
+  frame after frame is no player's hand. That holds after re-encoding,
+  resizing and cropping, with any skin and any background, and with the
+  ticker off. Every video also carries a metadata comment, and the ticker
+  across the top (AUTOPLAY, rendered with rhythr, not a real play, plus the
+  movement and the speed mod) is on by default; it can be switched off under
+  Banner in the Autoplay tab, or with `--no-banner` on the CLI, for a
+  cleaner picture. The limits, stated plainly: the check needs the map, and
+  someone who changes the movement in their own build of rhythr gets a path
+  this check does not know. It stops the ordinary fake; the Rhythia team's
+  own records are the final word on any score.
+- **Checking a video**: `rhythr-cli autoplay-check video.mp4 --map song.sspm`
+  (`--speed-mod` when the video's speed mod is known, which is faster;
+  `--json` for the numbers) answers "found", "unclear" or "no Autoplay path"
+  with exit codes 0, 2 and 1. A build without the owner's key is a "dev
+  build" (the window title says so); its paths differ from a release's in
+  the sides of some arcs, and the checker names the key that fits. Videos
+  made with 0.8.0 are checked with `rhythr-cli mark-check` instead.
+  `docs/AUTOPLAY-VERIFICATION.md` is the one-page guide for the team.
 - **CLI**: `rhythr-cli autoplay --map song.rhm -o out.mp4` with
   `--movement normal|dance`, `--aim centre|flow`, `--dance subtle|medium|wild`, `--rest <s>`,
   `--speed-mod <x>` and the same output options as `video` (`--speed` is
@@ -604,10 +610,10 @@ check. It is **not** an official Rhythia score verification. Music,
 beatmaps and artwork belong to their creators; you are responsible for
 the rights needed to publish rendered videos.
 
-Autoplay videos are marked as such: a hidden mark and a metadata tag
-always, and the ticker unless it is switched off. Removing the marks to
-pass an Autoplay video off as a real play is misuse; the Rhythia team can
-check any video with the key and act on it.
+Autoplay videos are marked as such: a metadata tag always, and the ticker
+unless it is switched off; and any of them can be recognised by its cursor
+path. Passing an Autoplay video off as a real play is misuse; the Rhythia
+team can check any video against its map and act on it.
 
 ## Licenses
 

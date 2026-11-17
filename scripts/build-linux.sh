@@ -22,10 +22,10 @@ if [ ! -f "$ROOT/crates/gui/ffmpeg" ]; then
     echo "error: crates/gui/ffmpeg missing (static linux ffmpeg, see docs/LINUX-BUILD.md)" >&2
     exit 1
 fi
-# The Autoplay mark key: without it the build marks Autoplay videos with
+# The Autoplay key: without it the build makes its Autoplay paths with
 # the public dev key, which is not a release (see docs/RELEASING.md).
 if [ -z "${RHYTHR_MARK_KEY:-}" ]; then
-    echo "error: RHYTHR_MARK_KEY is not set (the Autoplay mark key, see docs/RELEASING.md)" >&2
+    echo "error: RHYTHR_MARK_KEY is not set (the Autoplay key, see docs/RELEASING.md)" >&2
     exit 1
 fi
 
@@ -81,7 +81,7 @@ podman run --rm \
         OUTPUT="$out" ARCH=x86_64 /root/.cache/tauri/linuxdeploy-plugin-appimage.AppImage \
             --appdir "$bundle/rhythr.AppDir"
         cargo tauri signer sign "$out"
-        # The CLI (mark-check for the team) goes on the release page on
+        # The CLI (the team's Autoplay checker) goes on the release page on
         # its own, built here for the same glibc baseline.
         cargo build --release -p rhythia-cli
     '

@@ -70,9 +70,10 @@ once.
    ```
 
    Both build scripts (`scripts/build-linux.sh`, `scripts/build-windows.sh`)
-   refuse to run without it. A build without the key marks Autoplay videos
-   with the public dev key and calls itself "dev build" in the title; that
-   is fine for a test build, never for a release. The key lives next to the
+   refuse to run without it. A build without the key makes its Autoplay
+   paths with the public dev key (the sides of some arcs differ, and the
+   checker reports the video as a dev build's) and calls itself "dev build"
+   in the title; that is fine for a test build, never for a release. The key lives next to the
    updater key and is backed up with it.
 
    The artefacts on the release page: the installer, the AppImage, the deb,

@@ -1,102 +1,140 @@
-# Checking a video for the Autoplay mark
+# Checking whether a video is an Autoplay render
 
-For the Rhythia team, and for anyone the owner hands the key to. One page.
+For the Rhythia team, and for anyone who wants to know. One page.
 
-## What the mark is
+## How an Autoplay video is recognised
 
 rhythr can render a map without a replay (Autoplay: a synthetic cursor that
-plays every note). Every such video carries up to three marks:
+plays every note). Such a video is recognised by the path its cursor takes:
+
+- The Autoplay path of a map is not recorded anywhere, it is computed from
+  the map and the settings (movement, aim, dance amount, speed mod), and it
+  can be computed again at any time.
+- The checker computes the paths of the map for every setting, finds the
+  cursor in the video frame by frame, and measures in how many frames the
+  cursor sits on one of those curves.
+- A player's hand passes the same notes at the same times, but not on the
+  same curve: within a few pixels, frame after frame, only the machine does
+  that.
+
+Nothing is hidden in the picture, so nothing can be filtered out of it, and
+it makes no difference which skin, cursor, background or colours the video
+uses, or whether its ticker is on. The check needs no secret key.
+
+Two more signs, both easy to lose, are there for the honest cases:
 
 1. A visible ticker across the top: `AUTOPLAY   rendered with rhythr   not a real play`,
    plus the movement style and the speed mod. It is on by default and the
    person rendering can switch it off (Autoplay tab, Banner; CLI
-   `--no-banner`), so its absence says nothing about a video. Anyone with a
-   video editor can paint over it in any case.
-2. A hidden mark in the picture: a faint noise pattern derived from a secret
-   key, added to every frame. Measured with this checker it survives
-   re-encodes down to 480p and 1 Mbit/s, cropping, and strong denoising
-   (weaker); the prototype also survived sharpening, colour changes, a codec
-   change to H.265 and small rotations. Only someone with the key can find it.
-3. A metadata comment in the file (`rhythr autoplay render: not a real play`).
-   The first thing a re-encode drops; it is there for the honest cases.
+   `--no-banner`), so its absence says nothing about a video.
+2. A metadata comment in the file (`rhythr autoplay render: not a real play`).
+   The first thing a re-encode drops.
 
 ## Running the check
 
 You need `rhythr-cli` (on every release page next to the app's installers:
 `rhythr-cli_<version>_x64.exe` for Windows, `rhythr-cli_<version>_amd64` for
-Linux; from 0.8.0 on) and the
-key file the owner gave you (one line of 64 hex characters). Keep the key
-file private: whoever has it can verify, and could also remove the mark.
-The check reads the video through ffmpeg: the CLI finds the one the rhythr
-installer put next to the app, one placed next to `rhythr-cli` itself, or
-one on PATH; `--ffmpeg <path>` points at another.
+Linux), the video as a file, and the map the video shows (any map file
+rhythr reads: `.sspm`, `.rhm`, the game's cache JSON). The check reads the
+video through ffmpeg: the CLI finds the one the rhythr installer put next
+to the app, one placed next to `rhythr-cli` itself, or one on PATH;
+`--ffmpeg <path>` points at another.
 
 ```
-rhythr-cli mark-check video.mp4 --key rhythr-autoplay-mark.key
+rhythr-cli autoplay-check video.mp4 --map song.sspm
 ```
 
-Add `--json` for the numbers. The exit code is 0 when the mark is found, 2
-when it is weak, 1 when there is none, so a script can branch on it. The
-check reads every third frame, up to 3000 frames (`--max-frames` changes
-that); 40 seconds of 1080p60 take about 25 seconds on a laptop-class CPU,
-most of it the geometry search, so a longer video costs little more.
+- `--speed-mod 1.25` when you know the video's speed mod: only that one is
+  tried, which is several times faster. Without it every speed mod from
+  0.80 to 2.00 is tried.
+- `--start 1:30` when the video does not begin where the map begins (a
+  render of a part of the map): the map time at the video's first frame.
+- `--json` for the numbers. The exit code is 0 when the path is found, 2
+  when the result is unclear, 1 when it is not there, so a script can
+  branch on it.
+- `--max-frames` (default 7200, two minutes at 60 fps): how much of the
+  video is looked at, from its start.
+
+A 45 second clip at 1080p60 takes about 15 seconds with the speed mod given
+and about 20 seconds without, on a laptop-class CPU; a 720p copy half of that.
 
 ## Reading the result
 
-`z` is how far the mark's match stands above the matches the same video
-gives at wrong geometries (other scales and rotations of the pattern). The
-checker says found above 10, weak above 6, none below. Wrong keys are a
-separate control: `wrong_keys_max` in the JSON is the best match three wrong
-keys reach, for comparison with `score`.
+The number that decides is the share of frames in which the cursor lies on
+the best path's curve, within 4 pixels (of a 1920 wide picture) and within
+a frame or so of time. Only frames in which the path moves count: a cursor
+at rest sits on any path that rests. The checker says found at 60 percent
+or more, unclear from 25, not there below.
 
-The numbers below were measured with this checker on a real map (40 seconds
-of play rendered at 1080p60) treated the way platforms and editors treat a
-video:
+Measured with this checker on a real map (45 seconds rendered at 1080p60,
+cursor dance), treated the way platforms and editors treat a video:
 
-| Treatment | z | Verdict |
+| Video | On the curve | Verdict |
 | --- | --- | --- |
-| untouched render | 83 | found |
-| re-encoded at 1080p, 8 Mbit/s | 83 | found |
-| re-encoded at 720p, 2.5 Mbit/s (a platform's treatment) | 74 | found |
-| re-encoded at 480p, 1 Mbit/s | 63 | found |
-| 20 percent cropped and scaled back to 1080p | 141 | found, scale 1.25 |
-| 720p plus strong denoising (hqdn3d 4:3:6:4.5) | 19 | found |
-| black crush (every luma below 22 set to 16) | 4 | none |
-| a video without the mark | 2 to 4 | none |
+| untouched render | 97.5 % | found |
+| re-encoded at 720p, 2.5 Mbit/s (a platform's treatment) | 96.8 % | found |
+| re-encoded as VP9 at 720p, 2 Mbit/s | 96.7 % | found |
+| re-encoded at 480p, 1 Mbit/s | 96.8 % | found |
+| 15 percent cropped and scaled to 720p | 95.6 % | found |
+| black crush (every luma below 22 set to 16) | 97.2 % | found |
+| converted to 30 fps | 90.6 % | found |
+| another skin on a bright photo background, no ticker | 95.8 % | found |
+| the same, re-encoded at 720p | 96.6 % | found |
+| normal movement, flow aim (another setting) | 96.6 % | found |
+| a real play of the same map, rendered from its replay | no cursor stays on any path | not there |
 
-- `Autoplay mark found: z 73.6, score 0.177, scale 1.000, angle 0.0 deg, key rhythr-autoplay-mark.key`
-  The video was rendered by rhythr's Autoplay with that key. `scale` and
-  `angle` say how the picture was resized or rotated since; `offset` in the
-  JSON says how it was shifted or cropped.
-- `Autoplay mark: weak (z 7.1, ...)`: something is there but the video was
-  degraded a lot. Treat as "probably Autoplay", ask for the original upload.
-- `No Autoplay mark (best z 3.9, key built-in dev)`: nothing found with the
-  keys tried. This proves nothing by itself (see the limits).
-- `key built-in dev`: the video was rendered by a build without the owner's
-  key (a contributor's own build). It is still an Autoplay video.
-- `score` is the match itself: 0.20 untouched, 0.15 to 0.18 after a
-  platform re-encode, 0.06 after strong denoising. `wrong_keys_max` and
-  `null_mean` sit around 0.02 whatever the video; a found mark stands well
-  clear of both.
+- `Autoplay path found: 96.8 % of the frames on the curve (cursor dance medium, aim centre, 1.00x, key built-in owner; 2544 moving frames, median distance 1.9 px)`
+  The cursor in the video runs on the Autoplay path of that setting. The
+  settings named are the ones whose path fits best; neighbouring settings
+  (another dance amount) often fit almost as well, so read them as "about".
+- `Autoplay path: unclear, ...`: part of the video follows a path. Typical
+  for a video that is cut together from several pieces, has an overlay
+  over the playfield, or was rendered from a build with a changed movement.
+  Ask for the original upload and look at it yourself.
+- `No Autoplay path: ...`: the cursor does not run on any Autoplay path of
+  this map (the real play above), or no cursor was found along one.
+- `key built-in owner` or `key dev`: the key decides to which side some
+  arcs of the path swing, nothing else. A release build carries the owner's
+  key, a build someone compiled themselves the public development key. The
+  paths of two keys differ in a few percent to a tenth of the time, so the checker
+  names the key whose path fits best; a video that fits `dev` better was
+  made with a self-compiled rhythr. It is an Autoplay video either way.
+- `on_time_pct` in the JSON is the same share at each frame's exact time,
+  without the allowance of a frame. It drops for a video whose frame rate
+  was converted, while the share on the curve holds.
 
 ## What it proves and what it does not
 
-A found mark proves the video came out of rhythr's Autoplay with that key.
-A missing mark does not prove a real play:
+A found path proves the cursor in the video is rhythr's Autoplay running on
+that map. A path that is not found does not prove a real play:
 
-- A deliberate black-crush filter (every near-black pixel set to pure black)
-  removes the hidden mark; the ticker and the tag are gone long before.
-- Someone who compiles rhythr from source without the owner's key gets no
-  owner mark (the ticker is a setting in any build).
-- The key sits inside every release binary (something has to generate the
-  pattern), obfuscated but not beyond a determined engineer.
+- The check needs the right map. With another map nothing fits.
+- It is tested for whole renders and for re-encodes of them. A video that
+  starts somewhere in the middle needs `--start`; an intro in front of the
+  render, a picture-in-picture layout or a mirrored picture are not handled.
+- Someone who changes the movement in their own build of rhythr gets a path
+  this checker does not know.
+- Videos made with rhythr 0.8.0 took slightly different paths. They carry a
+  hidden mark in the picture instead and are checked with
+  `rhythr-cli mark-check video.mp4 --key <key file>` (the key file comes
+  from the owner). 0.8.0 was the only version with that mark: it showed on
+  some screens as a faint pattern on black, which is why it is gone.
 
 The final word on any score is the Rhythia server: a real play has a replay
 and a leaderboard entry there, an Autoplay video has neither. Use the check
 to confirm a suspicion quickly, not to clear a video.
 
+## For maintainers: the path is the proof
+
+From the first release with this checker on, a change to the Autoplay
+movement changes what the checker accepts. Videos of a released version
+must keep verifying, so a release that changes any path keeps the previous
+generator next to the new one and lets the checker try both. The test
+`a_released_path_stays_where_it_is` in `crates/render/src/autoplay/check.rs`
+fails when a path moves and says this again.
+
 ## Reporting
 
-When a result matters, keep the exact file you checked (hash it) and the
-`--json` output. Questions and false positives go to the owner (KillerOp007
-on GitHub), with the file if possible.
+When a result matters, keep the exact file you checked (hash it), the map
+file and the `--json` output. Questions and false positives go to the owner
+(KillerOp007 on GitHub), with the files if possible.

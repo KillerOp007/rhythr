@@ -168,9 +168,6 @@ pub struct Renderer {
     /// [`crate::nv12_gpu`]; the video loop turns this on and then writes what
     /// it reads straight into ffmpeg.
     nv12: std::cell::RefCell<Option<crate::nv12_gpu::Nv12Path>>,
-    /// The hidden Autoplay mark: two full-screen draws after the HUD while
-    /// a pattern is set (see [`crate::mark`]).
-    mark: crate::mark::gpu::MarkPass,
     /// The Autoplay ticker text; drawn last on every frame while set.
     ticker: std::cell::RefCell<Option<String>>,
 }
@@ -357,18 +354,6 @@ impl Renderer {
     /// (encoder-ready) rather than RGBA.
     pub fn readback_is_nv12(&self) -> bool {
         self.nv12.borrow().is_some()
-    }
-
-    /// Sets the hidden Autoplay mark pattern (`PAT_W` by `PAT_H` values from
-    /// [`crate::mark::pattern`]) or clears it. While set, every frame this
-    /// renderer produces carries it and black is floored at one level so the
-    /// pattern keeps its negative half.
-    pub fn set_mark(&self, pattern: Option<&[f32]>) {
-        self.mark.set(&self.device, &self.queue, pattern);
-    }
-
-    pub fn mark_enabled(&self) -> bool {
-        self.mark.enabled()
     }
 
     /// Sets the Autoplay ticker text (or clears it). While set, every frame
@@ -854,7 +839,6 @@ impl Renderer {
         };
         let readback_bufs = [mk_readback(), mk_readback(), mk_readback()];
 
-        let mark = crate::mark::gpu::MarkPass::new(&device, COLOR_FORMAT);
         Ok(Renderer {
             instance,
             adapter,
@@ -886,7 +870,6 @@ impl Renderer {
             readback_submissions: std::cell::RefCell::new([None, None, None]),
             depad_scratch: std::cell::RefCell::new(Vec::new()),
             nv12: std::cell::RefCell::new(None),
-            mark,
             ticker: std::cell::RefCell::new(None),
         })
     }
@@ -1954,15 +1937,7 @@ impl Renderer {
                         load: if clear {
                             wgpu::LoadOp::Clear({
                                 let [r, g, b] = srgb_to_linear(config.background_color);
-                                // The mark subtracts as well as adds: give
-                                // black one level of room below it.
-                                let floor = if self.mark.enabled() { 1.0 / 255.0 } else { 0.0 };
-                                wgpu::Color {
-                                    r: r.max(floor) as f64,
-                                    g: g.max(floor) as f64,
-                                    b: b.max(floor) as f64,
-                                    a: 1.0,
-                                }
+                                wgpu::Color { r: r as f64, g: g as f64, b: b as f64, a: 1.0 }
                             })
                         } else {
                             wgpu::LoadOp::Load
@@ -2111,12 +2086,6 @@ impl Renderer {
             pass.set_bind_group(0, &self.hud_bind_group, &[]);
             pass.set_vertex_buffer(0, self.hud_vbuf.slice(..));
             pass.draw(0..verts.len() as u32, 0..1);
-        }
-
-        // The hidden Autoplay mark covers the whole frame once: on the only
-        // side of a single view, or on the second half of a ghost split.
-        if !clear || vp_w >= self.width {
-            self.mark.draw(&mut encoder, &view);
         }
 
         // Queue the framebuffer copy into the slot's readback buffer as part

@@ -4623,11 +4623,10 @@ fn ensure_preview_ctx(app: &App, _time_ms: f64) -> Result<(), String> {
             let renderer =
                 rhythia_render::Renderer::new(pw.max(64), ph, cfg.hud_fonts().as_slice())
                     .map_err(|e| gpu_err(&e))?;
-            // The preview shows the Autoplay video as it will be: the ticker
-            // when the banner is on, and the mark.
+            // The preview shows the Autoplay video as it will be: with the
+            // ticker when the banner is on.
             if let Some(sess) = &inner.autoplay {
                 renderer.set_ticker(rhythia_render::autoplay::ticker_for(&sess.settings));
-                renderer.set_mark(Some(autoplay_commands::mark_pattern()));
             }
             let mut params = SceneParams::from(&cfg);
             let skin = renderer.prepare_skin(&cfg);
@@ -5702,7 +5701,6 @@ fn start_render(
             cfg: render_config(&inner),
             autoplay: inner.autoplay.is_some(),
             ticker: inner.autoplay.as_ref().and_then(|a| rhythia_render::autoplay::ticker_for(&a.settings)),
-            mark: inner.autoplay.as_ref().map(|_| autoplay_commands::mark_pattern().to_vec()),
             width: s.width,
             height: s.height,
             fps: s.fps,
@@ -5868,10 +5866,9 @@ struct RenderJob {
     clip: Option<(f64, f64)>,
     ffmpeg: String,
     out: PathBuf,
-    /// Autoplay: the ticker text, the mark pattern and the metadata tag.
+    /// Autoplay: the ticker text and the metadata tag.
     autoplay: bool,
     ticker: Option<String>,
-    mark: Option<Vec<f32>>,
 }
 
 /// What the window is told when a render finishes.
@@ -5988,9 +5985,6 @@ fn run_render_job(
     renderer.ensure_hud_text(&rhythia_render::hud::atlas_text(&job.map, &job.replay));
     if let Some(g) = &job.ghost {
         renderer.ensure_hud_text(&g.replay.player_name);
-    }
-    if let Some(p) = &job.mark {
-        renderer.set_mark(Some(p));
     }
     if let Some(t) = &job.ticker {
         renderer.set_ticker(Some(t.clone()));
@@ -6694,7 +6688,7 @@ fn main() {
             // against the monitor list so a window remembered on a screen
             // that is now gone cannot open off-screen.
             if let Some(main) = app.handle().get_webview_window("main") {
-                // A build without the owner's mark key says so in its title.
+                // A build without the owner's key says so in its title.
                 if rhythia_render::mark::built_in().1 == rhythia_render::mark::KeyKind::Dev {
                     let _ = main.set_title("rhythr (dev build)");
                 }
