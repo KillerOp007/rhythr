@@ -201,14 +201,6 @@ else
 fi
 
 echo
-echo "release environment"
-if [ -n "${RHYTHR_MARK_KEY:-}" ]; then
-  ok "RHYTHR_MARK_KEY is set (Autoplay paths are made with the owner's key)"
-else
-  warn "RHYTHR_MARK_KEY is not set: a build from this shell makes its Autoplay paths with the public dev key (the build scripts refuse that for a release)"
-fi
-
-echo
 if [ "$FAIL" -eq 0 ]; then
   echo "preflight passed"
 else

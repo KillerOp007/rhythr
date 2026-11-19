@@ -62,27 +62,15 @@ once.
 
 8. **Change `## Unreleased` in CHANGELOG.md** to the version and the date.
 
-9. **Export the Autoplay mark key**, then tag and push and let the release
-   build produce the artefacts:
-
-   ```
-   export RHYTHR_MARK_KEY="$(cat ~/.tauri/rhythr-autoplay-mark.key)"
-   ```
-
-   Both build scripts (`scripts/build-linux.sh`, `scripts/build-windows.sh`)
-   refuse to run without it. A build without the key makes its Autoplay
-   paths with the public dev key (the sides of some arcs differ, and the
-   checker reports the video as a dev build's) and calls itself "dev build"
-   in the title; that is fine for a test build, never for a release. The key lives next to the
-   updater key and is backed up with it.
+9. **Tag and push**, and let the release build produce the artefacts
+   (`scripts/build-linux.sh`, `scripts/build-windows.sh`).
 
    The artefacts on the release page: the installer, the AppImage, the deb,
    the rpm, `latest.json` (`scripts/make-latest-json.py <version>` after both
    platforms are built), and `rhythr-cli` for both platforms, which the build
    scripts produce next to the bundles (`target/x86_64-pc-windows-msvc/release/rhythr-cli.exe`,
    `target-linux22/release/rhythr-cli`). Upload them as
-   `rhythr-cli_<version>_x64.exe` and `rhythr-cli_<version>_amd64`: the team's
-   guide (`docs/AUTOPLAY-VERIFICATION.md`) names them so.
+   `rhythr-cli_<version>_x64.exe` and `rhythr-cli_<version>_amd64`.
 
 ## After the artefacts exist
 

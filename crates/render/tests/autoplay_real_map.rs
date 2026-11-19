@@ -12,12 +12,11 @@ fn real_map(name: &str) -> rhythia_formats::map::Map {
 /// in both movements, and the time base normaliser leaves the run alone.
 #[test]
 fn a_real_map_is_a_full_combo_at_every_speed() {
-    let dice = rhythia_render::mark::pattern(&rhythia_render::mark::seed_from_hex(rhythia_render::mark::DEV_KEY_HEX).unwrap());
     for name in ["pass_long_map_map_json.json", "hardrock_map_map_json.json"] {
         let map = real_map(name);
         for (speed, movement, aim) in [(0.8f32, Movement::Dance, Aim::Flow), (1.0, Movement::Dance, Aim::Centre), (1.0, Movement::Normal, Aim::Flow), (1.5, Movement::Normal, Aim::Flow), (2.0, Movement::Dance, Aim::Flow), (2.0, Movement::Dance, Aim::Centre)] {
             let s = AutoplaySettings { speed_mod: speed, movement, aim, ..Default::default() };
-            let mut r = generate(&map, &s, 60, &dice).unwrap();
+            let mut r = generate(&map, &s, 60).unwrap();
             let out = rhythia_sim::hitreg::match_hits(&map.notes, &r.frames, rhythia_sim::hitreg::hit_window_ms(&r));
             assert_eq!(out.derived_hits() as usize, map.notes.len(), "{name} at {speed} {aim:?}");
             assert_eq!(out.orphan_flags, 0, "{name} at {speed} {aim:?}");
