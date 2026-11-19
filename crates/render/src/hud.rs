@@ -12,6 +12,7 @@
 use fontdue::{Font, FontSettings};
 
 use crate::config::srgb8_to_linear;
+use crate::mod_icons::{Icon, ModIcons};
 use rhythia_formats::map::Map;
 use rhythia_formats::rhr::Replay;
 use rhythia_sim::hitreg::{hit_window_ms, judge, MatchOutcome};
@@ -22,7 +23,9 @@ const BASE_PX: f32 = 96.0;
 const ATLAS_W: usize = 2048;
 
 /// A single overlay vertex in pixel space (origin top-left). `mode` selects
-/// solid fill (0) vs. sampling the glyph atlas as coverage (1).
+/// solid fill (0), sampling the glyph atlas as coverage (1), or a mod icon
+/// from its own atlas (5); 2 to 4 are the results screen's cover, its blur
+/// and the fail vignette.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct HudVertex {
@@ -354,6 +357,27 @@ impl<'a> HudBuilder<'a> {
             pen += g.advance * scale;
         }
         pen
+    }
+
+    /// One mod icon, `size` tall, its left edge at `x` and centred on `cy`,
+    /// in its own colours at `alpha`. Returns its width.
+    fn icon(&mut self, icon: &Icon, x: f32, cy: f32, size: f32, alpha: f32) -> f32 {
+        let w = size * icon.aspect;
+        if alpha > 0.0 && size > 0.0 {
+            let (x0, y0, x1, y1) = (x, cy - size * 0.5, x + w, cy + size * 0.5);
+            let [u0, v0, u1, v1] = icon.uv;
+            let c = [1.0, 1.0, 1.0, alpha];
+            let quad = [
+                HudVertex::new([x0, y0], [u0, v0], c, 5.0),
+                HudVertex::new([x1, y0], [u1, v0], c, 5.0),
+                HudVertex::new([x1, y1], [u1, v1], c, 5.0),
+                HudVertex::new([x0, y0], [u0, v0], c, 5.0),
+                HudVertex::new([x1, y1], [u1, v1], c, 5.0),
+                HudVertex::new([x0, y1], [u0, v1], c, 5.0),
+            ];
+            self.verts.extend_from_slice(&quad);
+        }
+        w
     }
 }
 
@@ -838,6 +862,7 @@ pub struct Playfield {
 #[allow(clippy::too_many_arguments)]
 pub fn build_hud(
     atlas: &FontAtlas,
+    icons: &ModIcons,
     cfg: &crate::config::SkinConfig,
     state: &HudState,
     stats: &HudStats,
@@ -1163,15 +1188,22 @@ pub fn build_hud(
         finish_element(&mut b, el, "song_progress", hud, w, _h, &mut boxes);
     }
 
-    // Speed notation under the health bar: "S" plus coloured step dots and a
-    // +/- sign. Ranked speeds (user-verified): 0.75 S··−, 0.8 S·−, 0.87 S−,
-    // 1.0 nothing, 1.15 S+, 1.25 S:+, 1.35 S::+, 1.45 S:::+ (dot columns of
-    // two above 1x, single dots below; green→orange→red). Anything else is
-    // unranked and shows a slashed circle.
+    // The run's mods under the health bar: its speed, then every other mod,
+    // in the game's own icons where the installation provides them. Without
+    // them only the speed shows, in a drawn notation: "S" plus coloured step
+    // dots and a +/- sign. Ranked speeds (user-verified): 0.75 S··−, 0.8 S·−,
+    // 0.87 S−, 1.0 nothing, 1.15 S+, 1.25 S:+, 1.35 S::+, 1.45 S:::+ (dot
+    // columns of two above 1x, single dots below; green→orange→red).
+    // Anything else is unranked and shows a slashed circle.
     if hud.speed_label {
         let el = b.verts.len();
         let sy = field.cy + field.half + refd * 0.014 + refd * 0.0088 + refd * 0.020;
-        speed_label(&mut b, field.cx, sy, refd, replay.speed, value_col);
+        if icons.is_empty() {
+            speed_label(&mut b, field.cx, sy, refd, replay.speed, value_col);
+        } else {
+            let marks = mod_marks(icons, replay, false, false);
+            mod_row(&mut b, &marks, field.cx, sy + refd * MOD_ROW_DROP, refd * MOD_ROW_SIZE, Align::Center, w * 0.9, replay.speed, value_col);
+        }
         finish_element(&mut b, el, "speed_label", hud, w, _h, &mut boxes);
     }
 
@@ -1243,6 +1275,189 @@ mod tests {
     }
 
     use super::*;
+
+    /// The icons of an installation as far as these tests care: a block
+    /// per icon, each of its own width.
+    fn game_icons() -> ModIcons {
+        const NAMES: [&str; 13] = [
+            "mod_100",
+            "mod_15",
+            "mod_25",
+            "mod_35",
+            "mod_45",
+            "mod_87",
+            "mod_80",
+            "mod_75",
+            "mod_hardrock",
+            "mod_ghost",
+            "mod_nofail",
+            "mod_mirror",
+            "mod_360",
+        ];
+        let sources: Vec<(String, Vec<u8>)> = NAMES
+            .iter()
+            .enumerate()
+            .map(|(i, name)| {
+                let mut img = image::RgbaImage::new(135, 135);
+                for y in 0..135 {
+                    for x in 0..60 + 5 * i as u32 {
+                        img.put_pixel(x, y, image::Rgba([255, 0, 255, 255]));
+                    }
+                }
+                let mut out = std::io::Cursor::new(Vec::new());
+                img.write_to(&mut out, image::ImageFormat::Png).expect("png");
+                (name.to_string(), out.into_inner())
+            })
+            .collect();
+        ModIcons::build(&sources).0
+    }
+
+    /// A run at `speed` with `mods` on.
+    fn run_with(speed: f32, mods: &str) -> (Map, Replay) {
+        let (map, mut replay) = missed_note_at(speed);
+        replay.mods = mods.into();
+        (map, replay)
+    }
+
+    fn icon_verts(verts: &[HudVertex]) -> Vec<&HudVertex> {
+        verts.iter().filter(|v| v.mode == 5.0).collect()
+    }
+
+    #[test]
+    fn the_row_is_the_speed_then_every_mod_in_the_replays_order() {
+        let icons = game_icons();
+        let icon = |n: &str| ModMark::Icon(icons.get(n).expect("icon"));
+        let (_, replay) = run_with(1.45, "[\"mod_hardrock\",\"mod_360\",\"mod_ghost\"]");
+        let want = vec![icon("mod_45"), icon("mod_hardrock"), icon("mod_360"), icon("mod_ghost")];
+        assert_eq!(mod_marks(&icons, &replay, false, false), want);
+        assert_eq!(mod_marks(&icons, &replay, true, true), want);
+
+        // Every ranked speed shows its own icon.
+        for (speed, name) in [(0.75, "mod_75"), (0.8, "mod_80"), (0.87, "mod_87"), (1.15, "mod_15"), (1.25, "mod_25"), (1.35, "mod_35")] {
+            let (_, replay) = run_with(speed, "[]");
+            assert_eq!(mod_marks(&icons, &replay, false, false), vec![icon(name)], "{speed}");
+        }
+    }
+
+    #[test]
+    fn an_unmodded_run_shows_its_s_on_the_results_screen_only() {
+        let icons = game_icons();
+        let (_, replay) = run_with(1.0, "[\"mod_nofail\"]");
+        let nofail = ModMark::Icon(icons.get("mod_nofail").expect("icon"));
+        assert_eq!(mod_marks(&icons, &replay, false, false), vec![ModMark::Icon(icons.get("mod_nofail").expect("icon"))]);
+        assert_eq!(mod_marks(&icons, &replay, true, true), vec![ModMark::Icon(icons.get("mod_100").expect("icon")), nofail]);
+    }
+
+    #[test]
+    fn what_the_game_has_no_icon_for_is_drawn_or_spelled_out() {
+        let icons = game_icons();
+        // A speed between the ranked steps keeps the drawn notation.
+        let (_, replay) = run_with(1.1, "[\"mod_ghost\"]");
+        assert_eq!(mod_marks(&icons, &replay, false, false)[0], ModMark::Speed);
+        // A mod without an icon is named on the results screen and left
+        // out of the row under the health bar.
+        let (_, replay) = run_with(1.0, "[\"mod_sudden_death\",\"mod_ghost\"]");
+        let ghost = || ModMark::Icon(icons.get("mod_ghost").expect("icon"));
+        assert_eq!(mod_marks(&icons, &replay, false, false), vec![ghost()]);
+        assert_eq!(
+            mod_marks(&icons, &replay, true, true),
+            vec![ModMark::Icon(icons.get("mod_100").expect("icon")), ModMark::Name("SUDDEN DEATH".into()), ghost()]
+        );
+    }
+
+    #[test]
+    fn a_row_is_laid_out_around_its_anchor_and_shrinks_to_its_box() {
+        let atlas = FontAtlas::new(None);
+        let icons = game_icons();
+        let (_, replay) = run_with(1.45, "[\"mod_hardrock\",\"mod_ghost\"]");
+        let marks = mod_marks(&icons, &replay, false, false);
+        let white = [1.0, 1.0, 1.0, 0.5];
+        let bounds = |verts: &[HudVertex]| {
+            verts.iter().fold((f32::MAX, f32::MAX, f32::MIN, f32::MIN), |(x0, y0, x1, y1), v| {
+                (x0.min(v.pos[0]), y0.min(v.pos[1]), x1.max(v.pos[0]), y1.max(v.pos[1]))
+            })
+        };
+
+        let mut b = HudBuilder::new(&atlas);
+        mod_row(&mut b, &marks, 500.0, 300.0, 40.0, Align::Center, f32::MAX, replay.speed, white);
+        assert_eq!(icon_verts(&b.verts).len(), 18, "three icons, six vertices each");
+        assert!(b.verts.iter().all(|v| v.color == [1.0, 1.0, 1.0, 0.5]), "the icons keep their colours and take the alpha");
+        let (x0, y0, x1, y1) = bounds(&b.verts);
+        assert!(((x0 + x1) * 0.5 - 500.0).abs() < 0.01, "centred on its anchor: {x0}..{x1}");
+        assert!((y0 - 280.0).abs() < 0.01 && (y1 - 320.0).abs() < 0.01, "40 tall about 300: {y0}..{y1}");
+        let full = x1 - x0;
+
+        let mut b = HudBuilder::new(&atlas);
+        mod_row(&mut b, &marks, 500.0, 300.0, 40.0, Align::Left, f32::MAX, replay.speed, white);
+        let (x0, _, x1, _) = bounds(&b.verts);
+        assert!((x0 - 500.0).abs() < 0.01 && (x1 - x0 - full).abs() < 0.01, "left edge on its anchor: {x0}..{x1}");
+
+        let mut b = HudBuilder::new(&atlas);
+        mod_row(&mut b, &marks, 500.0, 300.0, 40.0, Align::Left, full * 0.5, replay.speed, white);
+        let (x0, y0, x1, y1) = bounds(&b.verts);
+        assert!((x0 - 500.0).abs() < 0.01 && (x1 - x0 - full * 0.5).abs() < 0.01, "half the room, half the row: {x0}..{x1}");
+        assert!((y0 - 290.0).abs() < 0.01 && (y1 - 310.0).abs() < 0.01, "and half as tall, still about 300: {y0}..{y1}");
+    }
+
+    #[test]
+    fn the_mods_sit_under_the_health_bar_in_the_games_icons() {
+        let atlas = FontAtlas::new(None);
+        let icons = game_icons();
+        let (map, replay) = run_with(1.45, "[\"mod_hardrock\"]");
+        let cfg = crate::config::SkinConfig::default();
+        let state = HudState::new(&map, &replay);
+        let stats = state.stats_at(&map, &replay, 500.0);
+        let field = Playfield { cx: 960.0, cy: 540.0, half: 400.0 };
+        let build = |icons: &ModIcons, cfg: &crate::config::SkinConfig| {
+            build_hud(&atlas, icons, cfg, &state, &stats, &replay, &map, 500.0, &field, &[], 1920, 1080, false)
+        };
+
+        let (verts, boxes) = build(&icons, &cfg);
+        let drawn = icon_verts(&verts);
+        assert_eq!(drawn.len(), 12, "the speed and hardrock");
+        let (x0, x1) = drawn.iter().fold((f32::MAX, f32::MIN), |(a, b), v| (a.min(v.pos[0]), b.max(v.pos[0])));
+        assert!(((x0 + x1) * 0.5 - field.cx).abs() < 0.01, "centred under the field: {x0}..{x1}");
+        let bar_bottom = field.cy + field.half + 1080.0 * (0.014 + 0.0088);
+        assert!(drawn.iter().all(|v| v.pos[1] > bar_bottom), "below the health bar");
+        let el = boxes.iter().find(|b| b.key == "speed_label").expect("the element is there to drag");
+        assert!(drawn.iter().all(|v| v.pos[0] >= el.x0 && v.pos[0] <= el.x1 && v.pos[1] >= el.y0 && v.pos[1] <= el.y1));
+
+        // Without an installation the drawn notation stays, and the
+        // element with it.
+        let (verts, boxes) = build(&ModIcons::default(), &cfg);
+        assert!(icon_verts(&verts).is_empty());
+        assert!(boxes.iter().any(|b| b.key == "speed_label"));
+
+        // Switched off, nothing of it is drawn.
+        let mut off = cfg.clone();
+        off.hud.speed_label = false;
+        let (verts, boxes) = build(&icons, &off);
+        assert!(icon_verts(&verts).is_empty());
+        assert!(!boxes.iter().any(|b| b.key == "speed_label"));
+    }
+
+    #[test]
+    fn the_results_screen_shows_the_run_in_icons_and_keeps_them_in_its_box() {
+        let atlas = FontAtlas::new(None);
+        let icons = game_icons();
+        let all = "[\"mod_hardrock\",\"mod_ghost\",\"mod_nofail\",\"mod_mirror\",\"mod_360\",\"mod_sudden_death\",\"mod_chaos\",\"mod_practice\"]";
+        for (w, h, part, portrait) in [
+            (1920u32, 1080u32, ResultsPart::Full, false),
+            (960, 1080, ResultsPart::Side, false),
+            (1080, 1920, ResultsPart::Full, true),
+        ] {
+            let (map, replay) = run_with(1.0, all);
+            let stats = HudState::new(&map, &replay).stats_at(&map, &replay, 2000.0);
+            let verts = build_results(&atlas, &replay, &map, &stats, w, h, &icons, part, portrait);
+            let drawn = icon_verts(&verts);
+            assert_eq!(drawn.len(), 36, "the S of an unmodded run and five mods with icons at {w}x{h}");
+            assert!(drawn.iter().all(|v| v.pos[0] >= w as f32 * 0.5 && v.pos[0] <= w as f32), "inside the box at {w}x{h}");
+            assert!(verts.iter().all(|v| v.pos[0] <= w as f32 + 0.01), "the names stay in the frame at {w}x{h}");
+
+            let plain = build_results(&atlas, &replay, &map, &stats, w, h, &ModIcons::default(), part, portrait);
+            assert!(icon_verts(&plain).is_empty(), "no installation, no icons");
+        }
+    }
 
     /// A run with one note and a cursor nowhere near it, at `speed`.
     fn missed_note_at(speed: f32) -> (Map, Replay) {
@@ -1685,6 +1900,106 @@ impl RingState {
     }
 }
 
+/// Height of a mod icon under the health bar, as a share of the frame's
+/// short edge, and how far the row's middle sits below the old notation's
+/// baseline (the icons are taller than the letters were, and must clear
+/// the bar).
+const MOD_ROW_SIZE: f32 = 0.048;
+const MOD_ROW_DROP: f32 = 0.010;
+/// Height of a mod icon in the results screen's Mods box, same measure.
+const RESULTS_ICON_SIZE: f32 = 0.085;
+
+/// One entry in the row of mods a run shows.
+#[derive(Debug, PartialEq)]
+enum ModMark {
+    /// The game's own icon.
+    Icon(Icon),
+    /// The speed in the drawn notation, for a speed the game has no icon
+    /// for.
+    Speed,
+    /// A mod the installation has no icon for, by name.
+    Name(String),
+}
+
+/// What a run shows for its mods when the game's icons are at hand: its
+/// speed first, then every other mod in the replay's order. `at_1x` keeps
+/// the plain speed in (the results screen shows the `S` of an unmodded run,
+/// the playfield shows nothing); `names` spells out a mod without an icon
+/// instead of dropping it.
+fn mod_marks(icons: &ModIcons, replay: &Replay, at_1x: bool, names: bool) -> Vec<ModMark> {
+    let mut marks = Vec::new();
+    if at_1x || (replay.speed - 1.0).abs() >= 0.005 {
+        marks.push(
+            match crate::mod_icons::speed_icon_name(replay.speed).and_then(|n| icons.get(n)) {
+                Some(icon) => ModMark::Icon(icon),
+                None => ModMark::Speed,
+            },
+        );
+    }
+    for name in crate::mods::icon_mods(replay) {
+        match icons.get(&name) {
+            Some(icon) => marks.push(ModMark::Icon(icon)),
+            None if names => marks.push(ModMark::Name(name.trim_start_matches("mod_").replace('_', " ").to_uppercase())),
+            None => {}
+        }
+    }
+    marks
+}
+
+/// Draws `marks` as one row of icons `size` tall, centred on `cy`. `align`
+/// says what `x` is (the row's left edge or its middle). A row wider than
+/// `max_w` is shrunk to it, so a run with every mod on still fits its box.
+#[allow(clippy::too_many_arguments)]
+fn mod_row(b: &mut HudBuilder, marks: &[ModMark], x: f32, cy: f32, size: f32, align: Align, max_w: f32, speed: f32, col: [f32; 4]) {
+    let start = b.verts.len();
+    let gap = size * 0.10;
+    // The drawn notation and the names are sized to the icons: their
+    // letters come out as tall as the `S` of a speed icon.
+    let px = size * 0.55;
+    let mut pen = 0.0f32;
+    for (i, mark) in marks.iter().enumerate() {
+        if i > 0 {
+            pen += gap;
+        }
+        match mark {
+            ModMark::Icon(icon) => pen += b.icon(icon, pen, cy, size, col[3]),
+            ModMark::Speed => {
+                // Drawn about x = 0, then moved to the pen: the notation
+                // lays itself out around a centre.
+                let from = b.verts.len();
+                if (speed - 1.0).abs() < 0.005 {
+                    b.text("S", 0.0, cy + px * 0.36, px, Align::Center, col);
+                } else {
+                    speed_label(b, 0.0, cy + px * 0.30, px / 0.0163, speed, col);
+                }
+                let (lo, hi) = b.verts[from..]
+                    .iter()
+                    .fold((f32::MAX, f32::MIN), |(lo, hi), v| (lo.min(v.pos[0]), hi.max(v.pos[0])));
+                if lo <= hi {
+                    for v in &mut b.verts[from..] {
+                        v.pos[0] += pen + size * 0.12 - lo;
+                    }
+                    pen += hi - lo + size * 0.24;
+                }
+            }
+            ModMark::Name(name) => {
+                pen = b.text(name, pen + size * 0.06, cy + px * 0.36, px, Align::Left, col) + size * 0.06;
+            }
+        }
+    }
+    let scale = if pen > max_w && pen > 0.0 { max_w / pen } else { 1.0 };
+    let width = pen * scale;
+    let left = match align {
+        Align::Left => x,
+        Align::Center => x - width * 0.5,
+        Align::Right => x - width,
+    };
+    for v in &mut b.verts[start..] {
+        v.pos[0] = left + v.pos[0] * scale;
+        v.pos[1] = cy + (v.pos[1] - cy) * scale;
+    }
+}
+
 /// Colours of the speed step marks, indexed from the ± sign outward: the
 /// mark next to the sign is green, then orange, then red (so 1.45x reads
 /// red-yellow-green left to right, per the zoomed screenshot).
@@ -1840,7 +2155,7 @@ pub fn build_results(
     stats: &HudStats,
     width: u32,
     height: u32,
-    icons_shown: bool,
+    icons: &ModIcons,
     part: ResultsPart,
     // Portrait frames stack the blocks under a smaller (always square)
     // cover; fonts and strides reference the short edge so they match the
@@ -2065,13 +2380,22 @@ pub fn build_results(
         Align::Left,
         white,
     );
-    // The results screen shows the speed letter even at 1.0x.
+    if !icons.is_empty() {
+        // The game's icons: the speed (its plain `S` at 1.0x too), then
+        // every other mod, in one row under the title.
+        let marks = mod_marks(icons, replay, true, true);
+        let x = w * 0.527;
+        mod_row(&mut b, &marks, x, my, fr * RESULTS_ICON_SIZE, Align::Left, w * 0.975 - x, replay.speed, white);
+        return b.verts;
+    }
+    // Without them: the drawn speed notation and the mods by name. The
+    // results screen shows the speed letter even at 1.0x.
     if (replay.speed - 1.0).abs() < 0.005 {
         b.text("S", w * 0.545, my, fr * 0.032, Align::Center, white);
     } else {
         speed_label(&mut b, w * 0.545, my, fr * 1.6, replay.speed, white);
     }
-    if !icons_shown && !replay.mods.is_empty() && replay.mods != "[]" {
+    if !replay.mods.is_empty() && replay.mods != "[]" {
         let mods = replay
             .mods
             .trim_matches(['[', ']'])

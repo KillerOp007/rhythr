@@ -103,8 +103,10 @@ pub struct HudConfig {
     pub song_info: bool,
     /// Opacity of the red X flashed on a missed note (`MissEffectOpacity`).
     pub miss_effect_opacity: f32,
-    /// Speed notation under the health bar. The game always shows it; the
-    /// field exists so the desktop app can hide it per user override.
+    /// The run's mods under the health bar: its speed and every other mod,
+    /// in the game's icons (a drawn speed notation without them). The game
+    /// always shows it; the field exists so the desktop app can hide it per
+    /// user override.
     pub speed_label: bool,
     /// Optional renderer extra (not a game element): timing error bar
     /// showing how early/late each hit was, danser-style.

@@ -92,9 +92,9 @@ fn signatures(src: &str) -> Vec<(String, String, String)> {
 }
 
 /// Functions that take a replay and hand back bytes that are not the replay:
-/// the pixels of a rendered frame, or a skin's icon images picked by the
-/// replay's mods. A new name here needs the same kind of reason.
-const PIXEL_PRODUCERS: &[&str] = &["render_still", "render_still_with_ghost", "render_results", "render_card", "active_mod_icons"];
+/// the pixels of a rendered frame. A new name here needs the same kind of
+/// reason.
+const PIXEL_PRODUCERS: &[&str] = &["render_still", "render_still_with_ghost", "render_results", "render_card"];
 
 fn fn_name(head: &str) -> &str {
     let after = head.rsplit("fn ").next().unwrap_or("");

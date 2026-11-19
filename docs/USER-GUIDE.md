@@ -88,6 +88,15 @@ endorsed by Rhythia or Capo Games.
   HUD moves into bands above and below it. The results screen re-lays
   out in portrait too, with a square cover. Rearrange the HUD with
   Edit HUD as you like.
+- **Mods**: a run's mods show under the health bar while it plays and in
+  the Mods box of the results screen, in the game's own icons: the speed
+  first (`S+` to `S++++`, `S-` to `S---`; the results screen shows the
+  plain `S` of an unmodded run too), then every other mod the replay
+  lists. The icons are read from your connected game installation, so they
+  are the ones your game shows today. Without a connected game the speed
+  is drawn in a plain notation and the results screen lists the other
+  mods by name. HUD → Playfield → **Mods** hides the row under the health
+  bar, and Edit HUD moves and resizes it.
 - **Ghost races**: load a second replay of the same map (Ghost race
   card, or drop it onto the card) and the video splits into two
   side-by-side runs. The **racing delta** at the seam shows the live

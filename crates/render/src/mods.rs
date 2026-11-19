@@ -52,8 +52,9 @@ pub struct ResolvedMods {
 /// Returned as the raw strings so an unknown future mod surfaces as itself
 /// rather than being silently swallowed.
 pub fn unsupported_mods(replay: &Replay) -> Vec<String> {
-    const HANDLED: [&str; 8] = [
+    const HANDLED: [&str; 9] = [
         "mod_mirror",
+        "mod_mirror_y",
         "mod_double_mirror",
         "mod_hardrock",
         "mod_ghost",
@@ -62,18 +63,58 @@ pub fn unsupported_mods(replay: &Replay) -> Vec<String> {
         "mod_nofail",
         "mod_sudden_death",
     ];
-    mod_list(replay)
-        .into_iter()
-        .filter(|m| {
-            // The speed mods are named for their percentage (mod_87, mod_125)
-            // and need no handling: the replay's frame times are song time,
-            // so the speed is already in the data.
-            let speed = m
-                .strip_prefix("mod_")
-                .is_some_and(|r| !r.is_empty() && r.chars().all(|c| c.is_ascii_digit()));
-            !speed && !HANDLED.contains(&m.as_str())
-        })
-        .collect()
+    // The speed mods need no handling: the replay's frame times are song
+    // time, so the speed is already in the data.
+    named_mods(replay).into_iter().filter(|m| !HANDLED.contains(&m.as_str())).collect()
+}
+
+/// A speed mod's name: `mod_` and its percentage (mod_87, mod_125), or for
+/// the faster ranked steps the part above a hundred (mod_15, mod_45). A
+/// number is not enough to go by: `mod_360` is a mod of its own with its
+/// own icon, and no speed reaches three times the song.
+fn is_speed_name(name: &str) -> bool {
+    name.strip_prefix("mod_")
+        .filter(|r| !r.is_empty() && r.chars().all(|c| c.is_ascii_digit()))
+        .and_then(|r| r.parse::<u32>().ok())
+        .is_some_and(|n| n < 300)
+}
+
+/// The mods of a run under the names of the game's icons, for whoever
+/// draws them. They are [`named_mods`] but for the mirrors: the replay
+/// lists each mirrored axis (`mod_mirror`, `mod_mirror_y`), and the game
+/// has one icon for a single mirror and one for both.
+pub fn icon_mods(replay: &Replay) -> Vec<String> {
+    let mut mods = named_mods(replay);
+    let x = mods.iter().position(|m| m == "mod_mirror");
+    let y = mods.iter().position(|m| m == "mod_mirror_y");
+    match (x, y) {
+        (Some(x), Some(y)) => {
+            mods[x.min(y)] = "mod_double_mirror".into();
+            mods.remove(x.max(y));
+        }
+        (None, Some(y)) => mods[y] = "mod_mirror".into(),
+        _ => {}
+    }
+    let mut out: Vec<String> = Vec::new();
+    for m in mods {
+        if !out.contains(&m) {
+            out.push(m);
+        }
+    }
+    out
+}
+
+/// The mods a run lists, in its order and each once, without the speed
+/// mods: a run's speed is the replay's own number, and whoever shows the
+/// mods shows it from there.
+pub fn named_mods(replay: &Replay) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for m in mod_list(replay) {
+        if !is_speed_name(&m) && !out.contains(&m) {
+            out.push(m);
+        }
+    }
+    out
 }
 
 impl ResolvedMods {
@@ -111,11 +152,13 @@ fn cursor_at(replay: &Replay, ms: f64) -> (f32, f32) {
     }
 }
 
-/// The mirror axis is a game-side setting not stored in the replay, so it
-/// is recovered from the run itself: the cursor followed the *mirrored*
-/// notes, so the flip whose note positions best match the cursor at the
-/// hit moments is the one that was active (clear margin in practice: the
-/// right flip scores a few tenths of a cell, wrong ones 1+).
+/// Which axes a mirrored run was flipped on, read from the run itself: the
+/// cursor followed the *mirrored* notes, so the flip whose note positions
+/// best match the cursor at the hit moments is the one that was active
+/// (clear margin in practice: the right flip scores about half a cell,
+/// wrong ones 1.5 and more). The replay names the axes too and that is the
+/// `fallback`, but a converted replay of a free client carries one name
+/// for either axis, and the run cannot be wrong about itself.
 fn detect_flip(map: &Map, replay: &Replay, fallback: (bool, bool)) -> (bool, bool) {
     // Timing-only on purpose: this runs on the UNFLIPPED map, and the
     // cursor-guided phase would "correct" attributions against geometry
@@ -153,13 +196,14 @@ pub fn map_for_replay(map: &Map, replay: &Replay) -> (Map, ResolvedMods) {
     let has = |m: &str| mods.iter().any(|x| x == m);
 
     let mut resolved = ResolvedMods::none();
-    if has("mod_mirror") || has("mod_double_mirror") {
-        let fallback = if has("mod_double_mirror") {
-            (true, true)
-        } else {
-            (true, false)
-        };
-        resolved.flip = detect_flip(map, replay, fallback);
+    // The game lists each mirrored axis on its own: `mod_mirror` is left
+    // to right, `mod_mirror_y` is top to bottom, and a run with both
+    // carries both names. `mod_double_mirror` is what the game calls the
+    // icon for both, and what a converted free-client replay arrives with.
+    let double = has("mod_double_mirror");
+    let named = (has("mod_mirror") || double, has("mod_mirror_y") || double);
+    if named != (false, false) {
+        resolved.flip = detect_flip(map, replay, named);
     }
     if has("mod_hardrock") {
         resolved.grid_scale = HARDROCK_GRID_SCALE;
@@ -305,6 +349,48 @@ mod tests {
         assert_eq!(r.flip, (true, true));
     }
 
+    /// The game names the top-to-bottom mirror `mod_mirror_y`, on its own
+    /// or next to `mod_mirror`. It used to be read by nothing: a run with
+    /// only that mirror was rendered unmirrored, its cursor a field away
+    /// from every note it hit.
+    #[test]
+    fn the_vertical_mirror_is_read_from_its_own_name() {
+        // A note in the top row; the cursor sat in the BOTTOM row when it
+        // was hit.
+        let map = Map {
+            notes: vec![note(100, 0.0, 0.0), note(300, 1.0, 0.0)],
+            ..Default::default()
+        };
+        let frame = |ms: f64, x: f32, y: f32, hit: bool| Frame { ms, x, y, health: 1.0, hit };
+        let frames = vec![
+            frame(90.0, -1.0, -1.0, false),
+            frame(100.0, -1.0, -1.0, true),
+            frame(290.0, 0.0, -1.0, false),
+            frame(300.0, 0.0, -1.0, true),
+        ];
+        let (m, r) = map_for_replay(&map, &replay_with("[\"mod_mirror_y\"]", frames));
+        assert_eq!(r.flip, (false, true));
+        assert_eq!((m.notes[0].x, m.notes[0].y), (0.0, 2.0));
+
+        // Without a hit to go by, the names decide.
+        let named = |mods: &str| map_for_replay(&map, &replay_with(mods, vec![])).1.flip;
+        assert_eq!(named("[\"mod_mirror_y\"]"), (false, true));
+        assert_eq!(named("[\"mod_mirror\"]"), (true, false));
+        assert_eq!(named("[\"mod_mirror\",\"mod_mirror_y\"]"), (true, true));
+        assert!(unsupported_mods(&replay_with("[\"mod_mirror\",\"mod_mirror_y\"]", vec![])).is_empty());
+    }
+
+    #[test]
+    fn the_mirrors_are_shown_under_the_games_two_icons() {
+        let shown = |m: &str| icon_mods(&replay_with(m, vec![]));
+        assert_eq!(shown("[\"mod_mirror\"]"), vec!["mod_mirror"]);
+        assert_eq!(shown("[\"mod_mirror_y\"]"), vec!["mod_mirror"]);
+        assert_eq!(shown("[\"mod_hardrock\",\"mod_mirror\",\"mod_ghost\",\"mod_mirror_y\"]"), vec!["mod_hardrock", "mod_double_mirror", "mod_ghost"]);
+        assert_eq!(shown("[\"mod_mirror_y\",\"mod_mirror\"]"), vec!["mod_double_mirror"]);
+        assert_eq!(shown("[\"mod_double_mirror\"]"), vec!["mod_double_mirror"]);
+        assert_eq!(shown("[\"mod_45\",\"mod_nofail\"]"), vec!["mod_nofail"]);
+    }
+
     /// Half ghost is the visibility mod the shipped client actually offers
     /// (its own icon set has `mod_ghost` and `mod_half_ghost` and no
     /// nearsighted at all), and it used to be read by nothing.
@@ -350,6 +436,9 @@ mod tests {
         for m in ["mod_15", "mod_87", "mod_100", "mod_145"] {
             assert!(unsupported(&format!("[\"{m}\"]")).is_empty(), "{m}");
         }
+        // 360 is a number too, and not a speed: it is a mod rhythr does
+        // nothing for, and it has to be named like any other.
+        assert_eq!(unsupported("[\"mod_360\"]"), vec!["mod_360"]);
 
         // Chaos randomises note positions with a seed the replay does not
         // store, so the render is provably not the run that was played.
@@ -362,5 +451,16 @@ mod tests {
 
         assert!(unsupported("[]").is_empty());
         assert!(unsupported("not json at all").is_empty());
+    }
+
+    #[test]
+    fn the_named_mods_come_in_the_replays_order_once_and_without_the_speed() {
+        let named = |m: &str| named_mods(&replay_with(m, vec![]));
+        assert_eq!(
+            named("[\"mod_hardrock\",\"mod_45\",\"mod_ghost\",\"mod_hardrock\",\"mod_125\",\"mod_360\"]"),
+            vec!["mod_hardrock", "mod_ghost", "mod_360"]
+        );
+        assert!(named("[]").is_empty());
+        assert!(named("not json").is_empty());
     }
 }

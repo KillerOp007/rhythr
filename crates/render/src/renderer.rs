@@ -149,6 +149,14 @@ pub struct Renderer {
     hud_sampler: wgpu::Sampler,
     hud_screen_buf: wgpu::Buffer,
     hud_atlas_view: wgpu::TextureView,
+    /// The game's mod icons: a fixed-size atlas texture every HUD bind
+    /// group points at, filled the first time a config brings icons (and
+    /// again when it brings other ones), and the lookup that says where
+    /// each icon sits. Empty until then, which is what a render without a
+    /// connected game installation stays on.
+    mod_icon_tex: wgpu::Texture,
+    mod_icon_view: wgpu::TextureView,
+    mod_icons: std::cell::RefCell<crate::mod_icons::ModIcons>,
     /// Per-frame buffers, created once and rewritten every frame: creating
     /// fresh GPU buffers per frame accumulates allocations over long renders
     /// and eventually stalls the machine.
@@ -704,11 +712,13 @@ impl Renderer {
             0,
             bytemuck::bytes_of(&[width as f32, height as f32, 0.0f32, 0.0f32]),
         );
+        // Linear between mip levels for the mod icon atlas, the one HUD
+        // texture that has more than one.
         let hud_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("hud-sampler"),
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
             address_mode_u: wgpu::AddressMode::ClampToEdge,
             address_mode_v: wgpu::AddressMode::ClampToEdge,
             ..Default::default()
@@ -745,8 +755,24 @@ impl Renderer {
                 },
                 tex_entry(3),
                 tex_entry(4),
+                tex_entry(5),
             ],
         });
+        let mod_icon_tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("hud-mod-icons"),
+            size: wgpu::Extent3d {
+                width: crate::mod_icons::ATLAS_W,
+                height: crate::mod_icons::ATLAS_H,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: crate::mod_icons::MIP_LEVELS,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let mod_icon_view = mod_icon_tex.create_view(&Default::default());
         let dummy_view = dummy.create_view(&Default::default());
         let hud_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("hud-bind"),
@@ -771,6 +797,10 @@ impl Renderer {
                 wgpu::BindGroupEntry {
                     binding: 4,
                     resource: wgpu::BindingResource::TextureView(&dummy_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(&mod_icon_view),
                 },
             ],
         });
@@ -864,6 +894,9 @@ impl Renderer {
             hud_sampler,
             hud_screen_buf: screen_buf,
             hud_atlas_view: atlas_view,
+            mod_icon_tex,
+            mod_icon_view,
+            mod_icons: Default::default(),
             inst_buf,
             hud_vbuf,
             readback_bufs,
@@ -1095,8 +1128,49 @@ impl Renderer {
                     binding: 4,
                     resource: wgpu::BindingResource::TextureView(&dummy_view),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(&self.mod_icon_view),
+                },
             ],
         });
+    }
+
+    /// Brings the mod icon atlas in line with `config`: packs and uploads
+    /// the game's icons the first time a config carries them, and again if
+    /// a later one carries a different set. Every path that draws a HUD
+    /// calls it first; it costs a hash of 21 names when nothing changed.
+    fn sync_mod_icons(&self, config: &SkinConfig) {
+        let key = crate::mod_icons::source_key(&config.mod_icons);
+        if self.mod_icons.borrow().key() == key {
+            return;
+        }
+        let (icons, levels) = crate::mod_icons::ModIcons::build(&config.mod_icons);
+        let (mut w, mut h) = (crate::mod_icons::ATLAS_W, crate::mod_icons::ATLAS_H);
+        for (level, pixels) in levels.iter().enumerate() {
+            self.queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &self.mod_icon_tex,
+                    mip_level: level as u32,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                pixels,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(4 * w),
+                    rows_per_image: Some(h),
+                },
+                wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
+            );
+            w /= 2;
+            h /= 2;
+        }
+        *self.mod_icons.borrow_mut() = icons;
     }
 
     /// Uploads a skin's bundled textures (from an imported `.rhs`) to the GPU
@@ -2033,8 +2107,10 @@ impl Renderer {
                     )
                 })
                 .collect();
+            self.sync_mod_icons(config);
             crate::hud::build_hud(
                 &self.hud_atlas,
+                &self.mod_icons.borrow(),
                 config,
                 state,
                 &stats,
@@ -2278,8 +2354,16 @@ impl Renderer {
                     binding: 4,
                     resource: wgpu::BindingResource::TextureView(&blur_view),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(&self.mod_icon_view),
+                },
             ],
         });
+
+        // The Mods box draws the game's icons from the HUD's atlas.
+        self.sync_mod_icons(config);
+        let icons = self.mod_icons.borrow();
 
         // Geometry: dimmed blurred background, cover with a green frame,
         // then the text/graph overlay.
@@ -2339,7 +2423,7 @@ impl Renderer {
                 &sides[0].1,
                 self.width,
                 self.height,
-                true,
+                &icons,
                 crate::hud::ResultsPart::Header,
                 self.portrait_output(),
             ));
@@ -2359,7 +2443,6 @@ impl Renderer {
         }
         for (side_replay, side_stats, x_off, w_eff) in &sides {
             let (x_off, w_eff) = (*x_off, *w_eff);
-            let icons = active_mod_icons(side_replay, config);
             let part = if ghost.is_some() {
                 crate::hud::ResultsPart::Side
             } else {
@@ -2372,7 +2455,7 @@ impl Renderer {
                 side_stats,
                 w_eff as u32,
                 self.height,
-                !icons.is_empty(),
+                &icons,
                 part,
                 self.portrait_output(),
             );
@@ -2416,34 +2499,7 @@ impl Renderer {
             pass.draw(0..verts.len() as u32, 0..1);
         }
         self.queue.submit(Some(encoder.finish()));
-        let mut pixels = self.read_pixels()?;
-
-        // Mod icons, composited onto the static frame CPU-side (cheaper than
-        // extra texture plumbing for a once-per-render image). They sit in
-        // each side's Mods box, right of the speed letter, where the text
-        // fallback would otherwise be.
-        for (side_replay, _, x_off, w_eff) in &sides {
-            let icons = active_mod_icons(side_replay, config);
-            if icons.is_empty() {
-                continue;
-            }
-            let icon_h = ((w.min(h)) * 0.052) as u32;
-            // Clear the speed notation, which sits proportionally wider on
-            // a half-width side; portrait moves the mods box up with the
-            // stacked layout.
-            let frac = if ghost.is_some() { 0.63 } else { 0.58 };
-            let mut x = (x_off + w_eff * frac) as u32;
-            let my = if portrait { h * 0.565 } else { h * 0.775 };
-            let y = my as u32 - icon_h / 2;
-            for (_, png) in icons {
-                if let Some((rgba, iw, ih)) = decode_image_rgba(png) {
-                    let (small, sw, sh) = downscale_icon(&rgba, iw, ih, icon_h.max(8));
-                    blit_over(&mut pixels, self.width, &small, sw, sh, x, y);
-                    x += sw + (h * 0.015) as u32;
-                }
-            }
-        }
-        Ok(pixels)
+        self.read_pixels()
     }
 
     /// Renders the shareable score card (Discord-embed sized landscape):
@@ -2511,6 +2567,10 @@ impl Renderer {
                 wgpu::BindGroupEntry {
                     binding: 4,
                     resource: wgpu::BindingResource::TextureView(&cover_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(&self.mod_icon_view),
                 },
             ],
         });
@@ -2670,8 +2730,10 @@ impl Renderer {
         let view_proj = params.view_proj(aspect, self.portrait_output(), cursor);
         let field = self.playfield_screen(&view_proj, params.playfield_half(), vp_w);
         let stats = hud_state.stats_at(map, replay, song_time_ms);
+        self.sync_mod_icons(config);
         crate::hud::build_hud(
             &self.hud_atlas,
+            &self.mod_icons.borrow(),
             config,
             hud_state,
             &stats,
@@ -3055,73 +3117,6 @@ fn compose_background(config: &SkinConfig, width: u32, height: u32) -> Option<(V
         }
     }
     Some((out, width, height))
-}
-
-/// Mod icons matching the replay's active mods (parsed from its JSON list),
-/// in declaration order.
-fn active_mod_icons<'a>(replay: &Replay, config: &'a SkinConfig) -> Vec<&'a (String, Vec<u8>)> {
-    let mods: Vec<String> = serde_json::from_str(&replay.mods).unwrap_or_default();
-    mods.iter()
-        .filter_map(|m| config.mod_icons.iter().find(|(name, _)| name == m))
-        .collect()
-}
-
-/// Downscales RGBA to `target` px on the longer side, alpha-aware: colour
-/// channels average premultiplied so transparent texels don't bleed dark
-/// halos into icons (average_pool is for opaque covers).
-fn downscale_icon(rgba: &[u8], w: u32, h: u32, target: u32) -> (Vec<u8>, u32, u32) {
-    let scale = (w.max(h)).div_ceil(target).max(1);
-    let (ow, oh) = (w.div_ceil(scale).max(1), h.div_ceil(scale).max(1));
-    let mut out = vec![0u8; (ow * oh * 4) as usize];
-    for oy in 0..oh {
-        for ox in 0..ow {
-            let (mut r, mut g, mut b, mut a, mut n) = (0u32, 0u32, 0u32, 0u32, 0u32);
-            for sy in (oy * scale)..((oy + 1) * scale).min(h) {
-                for sx in (ox * scale)..((ox + 1) * scale).min(w) {
-                    let i = ((sy * w + sx) * 4) as usize;
-                    let pa = rgba[i + 3] as u32;
-                    r += rgba[i] as u32 * pa;
-                    g += rgba[i + 1] as u32 * pa;
-                    b += rgba[i + 2] as u32 * pa;
-                    a += pa;
-                    n += 1;
-                }
-            }
-            let o = ((oy * ow + ox) * 4) as usize;
-            if let (Some(rr), Some(gg), Some(bb)) =
-                (r.checked_div(a), g.checked_div(a), b.checked_div(a))
-            {
-                out[o] = rr as u8;
-                out[o + 1] = gg as u8;
-                out[o + 2] = bb as u8;
-            }
-            out[o + 3] = (a / n.max(1)) as u8;
-        }
-    }
-    (out, ow, oh)
-}
-
-/// Alpha-blends `src` (RGBA, sw×sh) onto `dst` (RGBA, dw wide) at (x, y).
-fn blit_over(dst: &mut [u8], dw: u32, src: &[u8], sw: u32, sh: u32, x: u32, y: u32) {
-    for row in 0..sh {
-        for col in 0..sw {
-            let si = ((row * sw + col) * 4) as usize;
-            let a = src[si + 3] as u32;
-            if a == 0 {
-                continue;
-            }
-            let di = (((y + row) * dw + (x + col)) * 4) as usize;
-            if di + 3 >= dst.len() {
-                continue;
-            }
-            for c in 0..3 {
-                let s = src[si + c] as u32;
-                let d = dst[di + c] as u32;
-                dst[di + c] = ((s * a + d * (255 - a)) / 255) as u8;
-            }
-            dst[di + 3] = 255;
-        }
-    }
 }
 
 fn decode_image_rgba(bytes: &[u8]) -> Option<(Vec<u8>, u32, u32)> {
