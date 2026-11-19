@@ -13,6 +13,7 @@ pub mod exe_assets;
 pub mod hud;
 pub mod kit;
 pub mod mesh;
+pub mod mod_icons;
 pub mod mods;
 pub mod nv12;
 pub mod nv12_gpu;

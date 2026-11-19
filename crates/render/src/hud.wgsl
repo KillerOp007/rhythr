@@ -1,6 +1,8 @@
 // HUD overlay: flat 2D quads in pixel space, drawn over the 3D scene. Solid
-// fills (mode 0), glyph coverage from the font atlas (mode 1), and for the
-// results screen the map cover (mode 2) and its blurred variant (mode 3).
+// fills (mode 0), glyph coverage from the font atlas (mode 1), for the
+// results screen the map cover (mode 2) and its blurred variant (mode 3),
+// the fail vignette (mode 4) and the game's mod icons from their atlas
+// (mode 5).
 
 struct Screen {
     size: vec2<f32>,
@@ -12,6 +14,7 @@ struct Screen {
 @group(0) @binding(2) var samp: sampler;
 @group(0) @binding(3) var cover: texture_2d<f32>;
 @group(0) @binding(4) var cover_blur: texture_2d<f32>;
+@group(0) @binding(5) var icons: texture_2d<f32>;
 
 struct VsIn {
     @location(0) pos: vec2<f32>,
@@ -46,6 +49,11 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let a = textureSample(atlas, samp, in.uv).r;
     let c = textureSample(cover, samp, in.uv);
     let cb = textureSample(cover_blur, samp, in.uv);
+    let ic = textureSample(icons, samp, in.uv);
+    if (in.mode > 4.5) {
+        // A mod icon in its own colours; the vertex colour tints and fades.
+        return vec4<f32>(ic.rgb * in.color.rgb, ic.a * in.color.a);
+    }
     if (in.mode > 3.5) {
         // Fail vignette, ported from the game's vignette.fs: aspect-corrected
         // radial distance, smoothstep(0.35, 0.85); strength rides in color.a.

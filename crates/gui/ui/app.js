@@ -838,7 +838,7 @@ const HUD_GROUPS = [
     ["health_bar", "Health bar", ""],
     ["combo_text", "Centre combo number", ""],
     ["miss_marker", "Miss marker", "red X on missed notes"],
-    ["speed_label", "Speed label", "S-notation under health"],
+    ["speed_label", "Mods", "speed and mod icons under health"],
   ]},
 ];
 
@@ -1174,7 +1174,7 @@ function renderGameCard(note) {
   let html = "";
   if (ok) {
     html += `<span class="chip ok">game connected</span>`;
-    html += `<div class="src-meta" style="margin-top:6px" title="${esc(path || "")}">Built-in skins use the exact textures and colors.</div>`;
+    html += `<div class="src-meta" style="margin-top:6px" title="${esc(path || "")}">Built-in skins use the exact textures and colors, and a run's mods show in the game's own icons.</div>`;
     if (status?.game_assets_stale) {
       // The extraction predates the game's fonts: everything else works,
       // but non-Latin song titles fall back to replacement marks until a
@@ -1183,7 +1183,7 @@ function renderGameCard(note) {
     }
   } else {
     html += `<span class="chip warn">not connected</span>`;
-    html += `<div class="src-meta" style="margin-top:6px">Built-in skins are approximated until rhythr reads your Rhythia install. Use Detect, or Locate the game's executable.</div>`;
+    html += `<div class="src-meta" style="margin-top:6px">Built-in skins are approximated and mods show without the game's icons until rhythr reads your Rhythia install. Use Detect, or Locate the game's executable.</div>`;
   }
   if (note) html += `<div class="src-meta" style="margin-top:6px">${esc(note)}</div>`;
   body.innerHTML = html;

@@ -5,6 +5,29 @@ endorsed by Rhythia or Capo Games.
 
 ## Unreleased
 
+- **A run's mods show in the game's own icons, all of them.** The speed
+  used to be drawn by rhythr (an `S` with coloured dots) and the other
+  mods appeared only on the results screen, small. Now the speed is the
+  game's icon (`S+` to `S++++`, `S-` to `S---`), and it stands in one row
+  with every other mod the replay lists: under the health bar while the
+  run plays, and larger in the Mods box of the results screen. The icons
+  come from your connected game installation, as before, so they are the
+  ones your game has today; nothing is bundled. Without a connected game
+  the drawn speed and the mod names stay as they were. A mod the
+  installation has no icon for is named next to the icons instead of
+  being left out. The HUD switch for the row is now called **Mods**
+  (it was *Speed label*); layouts that moved or hid it keep doing so.
+- **A run mirrored top to bottom is rendered mirrored.** The game writes
+  that mirror as `mod_mirror_y`, on its own or next to `mod_mirror`, and
+  rhythr read only the second. A run with the vertical mirror alone was
+  drawn unmirrored, its cursor a field away from every note it hit, and
+  was listed as a mod rhythr cannot reproduce. Both axes are read now, a
+  single mirror shows the game's mirror icon and both together its double
+  mirror icon.
+- **The 360 mod is no longer mistaken for a speed.** Its name is a number
+  like the speed mods', so it was passed over without a word. It now
+  shows with its icon, and a render of such a run says that rhythr does
+  not reproduce it.
 - **Nothing is hidden in an Autoplay video any more.** 0.8.0 added a faint
   noise pattern to every Autoplay frame as a hidden mark. On some screens
   (a TV that lifts near-black) it showed as a grain on black, so it is
