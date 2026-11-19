@@ -3,7 +3,7 @@
 //! the output frame rate, one hit flag per note, a cursor that moves the way
 //! the reference videos do.
 
-pub mod check;
+mod dice;
 pub mod path;
 pub mod ticker;
 
@@ -64,7 +64,7 @@ pub struct AutoplaySettings {
     /// The game's speed mod, 0.80 to 2.00 in steps of 0.05.
     pub speed_mod: f32,
     /// Whether the AUTOPLAY ticker runs across the top of the video. The
-    /// metadata tag and the path check do not depend on it.
+    /// metadata tag does not depend on it.
     pub banner: bool,
 }
 
@@ -139,9 +139,9 @@ fn field_for(map: &Map) -> Field {
 }
 
 /// Builds the synthetic run: frames at `fps` (at least 60) with the cursor on the plan,
-/// one hit-flagged frame per note at its visit time. `dice` (the key
-/// pattern) decides the sides of bellies and boomerangs.
-pub fn generate(map: &Map, settings: &AutoplaySettings, fps: u32, dice: &[f32]) -> Result<Replay, AutoplayError> {
+/// one hit-flagged frame per note at its visit time. The same map and
+/// settings always give the same run.
+pub fn generate(map: &Map, settings: &AutoplaySettings, fps: u32) -> Result<Replay, AutoplayError> {
     if map.notes.is_empty() {
         return Err(AutoplayError::NoNotes);
     }
@@ -208,7 +208,7 @@ pub fn generate(map: &Map, settings: &AutoplaySettings, fps: u32, dice: &[f32]) 
         i = j;
     }
 
-    let plan = plan(&visits, &settings, &field, dice);
+    let plan = plan(&visits, &settings, &field, dice::dice());
     let last_note = notes.last().map(|n| n.0 as f64).unwrap_or(0.0);
     let end_ms = audio_end_ms(map).filter(|&a| a > last_note).unwrap_or(last_note + END_PAD_MS);
 
@@ -271,8 +271,8 @@ mod tests {
         map
     }
 
-    fn dice() -> Vec<f32> {
-        crate::mark::pattern(&crate::mark::seed_from_hex(crate::mark::DEV_KEY_HEX).unwrap())
+    fn dice() -> &'static [f32] {
+        super::dice::dice()
     }
 
     fn world(n: &Note) -> (f32, f32) {
@@ -310,7 +310,7 @@ mod tests {
     #[test]
     fn the_cursor_is_on_every_isolated_note_at_its_time() {
         let map = map_with(&[(500, 0.0, 0.0), (1200, 2.0, 1.0), (2500, 1.0, 2.0), (4000, 0.0, 2.0)]);
-        let r = generate(&map, &AutoplaySettings::default(), 60, &dice()).unwrap();
+        let r = generate(&map, &AutoplaySettings::default(), 60).unwrap();
         for n in &map.notes {
             let (wx, wy) = world(n);
             let f = r
@@ -325,9 +325,9 @@ mod tests {
     #[test]
     fn frames_come_at_least_sixty_per_second_whatever_the_output_rate() {
         let map = map_with(&[(500, 0.0, 0.0), (2500, 2.0, 2.0)]);
-        let slow = generate(&map, &AutoplaySettings::default(), 24, &dice()).unwrap();
-        let sixty = generate(&map, &AutoplaySettings::default(), 60, &dice()).unwrap();
-        let fast = generate(&map, &AutoplaySettings::default(), 120, &dice()).unwrap();
+        let slow = generate(&map, &AutoplaySettings::default(), 24).unwrap();
+        let sixty = generate(&map, &AutoplaySettings::default(), 60).unwrap();
+        let fast = generate(&map, &AutoplaySettings::default(), 120).unwrap();
         assert_eq!(slow.frames.len(), sixty.frames.len(), "a 24 fps output must not thin the run below 60 frames per second");
         assert!(fast.frames.len() > sixty.frames.len() * 3 / 2, "a faster output keeps its own rate: {} vs {}", fast.frames.len(), sixty.frames.len());
     }
@@ -335,7 +335,7 @@ mod tests {
     #[test]
     fn every_note_registers_as_a_hit() {
         let map = map_with(&[(500, 0.0, 0.0), (1200, 2.0, 1.0), (1200, 1.0, 1.0), (2500, 1.0, 2.0), (2516, 1.0, 2.0), (4000, 0.0, 2.0)]);
-        let r = generate(&map, &AutoplaySettings::default(), 60, &dice()).unwrap();
+        let r = generate(&map, &AutoplaySettings::default(), 60).unwrap();
         let out = rhythia_sim::hitreg::match_hits(&map.notes, &r.frames, rhythia_sim::hitreg::hit_window_ms(&r));
         assert_eq!(out.derived_hits() as usize, map.notes.len());
         assert_eq!(out.orphan_flags, 0);
@@ -346,7 +346,7 @@ mod tests {
     fn a_chord_of_eight_registers_every_note() {
         let notes: Vec<(i64, f32, f32)> = (0..8).map(|i| (1000, (i % 3) as f32, (i / 3) as f32)).collect();
         let map = map_with(&notes);
-        let r = generate(&map, &AutoplaySettings::default(), 60, &dice()).unwrap();
+        let r = generate(&map, &AutoplaySettings::default(), 60).unwrap();
         let out = rhythia_sim::hitreg::match_hits(&map.notes, &r.frames, rhythia_sim::hitreg::hit_window_ms(&r));
         assert_eq!(out.derived_hits(), 8);
         assert_eq!(out.orphan_flags, 0);
@@ -356,7 +356,7 @@ mod tests {
     fn no_frame_leaves_the_barrier_and_off_grid_notes_are_reached_and_clamped() {
         let map = map_with(&[(500, -0.4, 0.0), (1500, 2.4, 2.4), (2600, 1.0, 1.0)]);
         let s = AutoplaySettings { dance: DanceAmount::Wild, ..Default::default() };
-        let r = generate(&map, &s, 60, &dice()).unwrap();
+        let r = generate(&map, &s, 60).unwrap();
         let bound = 1.4 + (0.5 - rhythia_sim::hitreg::CURSOR_EDGE_INSET);
         for f in &r.frames {
             assert!(f.x.abs() <= bound + 1e-4 && f.y.abs() <= bound + 1e-4, "{f:?}");
@@ -385,7 +385,7 @@ mod tests {
         let far = map_with(&[(1000, 0.0, 1.0), (1150, 2.0, 1.0)]);
         let off = |map: &Map, dance: DanceAmount| {
             let s = AutoplaySettings { movement: Movement::Dance, dance, ..Default::default() };
-            let r = generate(map, &s, 120, &dice()).unwrap();
+            let r = generate(map, &s, 120).unwrap();
             let a = world(&map.notes[0]);
             let b = world(&map.notes[1]);
             max_off_chord(&r, 1000.0, 1150.0, a, b)
@@ -398,7 +398,7 @@ mod tests {
         assert!(medium > 0.3, "far at medium: {medium}");
         assert!(subtle < medium && medium < wild, "subtle {subtle}, medium {medium}, wild {wild}");
         let s = AutoplaySettings { movement: Movement::Normal, ..Default::default() };
-        let r = generate(&far, &s, 120, &dice()).unwrap();
+        let r = generate(&far, &s, 120).unwrap();
         assert!(max_off_chord(&r, 1000.0, 1150.0, world(&far.notes[0]), world(&far.notes[1])) < 0.02, "normal movement stays straight");
     }
 
@@ -411,7 +411,7 @@ mod tests {
     fn a_stream_in_a_line_goes_straight_even_in_wild_dance() {
         let map = map_with(&[(1000, 0.0, 0.0), (1048, 1.0, 0.0), (1096, 2.0, 0.0), (1144, 2.0, 1.0), (1192, 1.0, 1.0)]);
         let s = AutoplaySettings { movement: Movement::Dance, dance: DanceAmount::Wild, aim: Aim::Flow, ..Default::default() };
-        let r = generate(&map, &s, 240, &dice()).unwrap();
+        let r = generate(&map, &s, 240).unwrap();
         // the note in the middle of the line is passed on the line, through
         // its centre, heading straight on (the corners at either end are
         // cut, that is the flow aim's job)
@@ -463,7 +463,7 @@ mod tests {
         let map = map_with(&[(1000, 0.0, 0.0), (1048, 0.0, 1.0), (1096, 0.0, 2.0), (1144, 1.0, 2.0), (1192, 2.0, 2.0), (1240, 2.0, 1.0), (1288, 2.0, 0.0), (1336, 1.0, 0.0), (1384, 0.0, 0.0)]);
         for movement in [Movement::Normal, Movement::Dance] {
             let s = AutoplaySettings { movement, dance: DanceAmount::Wild, aim: Aim::Flow, ..Default::default() };
-            let r = generate(&map, &s, 240, &dice()).unwrap();
+            let r = generate(&map, &s, 240).unwrap();
             // the corner notes (0,2), (2,2), (2,0): the turn is spread along
             // the arc instead of taken on the note (a ring of unit hops turns
             // 45 degrees per hop whatever the path; the question is where)
@@ -498,7 +498,7 @@ mod tests {
         ]);
         for aim in [Aim::Centre, Aim::Flow] {
             let s = AutoplaySettings { movement: Movement::Normal, aim, ..Default::default() };
-            let r = generate(&map, &s, 240, &dice()).unwrap();
+            let r = generate(&map, &s, 240).unwrap();
             let steps: Vec<(f64, f32)> = r
                 .frames
                 .iter()
@@ -529,7 +529,7 @@ mod tests {
         let map = map_with(&[(1000, 0.0, 1.0), (1048, 1.0, 1.0), (1096, 0.0, 1.0), (1144, 1.0, 1.0), (1192, 0.0, 1.0), (1240, 1.0, 1.0), (1288, 0.0, 1.0), (1336, 1.0, 1.0)]);
         for aim in [Aim::Centre, Aim::Flow] {
             let s = AutoplaySettings { movement: Movement::Normal, aim, ..Default::default() };
-            let r = generate(&map, &s, 240, &dice()).unwrap();
+            let r = generate(&map, &s, 240).unwrap();
             for t in [1096.0, 1144.0, 1192.0, 1240.0] {
                 let turn = turn_at(&r, t);
                 assert!(turn < 120.0, "{aim:?}: the cursor turns {turn} degrees on the note at {t}: a dead stop");
@@ -556,7 +556,7 @@ mod tests {
         let map = map_with(&[(1000, 0.0, 0.0), (1048, 0.0, 1.0), (1096, 0.0, 2.0), (1144, 1.0, 2.0), (1192, 2.0, 2.0), (1240, 2.0, 1.0), (1288, 2.0, 0.0), (1336, 1.0, 0.0), (1384, 0.0, 0.0)]);
         for movement in [Movement::Normal, Movement::Dance] {
             let s = AutoplaySettings { movement, aim: Aim::Centre, ..Default::default() };
-            let r = generate(&map, &s, 240, &dice()).unwrap();
+            let r = generate(&map, &s, 240).unwrap();
             for n in &map.notes[1..map.notes.len() - 1] {
                 let closest = passes_within(&r, n.time_ms as f64, world(n));
                 assert!(closest <= 0.02, "{movement:?}: note at {} passed {closest} from its centre", n.time_ms);
@@ -578,7 +578,7 @@ mod tests {
         let map = map_with(&[(1000, 0.0, 0.0), (1048, 1.0, 0.0), (1096, 2.0, 0.0), (1144, 2.0, 1.0), (1144, 2.0, 2.0), (1192, 1.0, 2.0), (1240, 0.0, 2.0), (1288, 0.0, 1.0)]);
         for (movement, aim) in [(Movement::Normal, Aim::Flow), (Movement::Dance, Aim::Flow), (Movement::Dance, Aim::Centre)] {
             let s = AutoplaySettings { movement, aim, ..Default::default() };
-            let r = generate(&map, &s, 240, &dice()).unwrap();
+            let r = generate(&map, &s, 240).unwrap();
             assert_every_note_covered(&map, &r, &format!("chord in stream {movement:?} {aim:?}"));
             let mid = ((world(&map.notes[3]).0 + world(&map.notes[4]).0) / 2.0, (world(&map.notes[3]).1 + world(&map.notes[4]).1) / 2.0);
             let at = r.frames.iter().find(|f| f.hit && (f.ms - 1144.0).abs() < 1e-6).expect("the chord's flag at its time");
@@ -609,7 +609,7 @@ mod tests {
                 Waypoint { t_ms: n.time_ms as f64, x, y, exact: false }
             })
             .collect();
-        let p = plan(&points, &AutoplaySettings::default(), &field_for(&map), &dice());
+        let p = plan(&points, &AutoplaySettings::default(), &field_for(&map), dice());
         let kinds: Vec<path::SegmentKind> = p.segments.iter().map(|s| s.kind).collect();
         let sweep = kinds.iter().filter(|k| **k == path::SegmentKind::Sweep).count();
         // 30 notes: everything but the first jump from the centre and the
@@ -627,7 +627,7 @@ mod tests {
         let map = map_with(&[(1000, 1.0, 2.0), (1190, 0.0, 0.0), (1238, 0.0, 1.0), (1286, 0.0, 2.0), (1334, 1.0, 2.0), (1382, 2.0, 2.0), (1572, 2.0, 0.0)]);
         for (movement, aim) in [(Movement::Normal, Aim::Centre), (Movement::Dance, Aim::Centre), (Movement::Normal, Aim::Flow)] {
             let s = AutoplaySettings { movement, aim, ..Default::default() };
-            let r = generate(&map, &s, 240, &dice()).unwrap();
+            let r = generate(&map, &s, 240).unwrap();
             let steps: Vec<f32> = r
                 .frames
                 .iter()
@@ -691,7 +691,7 @@ mod tests {
             let movement = if case % 2 == 0 { Movement::Normal } else { Movement::Dance };
             let aim = if (case / 2) % 2 == 0 { Aim::Flow } else { Aim::Centre };
             let s = AutoplaySettings { movement, aim, speed_mod: speed, ..Default::default() };
-            let r = generate(&map, &s, 120, &dice()).unwrap();
+            let r = generate(&map, &s, 120).unwrap();
             assert_every_note_covered(&map, &r, &format!("case {case} ({movement:?} {aim:?} at {speed}), notes {notes:?}"));
             let bound = 1.12 + (0.5 - rhythia_sim::hitreg::CURSOR_EDGE_INSET);
             for f in &r.frames {
@@ -708,7 +708,7 @@ mod tests {
         let map = map_with(&[(1000, 0.0, 1.0), (1048, 1.0, 1.0), (1096, 2.0, 1.0), (1144, 2.0, 2.0), (1192, 1.0, 2.0), (1240, 0.0, 2.0)]);
         for aim in [Aim::Centre, Aim::Flow] {
             let s = AutoplaySettings { movement: Movement::Normal, aim, ..Default::default() };
-            let r = generate(&map, &s, 240, &dice()).unwrap();
+            let r = generate(&map, &s, 240).unwrap();
             let at = |t: f64| r.frames.iter().filter(|f| !f.hit).min_by(|a, b| (a.ms - t).abs().partial_cmp(&(b.ms - t).abs()).unwrap()).unwrap();
             // (the centre aim stands in the centre, the flow aim drifts
             // around it while it waits)
@@ -761,7 +761,7 @@ mod tests {
         };
         for movement in [Movement::Dance, Movement::Normal] {
             let s = AutoplaySettings { movement, ..Default::default() };
-            let p = plan(&points, &s, &field, &dice());
+            let p = plan(&points, &s, &field, dice());
             let step = |from: f64, to: f64| {
                 let (a, b) = (sample(&p, from, &field), sample(&p, to, &field));
                 (b.0 - a.0, b.1 - a.1)
@@ -779,7 +779,7 @@ mod tests {
     fn a_chord_does_not_pull_the_jump_before_it_into_a_stream_sweep() {
         let map = map_with(&[(1000, 0.0, 1.0), (1190, 2.0, 1.0), (1190, 2.0, 2.0), (1380, 0.0, 1.0)]);
         let s = AutoplaySettings { movement: Movement::Dance, dance: DanceAmount::Medium, ..Default::default() };
-        let r = generate(&map, &s, 120, &dice()).unwrap();
+        let r = generate(&map, &s, 120).unwrap();
         let a = world(&map.notes[0]);
         let b = ((world(&map.notes[1]).0 + world(&map.notes[2]).0) / 2.0, (world(&map.notes[1]).1 + world(&map.notes[2]).1) / 2.0);
         let off = max_off_chord(&r, 1000.0, 1190.0, a, b);
@@ -789,7 +789,7 @@ mod tests {
     #[test]
     fn same_spot_with_time_makes_a_boomerang_and_short_gaps_hold() {
         let map = map_with(&[(1000, 2.0, 1.0), (2500, 2.0, 1.0), (2700, 2.0, 1.0)]);
-        let r = generate(&map, &AutoplaySettings::default(), 60, &dice()).unwrap();
+        let r = generate(&map, &AutoplaySettings::default(), 60).unwrap();
         let (wx, wy) = crate::scene::grid_to_world(2.0, 1.0);
         let far = r
             .frames
@@ -807,7 +807,7 @@ mod tests {
         let at = |gap_ms: i64, speed: f32| {
             let map = map_with(&[(1000, 0.0, 0.0), (1000 + gap_ms, 0.0, 0.0)]);
             let s = AutoplaySettings { speed_mod: speed, ..Default::default() };
-            let r = generate(&map, &s, 60, &dice()).unwrap();
+            let r = generate(&map, &s, 60).unwrap();
             r.frames
                 .iter()
                 .filter(|f| f.ms > 1500.0 && f.ms < 1000.0 + gap_ms as f64 - 500.0)
@@ -821,10 +821,10 @@ mod tests {
     #[test]
     fn the_run_is_deterministic_and_normal_movement_has_no_detours() {
         let map = map_with(&[(500, 0.0, 0.0), (2000, 2.0, 2.0), (3500, 2.0, 2.0)]);
-        let a = generate(&map, &AutoplaySettings::default(), 60, &dice()).unwrap();
-        let b = generate(&map, &AutoplaySettings::default(), 60, &dice()).unwrap();
+        let a = generate(&map, &AutoplaySettings::default(), 60).unwrap();
+        let b = generate(&map, &AutoplaySettings::default(), 60).unwrap();
         assert_eq!(a.frames, b.frames);
-        let n = generate(&map, &AutoplaySettings { movement: Movement::Normal, ..Default::default() }, 60, &dice()).unwrap();
+        let n = generate(&map, &AutoplaySettings { movement: Movement::Normal, ..Default::default() }, 60).unwrap();
         let (wx, wy) = crate::scene::grid_to_world(2.0, 2.0);
         assert!(n.frames.iter().filter(|f| f.ms > 2100.0 && f.ms < 3400.0).all(|f| (f.x - wx).abs() < 1e-3 && (f.y - wy).abs() < 1e-3));
     }
@@ -833,15 +833,15 @@ mod tests {
     fn the_replay_header_and_the_end_follow_the_spec() {
         let mut map = map_with(&[(500, 1.0, 1.0)]);
         map.meta.duration_ms = 2000;
-        let r = generate(&map, &AutoplaySettings::default(), 60, &dice()).unwrap();
+        let r = generate(&map, &AutoplaySettings::default(), 60).unwrap();
         assert_eq!(r.player_name, "Autoplay");
         assert_eq!(r.mods, "[]");
         assert!(r.passed && r.misses == 0 && r.hits == 1 && (r.accuracy_pct - 100.0).abs() < 1e-6);
         assert!((r.length_ms() - 2000.0).abs() < 20.0, "ends at the audio end, got {}", r.length_ms());
         map.meta.duration_ms = 0;
-        let r = generate(&map, &AutoplaySettings::default(), 60, &dice()).unwrap();
+        let r = generate(&map, &AutoplaySettings::default(), 60).unwrap();
         assert!((r.length_ms() - 3500.0).abs() < 20.0);
-        assert!(matches!(generate(&Map::default(), &AutoplaySettings::default(), 60, &dice()), Err(AutoplayError::NoNotes)));
+        assert!(matches!(generate(&Map::default(), &AutoplaySettings::default(), 60), Err(AutoplayError::NoNotes)));
     }
 
     #[test]
@@ -915,7 +915,7 @@ mod tests {
         let inner: Vec<&Note> = map.notes[1..map.notes.len() - 1].iter().collect();
         for movement in [Movement::Normal, Movement::Dance] {
             let s = AutoplaySettings { movement, aim: Aim::Flow, ..Default::default() };
-            let r = generate(&map, &s, 240, &dice()).unwrap();
+            let r = generate(&map, &s, 240).unwrap();
             for n in &inner {
                 let t = n.time_ms as f64;
                 // (the sharpest turn of the pattern, 161 degrees, is taken
@@ -935,7 +935,7 @@ mod tests {
             assert_every_note_covered(&map, &r, &format!("jumps {movement:?}"));
         }
         let s = AutoplaySettings { movement: Movement::Normal, aim: Aim::Centre, ..Default::default() };
-        let r = generate(&map, &s, 240, &dice()).unwrap();
+        let r = generate(&map, &s, 240).unwrap();
         assert!(turn_at(&r, 1360.0) > 80.0, "normal movement with the centre aim turns on the note");
         assert!(max_off_chord(&r, 1180.0, 1360.0, world(&map.notes[1]), world(&map.notes[2])) < 0.02, "and goes straight between two notes");
     }
@@ -951,7 +951,7 @@ mod tests {
             for aim in [Aim::Centre, Aim::Flow] {
                 for dance in [DanceAmount::Subtle, DanceAmount::Medium, DanceAmount::Wild] {
                     let s = AutoplaySettings { movement: Movement::Dance, dance, aim, ..Default::default() };
-                    let r = generate(&map, &s, 240, &dice()).unwrap();
+                    let r = generate(&map, &s, 240).unwrap();
                     for n in &map.notes[1..map.notes.len() - 1] {
                         let turn = turn_at(&r, n.time_ms as f64);
                         assert!(turn < 60.0, "{aim:?} {dance:?}: the dance turns {turn} degrees on the note at {}", n.time_ms);
@@ -965,7 +965,7 @@ mod tests {
         let line = line();
         let off = |movement: Movement| {
             let s = AutoplaySettings { movement, aim: Aim::Flow, ..Default::default() };
-            let r = generate(&line, &s, 240, &dice()).unwrap();
+            let r = generate(&line, &s, 240).unwrap();
             max_off_chord(&r, 1360.0, 1540.0, world(&line.notes[2]), world(&line.notes[3]))
         };
         assert!(off(Movement::Normal) < 0.01, "the flow aim leaves a straight line of jumps by {}", off(Movement::Normal));
@@ -981,7 +981,7 @@ mod tests {
     fn the_flow_aim_carries_on_waits_and_comes_in_late_in_a_pause() {
         let map = map_with(&[(3000, 0.0, 1.0), (3180, 1.0, 0.0), (3360, 2.0, 1.0), (6000, 0.0, 2.0), (6180, 1.0, 1.0), (13000, 2.0, 0.0)]);
         let s = AutoplaySettings { movement: Movement::Normal, aim: Aim::Flow, ..Default::default() };
-        let r = generate(&map, &s, 240, &dice()).unwrap();
+        let r = generate(&map, &s, 240).unwrap();
         let far = |f: &Frame, n: &Note| {
             let (wx, wy) = world(n);
             ((f.x - wx).powi(2) + (f.y - wy).powi(2)).sqrt()
@@ -1019,7 +1019,7 @@ mod tests {
         assert_every_note_covered(&map, &r, "pauses");
         // the centre aim keeps the old way: it stands in the centre
         let s = AutoplaySettings { movement: Movement::Normal, aim: Aim::Centre, ..Default::default() };
-        let r = generate(&map, &s, 240, &dice()).unwrap();
+        let r = generate(&map, &s, 240).unwrap();
         assert!(plain(&r, 9000.0, 11000.0).iter().all(|f| f.x.abs() < 1e-3 && f.y.abs() < 1e-3), "the centre aim rests in the centre, still");
     }
 
@@ -1029,7 +1029,7 @@ mod tests {
     fn the_flow_aim_comes_to_rest_in_the_centre_after_the_last_note() {
         let map = map_with(&[(1000, 0.0, 0.0), (1180, 2.0, 0.0), (1360, 2.0, 2.0)]);
         let s = AutoplaySettings { movement: Movement::Normal, aim: Aim::Flow, ..Default::default() };
-        let r = generate(&map, &s, 240, &dice()).unwrap();
+        let r = generate(&map, &s, 240).unwrap();
         let end = plain(&r, 2500.0, 4000.0);
         assert!(end.iter().all(|f| f.x.abs() < 1e-3 && f.y.abs() < 1e-3), "not at rest in the centre a second after the last note");
         let steps: Vec<f32> = plain(&r, 1300.0, 2500.0).windows(2).map(|w| ((w[1].x - w[0].x).powi(2) + (w[1].y - w[0].y).powi(2)).sqrt()).collect();
@@ -1046,7 +1046,7 @@ mod tests {
         let map = map_with(&[(1000, 0.0, 1.0), (1060, 1.0, 1.0), (1120, 1.0, 1.0), (1180, 2.0, 1.0), (1240, 2.0, 0.0)]);
         let moved = |aim: Aim| {
             let s = AutoplaySettings { movement: Movement::Normal, aim, ..Default::default() };
-            let r = generate(&map, &s, 240, &dice()).unwrap();
+            let r = generate(&map, &s, 240).unwrap();
             assert_every_note_covered(&map, &r, &format!("double {aim:?}"));
             let flag = |t: f64| r.frames.iter().find(|f| f.hit && (f.ms - t).abs() < 30.0 && f.ms >= t).copied().unwrap();
             let (a, b) = (flag(1060.0), flag(1120.0));
@@ -1069,7 +1069,7 @@ mod tests {
         let row = map_with(&[(1000, 0.0, 0.0), (1400, 0.0, 1.0), (1400, 1.0, 1.0), (1400, 2.0, 1.0), (1800, 0.0, 2.0)]);
         let spread = |map: &Map, aim: Aim| {
             let s = AutoplaySettings { movement: Movement::Normal, aim, ..Default::default() };
-            let r = generate(map, &s, 240, &dice()).unwrap();
+            let r = generate(map, &s, 240).unwrap();
             assert_every_note_covered(map, &r, &format!("chord {aim:?}"));
             let flags: Vec<&Frame> = r.frames.iter().filter(|f| f.hit && f.ms >= 1400.0 && f.ms < 1500.0).collect();
             assert_eq!(flags.len(), map.notes.len() - 2);
@@ -1129,7 +1129,7 @@ mod tests {
             let aim = if (case / 8) % 2 == 0 { Aim::Flow } else { Aim::Centre };
             let dance = [DanceAmount::Subtle, DanceAmount::Medium, DanceAmount::Wild][case % 3];
             let s = AutoplaySettings { movement, aim, dance, speed_mod: speed, ..Default::default() };
-            let r = generate(&map, &s, 120, &dice()).unwrap();
+            let r = generate(&map, &s, 120).unwrap();
             assert_every_note_covered(&map, &r, &format!("case {case} ({movement:?} {aim:?} {dance:?} at {speed}), notes {notes:?}"));
             let bound = 1.0 + (0.5 - rhythia_sim::hitreg::CURSOR_EDGE_INSET);
             for f in &r.frames {

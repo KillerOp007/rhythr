@@ -5,20 +5,17 @@ endorsed by Rhythia or Capo Games.
 
 ## Unreleased
 
-- **Autoplay videos are recognised by their cursor path, and nothing is
-  hidden in the picture any more.** 0.8.0 added a faint noise pattern to
-  every Autoplay frame as a hidden mark. On some screens (a TV that lifts
-  near-black) it showed as a grain on black, so it is gone: black is black
-  again. In its place `rhythr-cli autoplay-check video.mp4 --map song.sspm`
-  computes the map's Autoplay paths again and measures in how many frames
-  the cursor of the video sits on one of them. That needs nothing in the
-  picture, so it holds after re-encoding, resizing, cropping and a
-  black-crush filter (which removed the old mark), with any skin and any
-  background, and with the ticker off: 90 to 98 percent of the frames on
-  the curve for Autoplay videos in the tests, and no path at all for a real
-  play of the same map. The speed mod is found by itself. `mark-check`
-  stays for videos made with 0.8.0. The paths did not change with this;
-  `docs/AUTOPLAY-VERIFICATION.md` is rewritten for the new check.
+- **Nothing is hidden in an Autoplay video any more.** 0.8.0 added a faint
+  noise pattern to every Autoplay frame as a hidden mark. On some screens
+  (a TV that lifts near-black) it showed as a grain on black, so it is
+  gone: black is black again. An Autoplay video is marked by its ticker
+  (on by default, yours to switch off) and by the metadata tag in its
+  file, and no replay or score on the Rhythia server belongs to it; that
+  is all. `rhythr-cli mark-check` is gone with the mark (the 0.8.0 CLI on
+  its release page still reads 0.8.0 videos), and so is the key that
+  release builds carried: every build now makes the same Autoplay path for
+  a map, and a self-compiled build no longer calls itself a dev build. In
+  some arcs the cursor swings to the other side than in 0.8.0.
 - **The Flow aim flows everywhere, not only in streams.** A jump is now an
   arc of the circle through three notes in a row: the cursor rounds every
   note and keeps its pace through it instead of stopping on it and turning,

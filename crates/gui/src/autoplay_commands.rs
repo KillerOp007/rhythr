@@ -55,8 +55,6 @@ pub struct AutoplayDto {
     pub note_count: usize,
     pub has_audio: bool,
     pub settings: AutoplaySettings,
-    /// "owner" or "dev": which key this build carries.
-    pub key_kind: String,
     /// A note from the pick (the map has no audio), already stamped.
     pub note: Option<String>,
 }
@@ -64,13 +62,6 @@ pub struct AutoplayDto {
 /// A failure of an Autoplay action with its code.
 pub fn autoplay_err(msg: impl AsRef<str>) -> String {
     rhythia_errcode::stamp_in(Area::Autoplay, msg.as_ref())
-}
-
-/// The key pattern of this build, generated once: it decides the sides of
-/// the path's arcs.
-pub fn mark_pattern() -> &'static [f32] {
-    static PATTERN: OnceLock<Vec<f32>> = OnceLock::new();
-    PATTERN.get_or_init(|| rhythia_render::mark::pattern(&rhythia_render::mark::built_in().0))
 }
 
 /// The export folder and which rule found it: the manual setting, the
@@ -257,7 +248,7 @@ pub fn start_session(inner: &mut Inner, rhm: PathBuf) -> Result<Option<String>, 
     }
     let settings = inner.settings.autoplay.normalized();
     let fps = inner.settings.fps.clamp(24, 240);
-    let replay = autoplay::generate(&map, &settings, fps, mark_pattern()).map_err(|e| autoplay_err(e.to_string()))?;
+    let replay = autoplay::generate(&map, &settings, fps).map_err(|e| autoplay_err(e.to_string()))?;
     let note = map
         .audio
         .is_none()
@@ -285,7 +276,7 @@ pub fn regenerate(inner: &mut Inner) -> Result<(), String> {
     let settings = sess.settings;
     let Some((_, map)) = inner.map.as_ref() else { return Ok(()) };
     let fps = inner.settings.fps.clamp(24, 240);
-    let replay = autoplay::generate(map, &settings, fps, mark_pattern()).map_err(|e| autoplay_err(e.to_string()))?;
+    let replay = autoplay::generate(map, &settings, fps).map_err(|e| autoplay_err(e.to_string()))?;
     inner.replay = Some((rhm, replay));
     inner.clip = None;
     crate::invalidate_preview(inner);
@@ -320,7 +311,6 @@ pub fn status_dto(inner: &Inner) -> Option<AutoplayDto> {
         note_count: map.map(|m| m.notes.len()).unwrap_or(0),
         has_audio: map.map(|m| m.audio.is_some()).unwrap_or(false),
         settings: sess.settings,
-        key_kind: rhythia_render::mark::built_in().1.label().to_string(),
         note: inner.autoplay_note.clone(),
     })
 }
@@ -357,7 +347,6 @@ pub fn diagnostics_section(inner: &Inner) -> String {
         let _ = writeln!(s, "  note: {n}");
     }
     let _ = writeln!(s, "  settings: {:?}", inner.settings.autoplay);
-    let _ = writeln!(s, "  key: {}", rhythia_render::mark::built_in().1.label());
     s
 }
 

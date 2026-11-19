@@ -1,6 +1,6 @@
 //! What an Autoplay render adds to the picture: the ticker when it is on,
 //! and nothing else. Black stays black (0.8.0 lifted it by a level for a
-//! hidden mark that showed on some screens).
+//! hidden mark, which later versions do not have).
 
 fn scene() -> (
     rhythia_render::Renderer,

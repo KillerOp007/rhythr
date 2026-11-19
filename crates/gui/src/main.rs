@@ -6688,10 +6688,6 @@ fn main() {
             // against the monitor list so a window remembered on a screen
             // that is now gone cannot open off-screen.
             if let Some(main) = app.handle().get_webview_window("main") {
-                // A build without the owner's key says so in its title.
-                if rhythia_render::mark::built_in().1 == rhythia_render::mark::KeyKind::Dev {
-                    let _ = main.set_title("rhythr (dev build)");
-                }
                 if let Some((x, y, w, h)) = rect {
                     if w >= 800 && h >= 600 && window_pos_visible(&main, x, y) {
                         let _ = main.set_size(tauri::PhysicalSize::new(w, h));
@@ -7163,15 +7159,13 @@ mod autoplay_tests {
     fn an_autoplay_session_is_named_after_the_map_and_skips_the_verify_badge() {
         let mut inner = Inner::default();
         let map = one_note_map();
-        let pattern = autoplay_commands::mark_pattern();
-        let replay = rhythia_render::autoplay::generate(&map, &AutoplaySettings::default(), 60, pattern).unwrap();
+        let replay = rhythia_render::autoplay::generate(&map, &AutoplaySettings::default(), 60).unwrap();
         inner.replay = Some((PathBuf::from("/x/song.rhm"), replay));
         inner.map = Some((PathBuf::from("/x/song.rhm"), map));
         inner.autoplay = Some(autoplay_commands::AutoplaySession { rhm: PathBuf::from("/x/song.rhm"), settings: AutoplaySettings::default() });
         assert_eq!(suggested_name(&inner), "Autoplay - Song.mp4");
         let st = assemble_status(&inner, false);
         assert!(st.replay.as_ref().unwrap().verify.is_none());
-        assert_eq!(st.autoplay.as_ref().unwrap().key_kind, "dev");
         assert_eq!(st.autoplay.as_ref().unwrap().note_count, 1);
     }
 
@@ -7187,7 +7181,7 @@ mod autoplay_tests {
         let app: App = Arc::new(Shared::default());
         let text = diagnostics_report(&app);
         assert!(text.contains("\nautoplay"), "{text}");
-        assert!(text.contains("key: dev") || text.contains("key: owner"), "{text}");
+        assert!(text.contains("maps seen at the last listing"), "{text}");
     }
 }
 

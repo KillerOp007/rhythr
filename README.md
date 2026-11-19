@@ -69,12 +69,10 @@ This tool is a strict **read-only renderer**:
   **not** an official Rhythia score verification.
 - **Autoplay** (a synthetic cursor on an exported map) touches no replay
   either: the run exists only in memory, never as a file. An Autoplay
-  video is recognised by the path its cursor takes (`rhythr-cli
-  autoplay-check` computes the map's Autoplay paths again and measures the
-  video against them; nothing is hidden in the picture) and carries a
-  metadata tag; the visible AUTOPLAY ticker is on by default and can be
-  switched off. Passing such a video off as a real play is misuse; see
-  `docs/AUTOPLAY-VERIFICATION.md`.
+  video carries a metadata tag, and the visible AUTOPLAY ticker is on by
+  default and can be switched off. No replay and no score on the Rhythia
+  server belong to it. Passing such a video off as a real play is misuse;
+  see `docs/AUTOPLAY-VERIFICATION.md`.
 
 ## Workspace
 
@@ -83,7 +81,7 @@ This tool is a strict **read-only renderer**:
 | `crates/formats` | Read-only parsers: `.rhr` replays (all 5 version gates), map cache JSON, `.rhm` |
 | `crates/sim` | Hit registration (frame flags → per-note results), integrity check |
 | `crates/render` | wgpu GPU renderer: scene, skins/`.rhs` import, HUD, results screen, video export |
-| `crates/cli` | `rhythr-cli` binary: `info`, `verify`, `check`, `frame`, `video`, `autoplay`, `autoplay-check`, `mark-check` |
+| `crates/cli` | `rhythr-cli` binary: `info`, `verify`, `check`, `frame`, `video`, `autoplay` |
 | `crates/gui` | Desktop app (Tauri): preview + scrubber, HUD overrides, map auto-download, video export |
 
 ```sh
@@ -100,9 +98,8 @@ cargo run -p rhythia-cli -- frame testdata/pass_long_score77.rhr \
 cargo run -p rhythia-cli -- video testdata/pass_long_score77.rhr \
     --map testdata/pass_long_map_map_json.json --start 1:25 --end 1:37 -o clip.mp4
 
-# Autoplay: a map without a replay; then check whether a video is an Autoplay render of that map:
+# Autoplay: a map without a replay:
 cargo run -p rhythia-cli -- autoplay --map song.rhm --movement dance -o autoplay.mp4
-cargo run --release -p rhythia-cli -- autoplay-check autoplay.mp4 --map song.rhm
 ```
 
 The renderer runs headlessly on the GPU (Vulkan), the same wgpu backend

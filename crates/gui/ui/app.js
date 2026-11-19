@@ -292,7 +292,7 @@ function renderAutoplayTab() {
   $("ap-banner-off").classList.toggle("on", !banner);
   $("ap-banner-hint").textContent = banner
     ? "The AUTOPLAY ticker runs across the top of the video."
-    : "No ticker. The metadata tag stays, and the video can still be recognised as Autoplay by its cursor path.";
+    : "No ticker. The metadata tag in the file stays.";
   const dance = s.movement === "dance";
   $("ap-movement-dance").classList.toggle("on", dance);
   $("ap-movement-normal").classList.toggle("on", !dance);
