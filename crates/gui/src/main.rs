@@ -1307,16 +1307,32 @@ fn open_releases_page(app: tauri::AppHandle) {
     );
 }
 
-/// The invite to the rhythr Discord server. It does not expire.
-const DISCORD_INVITE: &str = "https://discord.gg/ppkJ3AF4ek";
+/// What the Discord button opens: a page of rhythr's own that forwards to
+/// the server's current invite. An invite can be replaced; a build that is
+/// already installed cannot, so no build carries the invite itself.
+const DISCORD_LINK: &str = "https://killerop007.github.io/rhythr/discord/";
 
-/// Opens the rhythr Discord server's invite in the browser. rhythr itself
-/// sends nothing to Discord: the address is handed to the system, and what
-/// happens there is between the browser and Discord.
+/// Opens the way to the rhythr Discord server in the browser. rhythr itself
+/// sends nothing anywhere here: the address is handed to the system, and
+/// what happens there is between the browser and the pages it visits.
 #[tauri::command]
 fn open_discord(app: tauri::AppHandle) {
     use tauri_plugin_opener::OpenerExt;
-    let _ = app.opener().open_url(DISCORD_INVITE, None::<&str>);
+    let _ = app.opener().open_url(DISCORD_LINK, None::<&str>);
+}
+
+#[cfg(test)]
+mod discord_link_tests {
+    use super::DISCORD_LINK;
+
+    /// The button leads to the forwarding page, never straight to an
+    /// invite: an invite built into the app could not follow a new one.
+    #[test]
+    fn the_button_opens_the_forwarding_page_and_no_invite() {
+        assert!(DISCORD_LINK.starts_with("https://killerop007.github.io/rhythr/"));
+        assert!(!DISCORD_LINK.contains("discord.gg"));
+        assert!(!DISCORD_LINK.contains("discord.com"));
+    }
 }
 
 /// Whether a remembered window origin still lands on a connected monitor.
