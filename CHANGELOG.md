@@ -61,7 +61,7 @@ endorsed by Rhythia or Capo Games.
   still scales it), weaves from side to side only where the notes run
   straight, and takes its boomerangs in the same stroke. This changes the
   default look: the dance is the default movement.
-- **Replays from the free community clients (test builds only).** rhythr
+- **Replays from the free community clients.** rhythr
   opens two more replay formats next to `.rhr`.
   - `.sspre`, legacy Sound Space Plus: drop the file and its map is fetched
     from rhythia.com, as for a `.rhr`. The file carries no online map id; it
