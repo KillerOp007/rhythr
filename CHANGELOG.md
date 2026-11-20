@@ -3,7 +3,7 @@
 rhythr is an unofficial community tool and is not affiliated with or
 endorsed by Rhythia or Capo Games.
 
-## Unreleased
+## v0.9.0 (2026-11-20)
 
 - **Runs recorded before mid-May 2026 are read right.** Until then the
   game marked one frame of a replay for all the notes hit in that moment;
