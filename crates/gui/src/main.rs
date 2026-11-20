@@ -1307,6 +1307,18 @@ fn open_releases_page(app: tauri::AppHandle) {
     );
 }
 
+/// The invite to the rhythr Discord server. It does not expire.
+const DISCORD_INVITE: &str = "https://discord.gg/ppkJ3AF4ek";
+
+/// Opens the rhythr Discord server's invite in the browser. rhythr itself
+/// sends nothing to Discord: the address is handed to the system, and what
+/// happens there is between the browser and Discord.
+#[tauri::command]
+fn open_discord(app: tauri::AppHandle) {
+    use tauri_plugin_opener::OpenerExt;
+    let _ = app.opener().open_url(DISCORD_INVITE, None::<&str>);
+}
+
 /// Whether a remembered window origin still lands on a connected monitor.
 /// Screens get unplugged; a window restored onto one that is gone would be
 /// invisible with no way to drag it back.
@@ -6734,6 +6746,7 @@ fn main() {
             get_status,
             update_channel,
             open_releases_page,
+            open_discord,
             load_replay,
             load_map,
             download_map,

@@ -62,7 +62,18 @@ code { font-family: ui-monospace, Consolas, monospace; color: var(--accent); fon
 }
 .brand { display: flex; align-items: center; gap: 9px; font-weight: 600; letter-spacing: 0.01em; }
 .brand .ver { color: var(--muted); font-weight: 400; font-size: var(--fs-sm); }
-#topbar-info { font-size: var(--fs-sm); }
+.topbar-right { display: flex; align-items: center; gap: 0.8rem; min-width: 0; }
+#topbar-info { font-size: var(--fs-sm); min-width: 0; }
+/* A bare icon at the end of the top bar. The Discord mark stays in its own
+   colours: white at rest, white on the brand's blue under the pointer. */
+.icon-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  flex: none; width: 1.8667rem; height: 1.8667rem; padding: 0;
+  color: var(--text); background: transparent;
+  border: 1px solid transparent; border-radius: var(--radius-sm); cursor: pointer;
+}
+.icon-btn:hover { background: var(--panel-2); border-color: var(--border); }
+.icon-btn.discord:hover { color: #fff; background: #5865f2; border-color: #5865f2; }
 
 #layout {
   display: grid;
@@ -272,6 +283,7 @@ code { font-family: ui-monospace, Consolas, monospace; color: var(--accent); fon
 /* Tabs, HUD switches, rail rows and menu items are not .btn, and a keyboard
    user has to be able to see them just the same. */
 .btn:focus-visible,
+.icon-btn:focus-visible,
 .tab:focus-visible,
 .hud-row:focus-visible,
 .card.optional .card-head h2:focus-visible,
