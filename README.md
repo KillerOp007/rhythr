@@ -16,6 +16,9 @@ video looks exactly like watching the replay in-game with your own skin.
 Step by step, including how to export a replay and your skin from the
 game: **[the user guide](docs/USER-GUIDE.md)**.
 
+Questions, feedback and test builds:
+**[the rhythr Discord server](https://killerop007.github.io/rhythr/discord/)**.
+
 - **Windows**: `rhythr_x.y.z_x64-setup.exe`. Click through SmartScreen
   ("More info" → "Run anyway"; the installer is not code-signed).
 - **Linux (any distro)**: `rhythr_x.y.z_amd64.AppImage`. One
