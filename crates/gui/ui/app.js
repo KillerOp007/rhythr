@@ -3169,6 +3169,8 @@ window.addEventListener("DOMContentLoaded", async () => {
   // able to leave the title stuck on an old render.
   document.addEventListener("pointerdown", clearWindowNotice);
   window.__TAURI__.app.getVersion().then((v) => { $("app-ver").textContent = `v${v}`; });
+  // The address lives in the backend; the page only asks for it to be opened.
+  $("btn-discord").addEventListener("click", () => invoke("open_discord"));
   $("preview-img").draggable = false;
   // The rAF below the src swap can race the decode; the load event is the
   // reliable moment to fit the box around the fresh frame.

@@ -5,6 +5,10 @@ endorsed by Rhythia or Capo Games.
 
 ## Unreleased
 
+- **A Discord button in the top right.** The icon at the end of the top
+  bar opens the invite to the rhythr community server in your browser:
+  the place for questions, feedback and test builds. rhythr itself sends
+  nothing to Discord, it only hands the address to your browser.
 - **A run's mods show in the game's own icons, all of them.** The speed
   used to be drawn by rhythr (an `S` with coloured dots) and the other
   mods appeared only on the results screen, small. Now the speed is the

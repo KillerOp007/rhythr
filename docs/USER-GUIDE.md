@@ -164,6 +164,11 @@ endorsed by Rhythia or Capo Games.
   slider under **Advanced** at the foot of the Output tab. It changes
   the interface only (the render itself is untouched), and the Analyze
   window follows the same setting.
+- **Discord**: the icon at the right end of the top bar opens the invite
+  to the rhythr community server in your browser, for questions, feedback
+  and test builds. rhythr itself sends nothing to Discord. The server
+  belongs to rhythr, an unofficial community tool, and is not a place of
+  the Rhythia team.
 - **Save diagnostics…** (also under Advanced) is worth attaching to a
   bug report: a plain text file with the build and operating system,
   which ffmpeg was found and whether it runs, each hardware encoder with
