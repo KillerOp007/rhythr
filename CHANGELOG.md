@@ -5,6 +5,23 @@ endorsed by Rhythia or Capo Games.
 
 ## Unreleased
 
+- **Runs recorded before mid-May 2026 are read right.** Until then the
+  game marked one frame of a replay for all the notes hit in that moment;
+  since then it marks one frame per hit. rhythr read every file the newer
+  way, so in an older run each note hit together with another counted as
+  a miss: the video showed misses and broken combos that never happened
+  (one real run with 9 misses came out with 338), and the integrity check
+  called the run "inconsistent (possibly manipulated)". Such a run now
+  gets its hits back from the cursor (a note the cursor was on in a marked
+  moment was hit in it) and is checked against its header again. The
+  totals are exact. Where a miss sits right next to such a pair, which of
+  the notes was the miss is an estimate. Measured on 89 leaderboard runs:
+  14 of the 36 older ones were affected, all are consistent now, and none
+  of the 53 newer ones changed.
+- **A hit a fraction of a millisecond past the hit window counts in older
+  runs.** Older files store frame times with their fraction, and a frame
+  is stamped a moment after its hit was judged; one real run had a hit
+  0.08 ms past the window, which read as a hit without a note.
 - **A Discord button in the top right.** The icon at the end of the top
   bar opens the invite to the rhythr community server in your browser:
   the place for questions, feedback and test builds. rhythr itself sends
