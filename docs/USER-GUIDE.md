@@ -259,7 +259,10 @@ endorsed by Rhythia or Capo Games.
   the numbers don't add up. "map may not match" is the milder case:
   the recorded hits fit no note on the chart that is loaded, which
   usually means it is not the chart that was played; load the right one
-  before doubting the run.
+  before doubting the run. Runs recorded before mid-May 2026 mark one
+  frame for all the notes hit in a moment, so there the notes hit
+  together are worked out from the cursor: the totals are exact, which
+  note of such a group was a miss can be an estimate.
 
 ### Note Designer controls
 

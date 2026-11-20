@@ -10,8 +10,15 @@
 //!  * accuracy == hits / (hits + misses) × 100
 //!  * attempted notes: all notes when passed; notes with
 //!    time ≤ failTime when failed (lastFrame+window overshoots by one).
+//!
+//! Older recordings flag the moment, not the hit (see
+//! [`hitreg::marks_moments`]): their flags may be fewer than the header's
+//! hits, and the hits beyond them have to be accounted for by notes a
+//! flagged moment's cursor covered. That is as far as such a file can be
+//! held to its header. It cannot tell a note hit together with another
+//! from a miss the cursor happened to cover in a flagged moment.
 
-use rhythia_formats::map::Map;
+use rhythia_formats::map::{Map, Note};
 use rhythia_formats::rhr::{Origin, Replay};
 
 use crate::hitreg::{self, MatchOutcome};
@@ -46,6 +53,9 @@ pub struct Check {
 
 #[derive(Debug, Clone)]
 pub struct IntegrityReport {
+    /// The recording flags moments, not hits (an older file): fewer flags
+    /// than hits is how such a file is written.
+    pub flags_are_moments: bool,
     pub flagged_frames: u32,
     pub derived_hits: u32,
     pub derived_misses: u32,
@@ -92,7 +102,14 @@ pub fn looks_like_the_wrong_map(
     // matches the header it was written with. A header inflated past its own
     // frames is the opposite (evidence about the replay, not the chart), so
     // it must keep reading as inconsistent instead of being explained away.
-    if flags != header_hits {
+    // An older recording is written with fewer flags than hits, so there
+    // only more flags than hits says anything about the file.
+    let as_written = if report.flags_are_moments {
+        flags <= header_hits
+    } else {
+        flags == header_hits
+    };
+    if !as_written {
         return false;
     }
     // With an honest header, a third of the recorded hits finding no note at
@@ -160,13 +177,27 @@ pub fn verify(replay: &Replay, map: &Map, outcome: &MatchOutcome) -> IntegrityRe
         });
     };
 
-    push(
-        "flagged frames == header hits",
-        Severity::Error,
-        i64::from(flagged_frames) == i64::from(replay.hits),
-        replay.hits.to_string(),
-        flagged_frames.to_string(),
-    );
+    let flags_are_moments = hitreg::marks_moments(replay);
+    if flags_are_moments {
+        // One flag can stand for several hits here, never the other way
+        // round. Whether the hits beyond the flags are accounted for is
+        // the next check's business.
+        push(
+            "flagged frames <= header hits",
+            Severity::Error,
+            i64::from(flagged_frames) <= i64::from(replay.hits),
+            format!("at most {}", replay.hits),
+            flagged_frames.to_string(),
+        );
+    } else {
+        push(
+            "flagged frames == header hits",
+            Severity::Error,
+            i64::from(flagged_frames) == i64::from(replay.hits),
+            replay.hits.to_string(),
+            flagged_frames.to_string(),
+        );
+    }
     push(
         "matched hits == header hits",
         Severity::Error,
@@ -324,6 +355,7 @@ pub fn verify(replay: &Replay, map: &Map, outcome: &MatchOutcome) -> IntegrityRe
     }
 
     IntegrityReport {
+        flags_are_moments,
         flagged_frames,
         derived_hits,
         derived_misses,
@@ -336,8 +368,41 @@ pub fn verify(replay: &Replay, map: &Map, outcome: &MatchOutcome) -> IntegrityRe
 
 /// Convenience: hitreg + verify in one call with the run's own hit window.
 pub fn verify_replay(replay: &Replay, map: &Map) -> IntegrityReport {
-    let outcome = hitreg::judge(replay, &map.notes);
+    let outcome = judged_as_played(replay, &map.notes);
     verify(replay, map, &outcome)
+}
+
+/// The notes judged the way the run saw them.
+///
+/// This check is handed the map as charted, and a mirrored run's cursor
+/// follows the mirrored notes. Nearly everything here rests on times alone,
+/// which a mirror leaves as they are. The one exception is an older
+/// recording's shared flags, which are read off the cursor: when the chart
+/// as given leaves the header's hits unaccounted for, the mirrored charts
+/// are tried too, and the one the flags account for best is the one that
+/// was played. (Hardrock spreads the notes without moving them out from
+/// under a cursor that covered them, so it needs no try of its own.)
+fn judged_as_played(replay: &Replay, notes: &[Note]) -> MatchOutcome {
+    let mut best = hitreg::judge(replay, notes);
+    let short = |o: &MatchOutcome| i64::from(o.derived_hits()) < i64::from(replay.hits);
+    if !hitreg::marks_moments(replay) || !short(&best) {
+        return best;
+    }
+    for (flip_x, flip_y) in [(true, false), (false, true), (true, true)] {
+        let mirrored: Vec<Note> = notes
+            .iter()
+            .map(|n| Note {
+                time_ms: n.time_ms,
+                x: if flip_x { 2.0 - n.x } else { n.x },
+                y: if flip_y { 2.0 - n.y } else { n.y },
+            })
+            .collect();
+        let tried = hitreg::judge(replay, &mirrored);
+        if tried.derived_hits() > best.derived_hits() {
+            best = tried;
+        }
+    }
+    best
 }
 
 #[cfg(test)]
@@ -351,6 +416,7 @@ mod wrong_map_tests {
         orphans: u32,
     ) -> IntegrityReport {
         IntegrityReport {
+            flags_are_moments: false,
             flagged_frames: flagged,
             derived_hits,
             derived_misses: 0,
@@ -719,5 +785,154 @@ mod converted_tests {
         };
         let report = verify_replay(&r, &map());
         assert!(looks_like_the_wrong_map(r.hits, &report, false));
+    }
+}
+
+#[cfg(test)]
+mod older_recording_tests {
+    use super::*;
+    use rhythia_formats::map::MapMeta;
+    use rhythia_formats::rhr::{Frame, Origin, V_BEATMAP_HASH, V_FAIL_TIME};
+
+    fn map_of(notes: &[(i64, f32, f32)]) -> Map {
+        Map {
+            meta: MapMeta::default(),
+            notes: notes
+                .iter()
+                .map(|&(time_ms, x, y)| Note { time_ms, x, y })
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    /// A passed 1.00x run of the given file version: its header and its
+    /// flagged frames (time, cursor in world units).
+    fn run(version: i32, hits: i32, misses: i32, flags: &[(f64, f32, f32)]) -> Replay {
+        Replay {
+            version,
+            timestamp_ticks: 0,
+            player_name: String::new(),
+            legacy_map_id: String::new(),
+            map_id: 0,
+            start_from_ms: 0,
+            mode: String::new(),
+            passed: true,
+            mods: "[]".into(),
+            spin: false,
+            speed: 1.0,
+            total_score: 0,
+            accuracy_pct: hits as f32 / (hits + misses).max(1) as f32 * 100.0,
+            hits,
+            misses,
+            points: 0.0,
+            fail_time_ms: -1,
+            beatmap_hash: String::new(),
+            pitch_lock: false,
+            frames: flags
+                .iter()
+                .map(|&(ms, x, y)| Frame {
+                    ms,
+                    x,
+                    y,
+                    health: 1.0,
+                    hit: true,
+                })
+                .collect(),
+            trailing_bytes: 0,
+            origin: Origin::Rhr,
+        }
+    }
+
+    fn failed(report: &IntegrityReport) -> Vec<&'static str> {
+        report.failed_checks().map(|c| c.name).collect()
+    }
+
+    /// Two notes in neighbouring cells, 5 ms apart, hit in one moment
+    /// with the cursor between them.
+    const PAIR: [(i64, f32, f32); 2] = [(1000, 1.0, 1.0), (1005, 2.0, 1.0)];
+    const BETWEEN: (f64, f32, f32) = (1010.0, 0.5, 0.0);
+
+    #[test]
+    fn an_older_run_with_fewer_flags_than_hits_is_consistent_when_its_flags_account_for_them() {
+        let report = verify_replay(&run(V_FAIL_TIME, 2, 0, &[BETWEEN]), &map_of(&PAIR));
+        assert!(report.consistent(), "{:?}", report.checks);
+        assert!(report.flags_are_moments);
+        assert_eq!(
+            (
+                report.flagged_frames,
+                report.derived_hits,
+                report.derived_misses
+            ),
+            (1, 2, 0)
+        );
+        assert!(report
+            .checks
+            .iter()
+            .any(|c| c.name == "flagged frames <= header hits"));
+    }
+
+    #[test]
+    fn the_same_file_from_the_newer_recorder_is_not() {
+        // There every hit has a frame of its own, so a flag short is a
+        // hit the file does not hold.
+        let report = verify_replay(&run(V_BEATMAP_HASH, 2, 0, &[BETWEEN]), &map_of(&PAIR));
+        assert!(!report.flags_are_moments);
+        assert!(failed(&report).contains(&"flagged frames == header hits"));
+    }
+
+    #[test]
+    fn hits_no_flag_accounts_for_keep_an_older_run_inconsistent() {
+        // The cursor sat on the first note alone: nothing took the
+        // second one along, whatever the header says.
+        let on_the_first = (1010.0, 0.0, 0.0);
+        let report = verify_replay(&run(V_FAIL_TIME, 2, 0, &[on_the_first]), &map_of(&PAIR));
+        assert!(!report.consistent());
+        assert_eq!(report.derived_hits, 1);
+        assert_eq!(
+            failed(&report),
+            [
+                "matched hits == header hits",
+                "derived misses == header misses",
+                "derived accuracy == header accuracy"
+            ]
+        );
+    }
+
+    #[test]
+    fn more_flags_than_hits_is_inconsistent_in_an_older_run_too() {
+        let report = verify_replay(
+            &run(V_FAIL_TIME, 1, 1, &[BETWEEN, (1012.0, 0.5, 0.0)]),
+            &map_of(&PAIR),
+        );
+        assert!(failed(&report).contains(&"flagged frames <= header hits"));
+    }
+
+    #[test]
+    fn a_mirrored_older_run_is_held_against_the_notes_as_it_played_them() {
+        // The chart has the pair on the left; the run was mirrored left to
+        // right, so its cursor is on the right. The check gets the chart.
+        let charted = [(1000, 0.0, 1.0), (1005, 0.0, 0.0)];
+        let on_the_right = (1010.0, 1.0, 0.5);
+        let report = verify_replay(&run(V_FAIL_TIME, 2, 0, &[on_the_right]), &map_of(&charted));
+        assert!(report.consistent(), "{:?}", report.checks);
+        assert_eq!(report.derived_hits, 2);
+    }
+
+    #[test]
+    fn the_wrong_map_is_still_told_apart_for_an_older_run() {
+        // Fewer flags than hits is how such a file is written, so it no
+        // longer rules the wrong chart out; more flags than hits does.
+        let report = |flagged| IntegrityReport {
+            flags_are_moments: true,
+            flagged_frames: flagged,
+            derived_hits: 30,
+            derived_misses: 0,
+            attempted_notes: 100,
+            derived_accuracy_pct: 0.0,
+            orphan_flags: 60,
+            checks: vec![],
+        };
+        assert!(looks_like_the_wrong_map(100, &report(90), false));
+        assert!(!looks_like_the_wrong_map(100, &report(110), false));
     }
 }

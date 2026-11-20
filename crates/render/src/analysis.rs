@@ -997,7 +997,14 @@ pub fn analyze(map: &Map, replay: &Replay) -> Analysis {
         // leaderboard scores. An edited file looks different (orphans,
         // impossible stats), so keep the scary wording for those.
         let header_hits = u32::try_from(replay.hits).unwrap_or(0);
-        let dropped_only = report.orphan_flags == 0 && report.flagged_frames < header_hits;
+        // An older recording is written with one flag for the notes of
+        // one moment: there, only the hits no flag accounts for count.
+        let accounted_for = if report.flags_are_moments {
+            report.derived_hits
+        } else {
+            report.flagged_frames
+        };
+        let dropped_only = report.orphan_flags == 0 && accounted_for < header_hits;
         // Loading somebody else's chart is not tampering, and telling people
         // their file "may be corrupted or edited" for it is both wrong and
         // alarming. The desktop app learned to say so in 0.6; this window and
@@ -1012,7 +1019,7 @@ pub fn analyze(map: &Map, replay: &Replay) -> Analysis {
             title: if dropped_only {
                 format!(
                     "Incomplete recording: {} hit flag(s) missing",
-                    header_hits - report.flagged_frames
+                    header_hits - accounted_for
                 )
             } else if wrong_map {
                 "This may not be the map that was played".into()
