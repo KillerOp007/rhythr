@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>rhythr on Discord</title>
+  <style>
+    html, body { height: 100%; margin: 0; }
+    body {
+      display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
+      background: #0b0f14; color: #e8edf4;
+      font: 16px/1.5 system-ui, "Segoe UI", Roboto, sans-serif; text-align: center; padding: 0 20px;
+    }
+    h1 { margin: 0; font-size: 20px; font-weight: 600; }
+    p { margin: 0; color: #8b96a5; }
+    a.go {
+      display: inline-block; margin-top: 6px; padding: 10px 22px; border-radius: 6px;
+      background: #5865f2; color: #fff; font-weight: 600; text-decoration: none;
+    }
+    a.go:hover { filter: brightness(1.1); }
+    small { color: #8b96a5; max-width: 34em; }
+  </style>
+</head>
+<body>
+  <svg viewBox="0 0 24 24" width="44" height="44" aria-hidden="true">
+    <polygon points="12,2.6 18.6,5.4 21.4,12 18.6,18.6 12,21.4 5.4,18.6 2.6,12 5.4,5.4"
+             fill="none" stroke="#2fd6d0" stroke-width="2"/>
+  </svg>
+  <h1>rhythr on Discord</h1>
+  <p>Taking you to the rhythr community server.</p>
+  <!-- The one place the invite stands: the script below follows this link. -->
+  <a class="go" id="go" href="https://discord.gg/ppkJ3AF4ek">Continue to Discord</a>
+  <small>rhythr is an unofficial community tool and is not affiliated with or endorsed by Rhythia or Capo Games.</small>
+  <script>location.replace(document.getElementById("go").href);</script>
+</body>
+</html>
