@@ -225,14 +225,39 @@ pub struct AmbientConfig {
     pub grid_parallax: f32,
 }
 
-/// One `BackgroundImages[]` layer from an exported skin. `placement` 0 is
-/// screen space (centre/scale relative to the frame), 1 is world space (the
-/// `space` rect in grid units around the playfield). Rotation is rare and
-/// currently ignored.
+/// How a layer's picture sits in its box: the game's `Fit`, in the game's
+/// own order (0, 1, 2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LayerFit {
+    /// Fills the box and keeps its shape; what sticks out is cut off.
+    Cover,
+    /// Fills the box exactly, bending to the box's shape.
+    Stretch,
+    /// Lies whole inside the box and keeps its shape.
+    Contain,
+}
+
+impl LayerFit {
+    /// From the number in a skin's `Fit`. A number the game does not have
+    /// yet shows the whole picture.
+    pub fn from_game(fit: i64) -> LayerFit {
+        match fit {
+            0 => LayerFit::Cover,
+            1 => LayerFit::Stretch,
+            _ => LayerFit::Contain,
+        }
+    }
+}
+
+/// One `BackgroundImages[]` layer from an exported skin: a picture the
+/// player placed in the skin. `placement` 0 is screen space: the layer's
+/// box is the frame times `scale` around `center`, and `fit` places the
+/// picture in that box. 1 is world space (the `space` rect in grid units
+/// around the playfield). Rotation is rare and currently ignored.
 #[derive(Debug, Clone)]
 pub struct BackgroundLayer {
     pub bytes: Vec<u8>,
-    pub fit: i64,
+    pub fit: LayerFit,
     pub placement: i64,
     pub center_x: f32,
     pub center_y: f32,
@@ -719,7 +744,7 @@ impl SkinConfig {
                         let i = |k: &str| l.get(k).and_then(|x| x.as_i64()).unwrap_or(0);
                         BackgroundLayer {
                             bytes: Vec::new(),
-                            fit: i("Fit"),
+                            fit: LayerFit::from_game(i("Fit")),
                             placement: i("Placement"),
                             center_x: f("CenterX", 0.5),
                             center_y: f("CenterY", 0.5),

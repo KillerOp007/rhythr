@@ -9,7 +9,7 @@
 use std::path::Path;
 use std::process::{Child, ChildStdout, Command, Stdio};
 
-use crate::config::{BackgroundLayer, SkinConfig};
+use crate::config::{BackgroundLayer, LayerFit, SkinConfig};
 
 /// What kind of file the user picked. Detection is by content (magic
 /// bytes), not extension: "support as many formats as possible" means an
@@ -67,11 +67,11 @@ pub fn apply_background(
 /// A screen-space layer that covers the whole frame: cover-fit times the
 /// user's zoom, centre shifted by the offset (the compositor clamps the
 /// shift so the frame stays covered).
-fn cover_layer(bytes: Vec<u8>, opts: &BackgroundOptions) -> BackgroundLayer {
+pub(crate) fn cover_layer(bytes: Vec<u8>, opts: &BackgroundOptions) -> BackgroundLayer {
     let zoom = opts.zoom.clamp(1.0, 4.0);
     BackgroundLayer {
         bytes,
-        fit: 2,
+        fit: LayerFit::Cover,
         placement: 0,
         center_x: 0.5 + opts.offset[0].clamp(-1.0, 1.0),
         center_y: 0.5 + opts.offset[1].clamp(-1.0, 1.0),
