@@ -5,6 +5,15 @@ endorsed by Rhythia or Capo Games.
 
 ## Unreleased
 
+- **Notes have the size they have in the game.** With an imported skin
+  (a `.rhs` or the game's config) rhythr drew every note about a tenth too
+  small: a note scale of 0.93 came out 0.84 of a cell wide, in the game it
+  is 0.93. Since 0.6.0 the base size had been the free client's, which
+  draws its notes smaller than the game does. Measured on a screenshot of
+  the game and checked on a render with the same skin: the note is the
+  same size to within a pixel or two. A render without a skin looks as
+  before. The field of view was not the cause: the playfield already had
+  the game's size.
 - **A picture placed in a skin has the size it has in the game.** A skin
   can carry pictures, each with a box (position and size on the screen)
   and a fit that says how the picture sits in that box. rhythr read the

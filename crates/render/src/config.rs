@@ -407,9 +407,12 @@ impl Default for SkinConfig {
             camera_fov: 70.0,     // :606
             approach_rate: 40.0,  // :563
             spawn_distance: 40.0, // :567
-            note_scale: 1.0,      // :574 note_size
-            note_opacity: 1.0,    // :580
-            fade_length: 0.5,     // :581
+            // :574 note_size 1, which the free client draws 0.9 of a cell
+            // wide (0.45 of its mesh). An imported NoteScale is the width
+            // in cells itself (see scene.rs), so the same note is 0.9 here.
+            note_scale: 0.9,
+            note_opacity: 1.0, // :580
+            fade_length: 0.5,  // :581
             // :594. Two real player configs (the owner's, and the second one
             // in notes/testdata-extra) both say 5, which kept this open as a
             // suspected wrong default. It is not one: 5 is what those two
@@ -958,7 +961,8 @@ mod tests {
         assert_eq!(c.camera_fov, 70.0);
         assert_eq!(c.approach_rate, 40.0);
         assert_eq!(c.spawn_distance, 40.0);
-        assert_eq!(c.note_scale, 1.0);
+        // 0.9 of a cell: the free client's note size 1, see default().
+        assert_eq!(c.note_scale, 0.9);
         assert_eq!(c.parallax, 6.5);
         assert_eq!(c.fade_length, 0.5);
         assert!(!c.cursor_trail_enabled);
