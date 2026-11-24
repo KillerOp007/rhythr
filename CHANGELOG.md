@@ -3,7 +3,7 @@
 rhythr is an unofficial community tool and is not affiliated with or
 endorsed by Rhythia or Capo Games.
 
-## Unreleased
+## v0.9.1 (2026-11-24)
 
 - **Notes have the size they have in the game.** With an imported skin
   (a `.rhs` or the game's config) rhythr drew every note about a tenth too
