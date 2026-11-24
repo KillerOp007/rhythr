@@ -48,7 +48,7 @@ pub struct SceneParams {
     /// this as a fixed constant chosen so the ±1 grid fills the FOV; the
     /// exact value is calibrated against real frames (~1.4-2.0).
     pub eye_z: f32,
-    /// Note world half-width (baseScale·NoteScale ≈ 0.5·0.9). Meshes are
+    /// Note world half-width (0.5·NoteScale: half a cell at 1.0). Meshes are
     /// normalised to ±1, so this is the scale applied to them directly.
     pub note_radius: f32,
     /// World depth a note spawns at (`SpawnDistance`, config 12).
@@ -89,12 +89,22 @@ pub struct SceneParams {
     pub far: f32,
 }
 
-/// Mesh half-extent (±1) mapped to this many world units at NoteScale 1.0.
-/// The game's own factor: `NoteManager.gd:345` scales the note mesh by
-/// `0.45 * note_size * (note_hitbox_size / 1.14)`, and the hitbox term is
-/// exactly 1 at its 1.140 default, so a note is 0.45 world units at
-/// NoteScale 1.0, leaving the visible gap between adjacent cells.
-const BASE_NOTE_SCALE: f32 = 0.45;
+/// Mesh half-extent (±1) mapped to this many world units at NoteScale 1.0:
+/// a note is NoteScale cells wide. MEASURED on the game rather than read
+/// out of the free client. On a screenshot with NoteScale 0.93, a note in
+/// an outer column is 121 px wide and its centre stands 129.5 px from the
+/// middle of the frame; the depth cancels out of that ratio, so the note
+/// is 0.93 of a cell.
+///
+/// The free client's own factor is 0.45 (`NoteManager.gd:345` scales the
+/// mesh by `0.45 * note_size * (note_hitbox_size / 1.14)`). This constant
+/// was that number for a while, and every imported skin's notes came out a
+/// tenth too small.
+const BASE_NOTE_SCALE: f32 = 0.5;
+
+/// The note's half-width without a skin: 0.9 of a cell, the free client's
+/// note size 1 at its 0.45.
+const DEFAULT_NOTE_RADIUS: f32 = 0.45;
 
 impl Default for SceneParams {
     fn default() -> Self {
@@ -120,7 +130,7 @@ impl Default for SceneParams {
             // 3.25, what this was before, is ruled out just as clearly: it
             // would put the plane at 962 px, 9% above what was measured.
             eye_z: 3.5,
-            note_radius: BASE_NOTE_SCALE,
+            note_radius: DEFAULT_NOTE_RADIUS,
             // The game's own note travel settings (Rhythia.gd:563/567).
             spawn_depth: 40.0,
             approach_rate: 40.0,
@@ -385,6 +395,49 @@ pub const FADE_CURVE: f32 = 1.3;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// How wide a note in the left column is drawn, as a share of how far
+    /// its centre stands from the middle of the frame. The column is one
+    /// cell out, so this is the note's width in cells; the depth cancels.
+    fn note_width_in_cells(p: &SceneParams, depth: f32) -> f32 {
+        let (w, h) = (2560.0f32, 1417.0f32);
+        let m = p.view_proj(w / h, false, (0.0, 0.0)) * p.note_model(0.0, 1.0, depth);
+        let px = |x: f32| {
+            let c = m * glam::Vec4::new(x, 0.0, 0.0, 1.0);
+            (c.x / c.w * 0.5 + 0.5) * w
+        };
+        (px(1.0) - px(-1.0)) / (w * 0.5 - px(0.0))
+    }
+
+    /// An imported NoteScale is the note's width in cells. Measured on a
+    /// screenshot of the game (2560 x 1417, field of view 60, NoteScale
+    /// 0.93): a note in the left column was 121 px wide, its centre 129.5 px
+    /// left of the middle of the frame. rhythr drew such a note 0.837 wide.
+    #[test]
+    fn an_imported_note_scale_is_the_notes_width_in_cells() {
+        let cfg = crate::config::SkinConfig {
+            note_scale: 0.93,
+            camera_fov: 60.0,
+            parallax: 0.0,
+            ..Default::default()
+        };
+        let p = SceneParams::from(&cfg);
+        for depth in [0.0, 5.8, 12.0] {
+            let cells = note_width_in_cells(&p, depth);
+            assert!(
+                (cells - 121.0 / 129.5).abs() < 0.006,
+                "at depth {depth} the note is {cells} cells wide, the game's is 0.934"
+            );
+        }
+    }
+
+    /// Without a skin nothing changes: a note stays 0.9 of a cell.
+    #[test]
+    fn the_look_without_a_skin_keeps_its_note_size() {
+        let p = SceneParams::from(&crate::config::SkinConfig::default());
+        assert!((note_width_in_cells(&p, 3.0) - 0.9).abs() < 1e-4);
+        assert!((SceneParams::default().note_radius - 0.45).abs() < 1e-6);
+    }
 
     /// The bug this guards: the visibility mods were resolved out of the
     /// replay and understood by the fade model, and the two ends were never
