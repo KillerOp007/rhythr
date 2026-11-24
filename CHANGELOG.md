@@ -3,6 +3,19 @@
 rhythr is an unofficial community tool and is not affiliated with or
 endorsed by Rhythia or Capo Games.
 
+## Unreleased
+
+- **A picture placed in a skin has the size it has in the game.** A skin
+  can carry pictures, each with a box (position and size on the screen)
+  and a fit that says how the picture sits in that box. rhythr read the
+  three fits in the wrong order and sized the picture against the whole
+  frame instead of its box, so a small picture next to the playfield came
+  out several times too large and squeezed out of shape. Now the fits are
+  the game's (cover, stretch, contain) and work inside the box. Checked
+  against a screenshot of the game: the picture of the reported skin
+  lands on the same pixels. A picture that fills the whole screen still
+  does. rhythr's own Background card is not affected.
+
 ## v0.9.0 (2026-11-20)
 
 - **Runs recorded before mid-May 2026 are read right.** Until then the

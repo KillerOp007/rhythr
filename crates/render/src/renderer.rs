@@ -2994,9 +2994,10 @@ fn gradient_color(stops: &[(f32, [f32; 3])], t: f32) -> [f32; 3] {
 
 /// Decodes PNG bytes to (rgba8, width, height); None on any decode error.
 /// Composites the skin's `BackgroundImages[]` layers into one frame-sized
-/// RGBA image (bottom-up, alpha-over). Screen layers use fit/scale/centre
-/// against the frame; world layers project their grid-space rect through
-/// the default camera. Rotation is ignored (rare). Returns None without
+/// RGBA image (bottom-up, alpha-over). A screen layer has a box (the frame
+/// times its scale, around its centre) and its fit places the picture in
+/// that box; world layers project their grid-space rect through the
+/// default camera. Rotation is ignored (rare). Returns None without
 /// layers.
 fn compose_background(config: &SkinConfig, width: u32, height: u32) -> Option<(Vec<u8>, u32, u32)> {
     if config.background_images.is_empty() {
@@ -3017,6 +3018,8 @@ fn compose_background(config: &SkinConfig, width: u32, height: u32) -> Option<(V
             continue;
         };
         let (sw_f, sh_f) = (sw as f32, sh as f32);
+        // Where the picture is cut: the whole frame, or a skin layer's box.
+        let mut cut = (0.0, 0.0, fw, fh);
         // Destination rect.
         let (cx, cy, half_w, half_h) = if layer.placement == 1 {
             let (x0, y0) = project(
@@ -3033,54 +3036,53 @@ fn compose_background(config: &SkinConfig, width: u32, height: u32) -> Option<(V
                 (x1 - x0).abs() * 0.5 * layer.scale_x,
                 (y1 - y0).abs() * 0.5 * layer.scale_y,
             )
+        } else if config.custom_bg_dim.is_some() {
+            // rhythr's own background (custom_bg_dim set ⇒ the layer is
+            // ours, not a skin's): the picture covers the frame, times the
+            // zoom, and its shift is clamped to the overflow, so zoom and
+            // offset can never uncover the frame.
+            let k = (fw / sw_f).max(fh / sh_f);
+            let (w, h) = (sw_f * k * layer.scale_x, sh_f * k * layer.scale_y);
+            let cx = fw * 0.5
+                + crate::background::clamp_cover_offset(layer.center_x * fw - fw * 0.5, w, fw);
+            let cy = fh * 0.5
+                + crate::background::clamp_cover_offset(layer.center_y * fh - fh * 0.5, h, fh);
+            (cx, cy, w * 0.5, h * 0.5)
         } else {
-            // Fit against the frame: 0 stretch, 1 contain, 2 cover.
-            let (base_w, base_h) = match layer.fit {
-                0 => (fw, fh),
-                1 => {
-                    let k = (fw / sw_f).min(fh / sh_f);
+            // A skin's picture. Its box is the frame times the layer's
+            // scale, around the layer's centre; the fit places the picture
+            // in that box, and nothing is drawn outside it.
+            let (box_w, box_h) = (fw * layer.scale_x.abs(), fh * layer.scale_y.abs());
+            let (cx, cy) = (layer.center_x * fw, layer.center_y * fh);
+            let (w, h) = match layer.fit {
+                crate::config::LayerFit::Stretch => (box_w, box_h),
+                crate::config::LayerFit::Contain => {
+                    let k = (box_w / sw_f).min(box_h / sh_f);
                     (sw_f * k, sh_f * k)
                 }
-                _ => {
-                    let k = (fw / sw_f).max(fh / sh_f);
+                crate::config::LayerFit::Cover => {
+                    let k = (box_w / sw_f).max(box_h / sh_f);
                     (sw_f * k, sh_f * k)
                 }
             };
-            let (mut cx, mut cy) = (layer.center_x * fw, layer.center_y * fh);
-            // A USER background (custom_bg_dim set ⇒ the layers are ours)
-            // clamps its shift to the available overflow, so zoom/offset
-            // can never uncover the frame. Skin layers stay untouched.
-            if config.custom_bg_dim.is_some() {
-                cx = fw * 0.5
-                    + crate::background::clamp_cover_offset(
-                        cx - fw * 0.5,
-                        base_w * layer.scale_x,
-                        fw,
-                    );
-                cy = fh * 0.5
-                    + crate::background::clamp_cover_offset(
-                        cy - fh * 0.5,
-                        base_h * layer.scale_y,
-                        fh,
-                    );
-            }
-            (
-                cx,
-                cy,
-                base_w * 0.5 * layer.scale_x,
-                base_h * 0.5 * layer.scale_y,
-            )
+            cut = (
+                (cx - box_w * 0.5).max(0.0),
+                (cy - box_h * 0.5).max(0.0),
+                (cx + box_w * 0.5).min(fw),
+                (cy + box_h * 0.5).min(fh),
+            );
+            (cx, cy, w * 0.5, h * 0.5)
         };
         if half_w < 1.0 || half_h < 1.0 {
             continue;
         }
         let (x_min, x_max) = (
-            (cx - half_w).max(0.0) as u32,
-            ((cx + half_w).min(fw)) as u32,
+            (cx - half_w).max(cut.0) as u32,
+            ((cx + half_w).min(cut.2)) as u32,
         );
         let (y_min, y_max) = (
-            (cy - half_h).max(0.0) as u32,
-            ((cy + half_h).min(fh)) as u32,
+            (cy - half_h).max(cut.1) as u32,
+            ((cy + half_h).min(cut.3)) as u32,
         );
         for dy in y_min..y_max.min(height) {
             for dx in x_min..x_max.min(width) {
@@ -3404,6 +3406,223 @@ mod decode_tests {
         let (rgba, w, h) = decode_image_rgba(&png_bytes).expect("indexed png decodes");
         assert_eq!((w, h), (2, 2));
         assert_eq!(&rgba[..4], &[255, 0, 0, 255]);
+    }
+}
+
+/// A skin's pictures (`BackgroundImages[]`): the box is the frame times the
+/// layer's scale around its centre, and `Fit` says how the picture sits in
+/// that box. The numbers of the first test are a real skin's.
+#[cfg(test)]
+mod skin_layer_tests {
+    use super::compose_background;
+    use crate::config::{BackgroundLayer, LayerFit, SkinConfig};
+
+    const FRAME: (u32, u32) = (1920, 1080);
+
+    fn png(w: u32, h: u32, paint: impl Fn(u32, u32) -> [u8; 4]) -> Vec<u8> {
+        let img = image::RgbaImage::from_fn(w, h, |x, y| image::Rgba(paint(x, y)));
+        let mut out = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut out, image::ImageFormat::Png)
+            .expect("png");
+        out.into_inner()
+    }
+
+    fn skin_with(
+        bytes: Vec<u8>,
+        fit: LayerFit,
+        centre: (f32, f32),
+        scale: (f32, f32),
+    ) -> SkinConfig {
+        let mut cfg = SkinConfig::default();
+        cfg.background_images.push(BackgroundLayer {
+            bytes,
+            fit,
+            placement: 0,
+            center_x: centre.0,
+            center_y: centre.1,
+            scale_x: scale.0,
+            scale_y: scale.1,
+            flip_horizontal: false,
+            space_x: 0.0,
+            space_y: 0.0,
+            space_w: 8.0,
+            space_h: 8.0,
+            tint: [1.0, 1.0, 1.0, 1.0],
+        });
+        cfg
+    }
+
+    fn compose(cfg: &SkinConfig) -> Vec<u8> {
+        compose_in(cfg, FRAME)
+    }
+
+    fn compose_in(cfg: &SkinConfig, frame: (u32, u32)) -> Vec<u8> {
+        let (rgba, w, h) = compose_background(cfg, frame.0, frame.1).expect("a layer");
+        assert_eq!((w, h), frame);
+        rgba
+    }
+
+    fn pixel(rgba: &[u8], x: u32, y: u32) -> [u8; 4] {
+        let i = ((y * FRAME.0 + x) * 4) as usize;
+        [rgba[i], rgba[i + 1], rgba[i + 2], rgba[i + 3]]
+    }
+
+    /// What the layers drew, in frame pixels: left, top, width, height.
+    fn drawn(rgba: &[u8]) -> (f32, f32, f32, f32) {
+        drawn_in(rgba, FRAME)
+    }
+
+    fn drawn_in(rgba: &[u8], frame: (u32, u32)) -> (f32, f32, f32, f32) {
+        let (mut x0, mut y0, mut x1, mut y1) = (u32::MAX, u32::MAX, 0, 0);
+        for y in 0..frame.1 {
+            for x in 0..frame.0 {
+                if rgba[((y * frame.0 + x) * 4 + 3) as usize] > 0 {
+                    x0 = x0.min(x);
+                    y0 = y0.min(y);
+                    x1 = x1.max(x + 1);
+                    y1 = y1.max(y + 1);
+                }
+            }
+        }
+        assert!(x1 > x0 && y1 > y0, "nothing was drawn");
+        (x0 as f32, y0 as f32, (x1 - x0) as f32, (y1 - y0) as f32)
+    }
+
+    fn close(got: (f32, f32, f32, f32), want: (f32, f32, f32, f32)) {
+        let off = [
+            got.0 - want.0,
+            got.1 - want.1,
+            got.2 - want.2,
+            got.3 - want.3,
+        ];
+        assert!(
+            off.iter().all(|d| d.abs() <= 2.0),
+            "drew {got:?}, expected about {want:?}"
+        );
+    }
+
+    const WHITE: [u8; 4] = [255, 255, 255, 255];
+
+    /// A wide picture (1179 x 537) in a narrow, tall box, set to Contain:
+    /// in the game it is a small picture in the upper left. It used to be
+    /// drawn 502 x 987, squeezed to a third of its width.
+    #[test]
+    fn a_picture_set_to_contain_lies_whole_in_its_box_and_keeps_its_shape() {
+        let cfg = skin_with(
+            png(1179, 537, |_, _| WHITE),
+            LayerFit::Contain,
+            (0.17895685, 0.28097522),
+            (0.21161038, 0.91355485),
+        );
+        let (w, h) = (0.21161038 * 1920.0, 0.21161038 * 1920.0 * 537.0 / 1179.0);
+        let (cx, cy) = (0.17895685 * 1920.0, 0.28097522 * 1080.0);
+        close(drawn(&compose(&cfg)), (cx - w / 2.0, cy - h / 2.0, w, h));
+    }
+
+    /// The same skin, measured in the game itself: in a 2560 x 1417 game
+    /// window the picture stood at 187, 274 and was 542 x 248.
+    #[test]
+    fn the_picture_lands_where_the_game_draws_it() {
+        let cfg = skin_with(
+            png(1179, 537, |_, _| WHITE),
+            LayerFit::Contain,
+            (0.17895685, 0.28097522),
+            (0.21161038, 0.91355485),
+        );
+        let frame = (2560, 1417);
+        close(
+            drawn_in(&compose_in(&cfg, frame), frame),
+            (187.0, 274.0, 542.0, 248.0),
+        );
+    }
+
+    /// Contain in a box that is wider than the picture: the height decides.
+    #[test]
+    fn contain_takes_the_tighter_side_of_the_box() {
+        let cfg = skin_with(
+            png(100, 200, |_, _| WHITE),
+            LayerFit::Contain,
+            (0.5, 0.5),
+            (0.5, 0.5),
+        );
+        // Box 960 x 540, picture 1:2: 270 x 540 in the middle.
+        close(drawn(&compose(&cfg)), (960.0 - 135.0, 270.0, 270.0, 540.0));
+    }
+
+    #[test]
+    fn stretch_fills_the_box_exactly() {
+        let cfg = skin_with(
+            png(200, 100, |_, _| WHITE),
+            LayerFit::Stretch,
+            (0.5, 0.5),
+            (0.25, 0.5),
+        );
+        close(drawn(&compose(&cfg)), (720.0, 270.0, 480.0, 540.0));
+    }
+
+    /// Cover fills the box without bending the picture and is cut at the
+    /// box: of a 2:1 picture in a box 480 x 540 only the middle shows.
+    #[test]
+    fn cover_fills_the_box_and_is_cut_at_its_edge() {
+        const GREEN: [u8; 4] = [0, 255, 0, 255];
+        const RED: [u8; 4] = [255, 0, 0, 255];
+        // The middle half of the picture is green, the outer quarters red.
+        let cfg = skin_with(
+            png(
+                200,
+                100,
+                |x, _| if (50..150).contains(&x) { GREEN } else { RED },
+            ),
+            LayerFit::Cover,
+            (0.5, 0.5),
+            (0.25, 0.5),
+        );
+        let rgba = compose(&cfg);
+        close(drawn(&rgba), (720.0, 270.0, 480.0, 540.0));
+        // Scaled to the box's height the picture is 1080 wide, its green
+        // middle 540: wider than the box, so the box is green edge to edge.
+        assert_eq!(pixel(&rgba, 730, 540), GREEN);
+        assert_eq!(pixel(&rgba, 1190, 540), GREEN);
+    }
+
+    /// The game numbers its fits Cover, Stretch, Contain.
+    #[test]
+    fn the_games_fit_numbers_are_read_in_the_games_order() {
+        let json = r#"{"BackgroundImages":{"Value":[
+            {"Path":"a.png","Fit":0},{"Path":"b.png","Fit":1},{"Path":"c.png","Fit":2}]}}"#;
+        let cfg = SkinConfig::from_json(json).unwrap();
+        let fits: Vec<LayerFit> = cfg.background_images.iter().map(|l| l.fit).collect();
+        assert_eq!(
+            fits,
+            [LayerFit::Cover, LayerFit::Stretch, LayerFit::Contain]
+        );
+    }
+
+    /// rhythr's own background (the Background card) is no skin layer: it
+    /// covers the whole frame whatever its shape, zoomed and shifted.
+    #[test]
+    fn rhythrs_own_background_still_covers_the_whole_frame() {
+        for (zoom, offset) in [(1.0, [0.0, 0.0]), (1.0, [0.4, -0.4]), (2.5, [-1.0, 1.0])] {
+            let mut cfg = SkinConfig {
+                custom_bg_dim: Some(0.0),
+                ..Default::default()
+            };
+            cfg.background_images.push(crate::background::cover_layer(
+                png(90, 160, |_, _| WHITE),
+                &crate::background::BackgroundOptions {
+                    zoom,
+                    offset,
+                    ..Default::default()
+                },
+            ));
+            let rgba = compose(&cfg);
+            let lowest = rgba.chunks_exact(4).map(|p| p[3]).min().unwrap();
+            // 254: blending between two opaque pixels can round a hair down.
+            assert!(
+                lowest >= 254,
+                "zoom {zoom}, offset {offset:?} left part of the frame bare (alpha {lowest})"
+            );
+        }
     }
 }
 
